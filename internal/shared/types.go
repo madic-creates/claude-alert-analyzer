@@ -1,7 +1,5 @@
 package shared
 
-import "context"
-
 // AnalysisContext holds named text sections injected into the Claude user prompt.
 type AnalysisContext struct {
 	Sections []ContextSection
@@ -19,11 +17,6 @@ func (ac AnalysisContext) FormatForPrompt() string {
 		s += "## " + sec.Name + "\n" + sec.Content + "\n\n"
 	}
 	return s
-}
-
-// ContextGatherer collects diagnostic context for a given alert.
-type ContextGatherer interface {
-	Gather(ctx context.Context, alert AlertPayload) (AnalysisContext, error)
 }
 
 // AlertPayload is the common alert representation.
