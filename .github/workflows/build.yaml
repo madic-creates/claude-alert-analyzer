@@ -44,8 +44,8 @@ jobs:
           target: k8s-analyzer
           push: true
           tags: |
-            ${{ env.REGISTRY }}/claude-alert-analyzer:${{ steps.tag.outputs.sha_short }}
-            ${{ env.REGISTRY }}/claude-alert-analyzer:latest
+            ${{ env.REGISTRY }}/claude-alert-kubernetes-analyzer:${{ steps.tag.outputs.sha_short }}
+            ${{ env.REGISTRY }}/claude-alert-kubernetes-analyzer:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -68,7 +68,7 @@ jobs:
           target: checkmk-analyzer
           push: true
           tags: |
-            ${{ env.REGISTRY }}/claude-checkmk-analyzer:${{ steps.tag.outputs.sha_short }}
-            ${{ env.REGISTRY }}/claude-checkmk-analyzer:latest
+            ${{ env.REGISTRY }}/claude-alert-checkmk-analyzer:${{ steps.tag.outputs.sha_short }}
+            ${{ env.REGISTRY }}/claude-alert-checkmk-analyzer:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max

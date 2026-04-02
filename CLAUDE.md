@@ -66,5 +66,5 @@ k8s-analyzer runs in-cluster only (`rest.InClusterConfig()`).
 
 GitHub Actions (`.github/workflows/build.yaml`) builds and pushes both images to `ghcr.io` on main branch pushes. Images are tagged with short SHA and `latest`.
 
-- `ghcr.io/<owner>/claude-alert-analyzer` (k8s target)
-- `ghcr.io/<owner>/claude-checkmk-analyzer` (checkmk target)
+- `ghcr.io/<owner>/claude-alert-kubernetes-analyzer` (k8s target)
+- `ghcr.io/<owner>/claude-alert-checkmk-analyzer` (checkmk target)

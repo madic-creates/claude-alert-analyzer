@@ -148,10 +148,10 @@ go build ./cmd/checkmk-analyzer/
 
 ```bash
 # K8s analyzer (scratch image)
-docker build --target k8s-analyzer -t claude-alert-analyzer:k8s .
+docker build --target k8s-analyzer -t claude-alert-kubernetes-analyzer .
 
 # CheckMK analyzer (Alpine image with SSH)
-docker build --target checkmk-analyzer -t claude-alert-analyzer:checkmk .
+docker build --target checkmk-analyzer -t claude-alert-checkmk-analyzer .
 ```
 
 ## Testing
@@ -164,8 +164,8 @@ go test ./...
 
 GitHub Actions builds both images on push to `main`:
 
-- `ghcr.io/madic-creates/claude-alert-analyzer:<sha>` (K8s)
-- `ghcr.io/madic-creates/claude-checkmk-analyzer:<sha>` (CheckMK)
+- `ghcr.io/madic-creates/claude-alert-kubernetes-analyzer:<sha>` (K8s)
+- `ghcr.io/madic-creates/claude-alert-checkmk-analyzer:<sha>` (CheckMK)
 
 ## CheckMK Notification Script
 
