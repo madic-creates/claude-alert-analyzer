@@ -86,12 +86,12 @@ func buildCommands(cat alertCategory, serviceName string) []sshCommand {
 	return cmds
 }
 
-func RunDiagnostics(ctx context.Context, cfg Config, hostAddress, serviceDesc, serviceOutput string, maxBytes int) string {
+func RunDiagnostics(ctx context.Context, cfg Config, hostname, serviceDesc, serviceOutput string, maxBytes int) string {
 	cat := detectCategory(serviceDesc, serviceOutput)
 	serviceName := extractServiceName(serviceDesc)
 	cmds := buildCommands(cat, serviceName)
 
-	client, err := dialSSH(cfg, hostAddress)
+	client, err := dialSSH(cfg, hostname)
 	if err != nil {
 		return fmt.Sprintf("(SSH connection failed: %v)", err)
 	}

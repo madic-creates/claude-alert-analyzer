@@ -165,7 +165,7 @@ func GatherContext(ctx context.Context, cfg Config, alert shared.AlertPayload) s
 			sshCh <- fmt.Sprintf("(host validation failed: %v)", err)
 			return
 		}
-		sshCh <- RunDiagnostics(ctx, cfg, hostAddress, serviceDesc, serviceOutput, 2048)
+		sshCh <- RunDiagnostics(ctx, cfg, hostname, serviceDesc, serviceOutput, 2048)
 	}()
 
 	sections = append(sections, shared.ContextSection{
