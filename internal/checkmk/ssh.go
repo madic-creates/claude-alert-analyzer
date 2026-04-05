@@ -91,24 +91,30 @@ func RunDiagnostics(ctx context.Context, cfg Config, hostname, serviceDesc, serv
 	serviceName := extractServiceName(serviceDesc)
 	cmds := buildCommands(cat, serviceName)
 
+	slog.Info("SSH connecting", "hostname", hostname, "user", cfg.SSHUser, "commands", len(cmds))
 	client, err := dialSSH(cfg, hostname)
 	if err != nil {
+		slog.Error("SSH connection failed", "hostname", hostname, "error", err)
 		return fmt.Sprintf("(SSH connection failed: %v)", err)
 	}
 	defer client.Close()
+	slog.Info("SSH connected", "hostname", hostname)
 
 	var sections []string
 	deadline := time.Now().Add(30 * time.Second)
 
 	for _, cmd := range cmds {
 		if time.Now().After(deadline) {
+			slog.Warn("SSH diagnostics timeout, skipping remaining commands", "hostname", hostname)
 			sections = append(sections, "(timeout: remaining commands skipped)")
 			break
 		}
 
 		cmdStr := strings.Join(cmd.argv, " ")
+		slog.Debug("SSH running command", "hostname", hostname, "command", cmdStr)
 		output, err := runSSHCommand(client, cmd.argv, 10*time.Second)
 		if err != nil {
+			slog.Warn("SSH command failed", "hostname", hostname, "command", cmdStr, "error", err)
 			sections = append(sections, fmt.Sprintf("$ %s\n(error: %v)", cmdStr, err))
 			continue
 		}
