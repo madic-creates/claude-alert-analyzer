@@ -156,7 +156,12 @@ func GatherContext(ctx context.Context, cfg Config, alert shared.AlertPayload) s
 	sshCh := make(chan string, 1)
 	go func() {
 		if err := validateHost(ctx, cfg, hostname, hostAddress); err != nil {
-			slog.Warn("host validation failed, skipping SSH", "error", err)
+			slog.Warn("host validation failed, skipping SSH",
+				"error", err,
+				"hostname", hostname,
+				"host_address", hostAddress,
+				"checkmk_api_url", cfg.CheckMKAPIURL,
+			)
 			sshCh <- fmt.Sprintf("(host validation failed: %v)", err)
 			return
 		}
