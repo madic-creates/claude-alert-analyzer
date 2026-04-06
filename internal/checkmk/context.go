@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -43,7 +42,7 @@ type checkmkServicesResponse struct {
 	Value []checkmkServiceEntry `json:"value"`
 }
 
-func validateHost(ctx context.Context, cfg Config, hostname, hostAddress string) error {
+func ValidateHost(ctx context.Context, cfg Config, hostname, hostAddress string) error {
 	url := fmt.Sprintf("%sobjects/host_config/%s", cfg.CheckMKAPIURL, hostname)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -132,50 +131,25 @@ func getHostServices(ctx context.Context, cfg Config, hostname string) string {
 	return strings.Join(lines, "\n")
 }
 
+// GatherContext collects alert details and CheckMK host services.
+// SSH diagnostics are handled separately by RunAgenticDiagnostics.
 func GatherContext(ctx context.Context, cfg Config, alert shared.AlertPayload) shared.AnalysisContext {
 	hostname := alert.Fields["hostname"]
 	hostAddress := alert.Fields["host_address"]
-	serviceDesc := alert.Fields["service_description"]
-	serviceOutput := alert.Fields["service_output"]
 
 	var sections []shared.ContextSection
 
 	sections = append(sections, shared.ContextSection{
 		Name: "Alert Details",
 		Content: fmt.Sprintf("- Hostname: %s\n- Address: %s\n- Service: %s\n- State: %s\n- Output: %s\n- Type: %s\n- Perf Data: %s",
-			hostname, hostAddress, serviceDesc,
-			alert.Fields["service_state"], serviceOutput,
+			hostname, hostAddress, alert.Fields["service_description"],
+			alert.Fields["service_state"], alert.Fields["service_output"],
 			alert.Fields["notification_type"], alert.Fields["perf_data"]),
 	})
 
-	svcCh := make(chan string, 1)
-	go func() {
-		svcCh <- getHostServices(ctx, cfg, hostname)
-	}()
-
-	sshCh := make(chan string, 1)
-	go func() {
-		if err := validateHost(ctx, cfg, hostname, hostAddress); err != nil {
-			slog.Warn("host validation failed, skipping SSH",
-				"error", err,
-				"hostname", hostname,
-				"host_address", hostAddress,
-				"checkmk_api_url", cfg.CheckMKAPIURL,
-			)
-			sshCh <- fmt.Sprintf("(host validation failed: %v)", err)
-			return
-		}
-		sshCh <- RunDiagnostics(ctx, cfg, hostname, serviceDesc, serviceOutput, 2048)
-	}()
-
 	sections = append(sections, shared.ContextSection{
 		Name:    "CheckMK Services on Host",
-		Content: <-svcCh,
-	})
-
-	sections = append(sections, shared.ContextSection{
-		Name:    "SSH Diagnostics",
-		Content: <-sshCh,
+		Content: getHostServices(ctx, cfg, hostname),
 	})
 
 	return shared.AnalysisContext{Sections: sections}

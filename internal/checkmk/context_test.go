@@ -30,7 +30,7 @@ func TestValidateHost_Match(t *testing.T) {
 		CheckMKAPIUser:   "automation",
 		CheckMKAPISecret: "secret",
 	}
-	err := validateHost(context.Background(), cfg, "testhost", "192.168.1.1")
+	err := ValidateHost(context.Background(), cfg, "testhost", "192.168.1.1")
 	if err != nil {
 		t.Errorf("expected valid host, got error: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestValidateHost_AddressMismatch(t *testing.T) {
 		CheckMKAPIUser:   "automation",
 		CheckMKAPISecret: "secret",
 	}
-	err := validateHost(context.Background(), cfg, "testhost", "10.0.0.99")
+	err := ValidateHost(context.Background(), cfg, "testhost", "10.0.0.99")
 	if err == nil {
 		t.Error("expected error for address mismatch")
 	}
@@ -71,7 +71,7 @@ func TestValidateHost_NotFound(t *testing.T) {
 		CheckMKAPIUser:   "automation",
 		CheckMKAPISecret: "secret",
 	}
-	err := validateHost(context.Background(), cfg, "unknown", "1.2.3.4")
+	err := ValidateHost(context.Background(), cfg, "unknown", "1.2.3.4")
 	if err == nil {
 		t.Error("expected error for unknown host")
 	}
