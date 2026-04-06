@@ -16,20 +16,6 @@ import (
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 )
 
-const systemPrompt = `You are an infrastructure SRE analyst for a monitoring setup using CheckMK (Nagios-based).
-You analyze host and service alerts with their context and produce a concise root-cause analysis:
-1. Identify the most likely root cause
-2. Assess severity and blast radius (other affected services/hosts)
-3. Suggest concrete remediation steps
-4. Note correlations between failing services on the same host
-
-IMPORTANT: You have NO root/sudo access. Never suggest commands requiring elevated privileges
-(sudo, su, dmesg, pkexec). All diagnostics run as unprivileged user.
-
-Keep response under 500 words. Use markdown for formatting (headings, bold, lists, code blocks)
-but never use markdown tables. Use bullet lists instead of tables.
-Reference actual metric values and hostnames.`
-
 func envOrDefault(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -154,11 +140,12 @@ func main() {
 }
 
 func processAlert(ctx context.Context, cfg checkmk.Config, cooldownMgr *shared.CooldownManager, alert shared.AlertPayload) {
-	slog.Info("processing CheckMK alert",
-		"hostname", alert.Fields["hostname"],
-		"service", alert.Fields["service_description"])
+	hostname := alert.Fields["hostname"]
+	hostAddress := alert.Fields["host_address"]
 
-	actx := checkmk.GatherContext(ctx, cfg, alert)
+	slog.Info("processing CheckMK alert",
+		"hostname", hostname,
+		"service", alert.Fields["service_description"])
 
 	baseCfg := shared.BaseConfig{
 		ClaudeModel:      cfg.ClaudeModel,
@@ -169,16 +156,42 @@ func processAlert(ctx context.Context, cfg checkmk.Config, cooldownMgr *shared.C
 		NtfyPublishToken: cfg.NtfyPublishToken,
 	}
 
-	userPrompt := actx.FormatForPrompt()
+	// Gather CheckMK context (alert details + host services)
+	actx := checkmk.GatherContext(ctx, cfg, alert)
+	alertContext := actx.FormatForPrompt()
 
-	analysis, err := shared.AnalyzeWithClaude(ctx, baseCfg, systemPrompt, userPrompt)
-	if err != nil {
-		slog.Error("analysis failed", "error", err)
-		_ = shared.PublishToNtfy(ctx, baseCfg,
-			fmt.Sprintf("Analysis FAILED: %s", alert.Title), "5",
-			fmt.Sprintf("**Analysis failed** for %s: %v\n\nManual investigation needed.", alert.Title, err))
-		cooldownMgr.Clear(alert.Fingerprint)
-		return
+	// Validate host before SSH
+	var analysis string
+	if err := checkmk.ValidateHost(ctx, cfg, hostname, hostAddress); err != nil {
+		slog.Warn("host validation failed, running analysis without SSH",
+			"error", err,
+			"hostname", hostname,
+			"host_address", hostAddress,
+		)
+		// Fall back to non-agentic analysis without SSH
+		alertContext += "\n## Note\nSSH diagnostics unavailable: " + err.Error() + "\n"
+		var analyzeErr error
+		analysis, analyzeErr = shared.AnalyzeWithClaude(ctx, baseCfg, checkmk.AgentSystemPrompt, alertContext)
+		if analyzeErr != nil {
+			slog.Error("analysis failed", "error", analyzeErr)
+			_ = shared.PublishToNtfy(ctx, baseCfg,
+				fmt.Sprintf("Analysis FAILED: %s", alert.Title), "5",
+				fmt.Sprintf("**Analysis failed** for %s: %v\n\nManual investigation needed.", alert.Title, analyzeErr))
+			cooldownMgr.Clear(alert.Fingerprint)
+			return
+		}
+	} else {
+		// Run agentic SSH diagnostics (includes analysis)
+		var err error
+		analysis, err = checkmk.RunAgenticDiagnostics(ctx, cfg, baseCfg, hostname, alertContext, 10)
+		if err != nil {
+			slog.Error("agentic diagnostics failed", "error", err)
+			_ = shared.PublishToNtfy(ctx, baseCfg,
+				fmt.Sprintf("Analysis FAILED: %s", alert.Title), "5",
+				fmt.Sprintf("**Agentic diagnostics failed** for %s: %v\n\nManual investigation needed.", alert.Title, err))
+			cooldownMgr.Clear(alert.Fingerprint)
+			return
+		}
 	}
 
 	priorityMap := map[string]string{"critical": "5", "warning": "4", "unknown": "3", "ok": "2"}
@@ -194,5 +207,5 @@ func processAlert(ctx context.Context, cfg checkmk.Config, cooldownMgr *shared.C
 		return
 	}
 
-	slog.Info("analysis complete", "hostname", alert.Fields["hostname"], "model", cfg.ClaudeModel)
+	slog.Info("analysis complete", "hostname", hostname, "model", cfg.ClaudeModel)
 }
