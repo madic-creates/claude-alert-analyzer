@@ -1,145 +1,15 @@
 package checkmk
 
 import (
-	"context"
 	"fmt"
-	"log/slog"
 	"net"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
-	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
-
-type alertCategory int
-
-const (
-	categoryGeneric alertCategory = iota
-	categoryCPU
-	categoryDisk
-	categoryMemory
-	categoryService
-)
-
-type sshCommand struct {
-	argv          []string
-	truncateLines int
-}
-
-var serviceNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_@.\-]+$`)
-
-func validServiceName(name string) bool {
-	return serviceNamePattern.MatchString(name) && len(name) <= 128
-}
-
-func detectCategory(serviceDesc, serviceOutput string) alertCategory {
-	lower := strings.ToLower(serviceDesc + " " + serviceOutput)
-	switch {
-	case strings.Contains(lower, "cpu") || strings.Contains(lower, "load"):
-		return categoryCPU
-	case strings.Contains(lower, "disk") || strings.Contains(lower, "filesystem") || strings.Contains(lower, "mount"):
-		return categoryDisk
-	case strings.Contains(lower, "memory") || strings.Contains(lower, "swap") || strings.Contains(lower, "mem"):
-		return categoryMemory
-	case strings.Contains(lower, "systemd") || strings.Contains(lower, "service") || strings.Contains(lower, "process"):
-		return categoryService
-	default:
-		return categoryGeneric
-	}
-}
-
-func buildCommands(cat alertCategory, serviceName string) []sshCommand {
-	cmds := []sshCommand{
-		{argv: []string{"journalctl", "--no-pager", "-p", "err", "-n", "50", "--since", "1 hour ago"}},
-	}
-
-	switch cat {
-	case categoryCPU:
-		cmds = append(cmds,
-			sshCommand{argv: []string{"top", "-bn1", "-o", "%CPU"}, truncateLines: 20},
-			sshCommand{argv: []string{"uptime"}},
-		)
-	case categoryDisk:
-		cmds = append(cmds,
-			sshCommand{argv: []string{"df", "-h"}},
-		)
-	case categoryMemory:
-		cmds = append(cmds,
-			sshCommand{argv: []string{"free", "-h"}},
-			sshCommand{argv: []string{"ps", "aux", "--sort=-%mem"}, truncateLines: 10},
-		)
-	case categoryService:
-		if validServiceName(serviceName) {
-			cmds = append(cmds,
-				sshCommand{argv: []string{"systemctl", "status", serviceName}},
-				sshCommand{argv: []string{"journalctl", "--no-pager", "-u", serviceName, "-n", "30"}},
-			)
-		} else {
-			slog.Warn("invalid service name, skipping service commands", "name", serviceName)
-		}
-	}
-
-	return cmds
-}
-
-func RunDiagnostics(ctx context.Context, cfg Config, hostname, serviceDesc, serviceOutput string, maxBytes int) string {
-	cat := detectCategory(serviceDesc, serviceOutput)
-	serviceName := extractServiceName(serviceDesc)
-	cmds := buildCommands(cat, serviceName)
-
-	slog.Info("SSH connecting", "hostname", hostname, "user", cfg.SSHUser, "commands", len(cmds))
-	client, err := dialSSH(cfg, hostname)
-	if err != nil {
-		slog.Error("SSH connection failed", "hostname", hostname, "error", err)
-		return fmt.Sprintf("(SSH connection failed: %v)", err)
-	}
-	defer client.Close()
-	slog.Info("SSH connected", "hostname", hostname)
-
-	var sections []string
-	deadline := time.Now().Add(30 * time.Second)
-
-	for _, cmd := range cmds {
-		if time.Now().After(deadline) {
-			slog.Warn("SSH diagnostics timeout, skipping remaining commands", "hostname", hostname)
-			sections = append(sections, "(timeout: remaining commands skipped)")
-			break
-		}
-
-		cmdStr := strings.Join(cmd.argv, " ")
-		slog.Debug("SSH running command", "hostname", hostname, "command", cmdStr)
-		output, err := runSSHCommand(client, cmd.argv, 10*time.Second)
-		if err != nil {
-			slog.Warn("SSH command failed, continuing with remaining commands", "hostname", hostname, "command", cmdStr, "error", err)
-			sections = append(sections, fmt.Sprintf("$ %s\n(error: %v)", cmdStr, err))
-			continue
-		}
-
-		output = shared.RedactSecrets(output)
-		if cmd.truncateLines > 0 {
-			output = shared.TruncateLines(output, cmd.truncateLines)
-		}
-		output = shared.Truncate(output, maxBytes)
-
-		sections = append(sections, fmt.Sprintf("$ %s\n%s", cmdStr, output))
-	}
-
-	return strings.Join(sections, "\n\n")
-}
-
-func extractServiceName(serviceDesc string) string {
-	lower := strings.ToLower(serviceDesc)
-	for _, prefix := range []string{"systemd ", "service "} {
-		if strings.HasPrefix(lower, prefix) {
-			return serviceDesc[len(prefix):]
-		}
-	}
-	return serviceDesc
-}
 
 func dialSSH(cfg Config, hostAddress string) (*ssh.Client, error) {
 	keyBytes, err := os.ReadFile(cfg.SSHKeyPath)
