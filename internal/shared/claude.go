@@ -16,22 +16,16 @@ const anthropicVersion = "2023-06-01"
 
 var claudeHTTPClient = &http.Client{Timeout: 120 * time.Second}
 
-func AnalyzeWithClaude(ctx context.Context, cfg BaseConfig, systemPrompt, userPrompt string) (string, error) {
-	reqBody := ClaudeRequest{
-		Model:     cfg.ClaudeModel,
-		MaxTokens: 2048,
-		System:    systemPrompt,
-		Messages:  []ClaudeMessage{{Role: "user", Content: userPrompt}},
-	}
-
-	bodyBytes, err := json.Marshal(reqBody)
+// sendRequest sends a JSON body to the Claude API and returns the raw response bytes.
+func sendRequest(ctx context.Context, cfg BaseConfig, body any) ([]byte, error) {
+	bodyBytes, err := json.Marshal(body)
 	if err != nil {
-		return "", fmt.Errorf("marshal request: %w", err)
+		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", cfg.APIBaseURL, bytes.NewReader(bodyBytes))
 	if err != nil {
-		return "", fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
@@ -44,17 +38,34 @@ func AnalyzeWithClaude(ctx context.Context, cfg BaseConfig, systemPrompt, userPr
 
 	resp, err := claudeHTTPClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("API request: %w", err)
+		return nil, fmt.Errorf("API request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("read response: %w", err)
+		return nil, fmt.Errorf("read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("API returned %d: %s", resp.StatusCode, Truncate(string(respBody), 300))
+		return nil, fmt.Errorf("API returned %d: %s", resp.StatusCode, Truncate(string(respBody), 300))
+	}
+
+	return respBody, nil
+}
+
+// AnalyzeWithClaude sends a single-turn analysis request. Used by k8s-analyzer.
+func AnalyzeWithClaude(ctx context.Context, cfg BaseConfig, systemPrompt, userPrompt string) (string, error) {
+	reqBody := ClaudeRequest{
+		Model:     cfg.ClaudeModel,
+		MaxTokens: 2048,
+		System:    systemPrompt,
+		Messages:  []ClaudeMessage{{Role: "user", Content: userPrompt}},
+	}
+
+	respBody, err := sendRequest(ctx, cfg, reqBody)
+	if err != nil {
+		return "", err
 	}
 
 	var result ClaudeResponse
@@ -79,4 +90,127 @@ func AnalyzeWithClaude(ctx context.Context, cfg BaseConfig, systemPrompt, userPr
 		"outputTokens", result.Usage.OutputTokens)
 
 	return strings.Join(parts, "\n"), nil
+}
+
+// RunToolLoop runs a multi-turn Claude conversation with tool use.
+// handleTool is called for each tool_use block. After maxRounds of tool calls,
+// a final request without tools forces Claude to produce a text response.
+func RunToolLoop(
+	ctx context.Context,
+	cfg BaseConfig,
+	systemPrompt string,
+	userPrompt string,
+	tools []Tool,
+	maxRounds int,
+	handleTool func(name string, input json.RawMessage) (string, error),
+) (string, error) {
+	messages := []ToolMessage{{Role: "user", Content: userPrompt}}
+
+	var totalInput, totalOutput int
+
+	for round := range maxRounds {
+		slog.Info("tool loop round", "round", round+1, "maxRounds", maxRounds)
+
+		reqBody := ToolRequest{
+			Model:     cfg.ClaudeModel,
+			MaxTokens: 4096,
+			System:    systemPrompt,
+			Tools:     tools,
+			Messages:  messages,
+		}
+
+		respBody, err := sendRequest(ctx, cfg, reqBody)
+		if err != nil {
+			return "", fmt.Errorf("round %d: %w", round+1, err)
+		}
+
+		var resp ToolResponse
+		if err := json.Unmarshal(respBody, &resp); err != nil {
+			return "", fmt.Errorf("round %d parse: %w", round+1, err)
+		}
+
+		if resp.Error != nil {
+			return "", fmt.Errorf("round %d API error: %s: %s", round+1, resp.Error.Type, resp.Error.Message)
+		}
+
+		totalInput += resp.Usage.InputTokens
+		totalOutput += resp.Usage.OutputTokens
+
+		// Append assistant response to conversation
+		messages = append(messages, ToolMessage{Role: "assistant", Content: resp.Content})
+
+		if resp.StopReason == "end_turn" {
+			slog.Info("tool loop complete",
+				"rounds", round+1,
+				"totalInputTokens", totalInput,
+				"totalOutputTokens", totalOutput)
+			return extractText(resp.Content), nil
+		}
+
+		// Process tool calls
+		var toolResults []ContentBlock
+		for _, block := range resp.Content {
+			if block.Type != "tool_use" {
+				continue
+			}
+
+			slog.Info("tool call", "round", round+1, "tool", block.Name, "id", block.ID)
+			output, err := handleTool(block.Name, block.Input)
+			if err != nil {
+				output = fmt.Sprintf("error: %v", err)
+			}
+
+			toolResults = append(toolResults, ContentBlock{
+				Type:      "tool_result",
+				ToolUseID: block.ID,
+				Content:   output,
+			})
+		}
+
+		messages = append(messages, ToolMessage{Role: "user", Content: toolResults})
+	}
+
+	// Max rounds reached — send final request without tools to force a text response
+	slog.Info("tool loop max rounds reached, requesting summary", "maxRounds", maxRounds)
+
+	reqBody := ToolRequest{
+		Model:     cfg.ClaudeModel,
+		MaxTokens: 4096,
+		System:    systemPrompt,
+		Messages:  messages,
+	}
+
+	respBody, err := sendRequest(ctx, cfg, reqBody)
+	if err != nil {
+		return "", fmt.Errorf("summary request: %w", err)
+	}
+
+	var resp ToolResponse
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return "", fmt.Errorf("summary parse: %w", err)
+	}
+
+	if resp.Error != nil {
+		return "", fmt.Errorf("summary API error: %s: %s", resp.Error.Type, resp.Error.Message)
+	}
+
+	totalInput += resp.Usage.InputTokens
+	totalOutput += resp.Usage.OutputTokens
+
+	slog.Info("tool loop complete (forced summary)",
+		"totalRounds", maxRounds,
+		"totalInputTokens", totalInput,
+		"totalOutputTokens", totalOutput)
+
+	return extractText(resp.Content), nil
+}
+
+func extractText(blocks []ContentBlock) string {
+	var parts []string
+	for _, b := range blocks {
+		if b.Type == "text" && b.Text != "" {
+			parts = append(parts, b.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
