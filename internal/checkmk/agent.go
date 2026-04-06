@@ -49,7 +49,8 @@ var sshTool = shared.Tool{
 	},
 }
 
-var deniedCommands = map[string]bool{
+// DefaultDeniedCommands is the default denylist used when SSH_DENIED_COMMANDS is not set.
+var DefaultDeniedCommands = map[string]bool{
 	"rm": true, "rmdir": true, "dd": true, "mkfs": true, "mke2fs": true,
 	"shutdown": true, "reboot": true, "poweroff": true, "halt": true, "init": true,
 	"sudo": true, "su": true, "pkexec": true, "doas": true,
@@ -71,22 +72,26 @@ var systemctlReadOnly = map[string]bool{
 	"list-timers": true, "list-sockets": true, "list-dependencies": true,
 }
 
-func isDenied(argv []string) bool {
+func isDenied(denied map[string]bool, argv []string) bool {
 	if len(argv) == 0 {
 		return true
+	}
+
+	if len(denied) == 0 {
+		return false
 	}
 
 	cmd := argv[0]
 
 	// Special case: systemctl with read-only subcommands is allowed
-	if cmd == "systemctl" {
+	if cmd == "systemctl" && denied["systemctl"] {
 		if len(argv) < 2 {
 			return true
 		}
 		return !systemctlReadOnly[argv[1]]
 	}
 
-	return deniedCommands[cmd]
+	return denied[cmd]
 }
 
 func parseCommandInput(input json.RawMessage) ([]string, error) {
@@ -112,7 +117,12 @@ func RunAgenticDiagnostics(
 	alertContext string,
 	maxRounds int,
 ) (string, error) {
-	slog.Info("starting agentic SSH diagnostics", "hostname", hostname, "maxRounds", maxRounds)
+	denied := cfg.SSHDeniedCommands
+	if denied == nil {
+		denied = DefaultDeniedCommands
+	}
+
+	slog.Info("starting agentic SSH diagnostics", "hostname", hostname, "maxRounds", maxRounds, "deniedCommands", len(denied))
 
 	client, err := dialSSH(cfg, hostname)
 	if err != nil {
@@ -131,7 +141,7 @@ func RunAgenticDiagnostics(
 			return "", err
 		}
 
-		if isDenied(argv) {
+		if isDenied(denied, argv) {
 			cmdStr := strings.Join(argv, " ")
 			slog.Warn("denied command", "hostname", hostname, "command", cmdStr)
 			return fmt.Sprintf("Command denied: %q is not allowed (destructive or privileged command)", argv[0]), nil

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -25,6 +26,7 @@ func envOrDefault(key, fallback string) string {
 
 func loadConfig() checkmk.Config {
 	cooldown, _ := strconv.Atoi(envOrDefault("COOLDOWN_SECONDS", "300"))
+	maxAgentRounds, _ := strconv.Atoi(envOrDefault("MAX_AGENT_ROUNDS", "10"))
 
 	webhookSecret := os.Getenv("WEBHOOK_SECRET")
 	if webhookSecret == "" {
@@ -47,6 +49,18 @@ func loadConfig() checkmk.Config {
 		os.Exit(1)
 	}
 
+	// SSH_DENIED_COMMANDS: not set = default denylist, empty = no guardrails, value = custom list
+	var sshDeniedCommands map[string]bool
+	if val, ok := os.LookupEnv("SSH_DENIED_COMMANDS"); ok {
+		sshDeniedCommands = make(map[string]bool)
+		for _, cmd := range strings.Split(val, ",") {
+			cmd = strings.TrimSpace(cmd)
+			if cmd != "" {
+				sshDeniedCommands[cmd] = true
+			}
+		}
+	}
+
 	return checkmk.Config{
 		NtfyPublishURL:    envOrDefault("NTFY_PUBLISH_URL", "https://ntfy.example.com"),
 		NtfyPublishTopic:  envOrDefault("NTFY_PUBLISH_TOPIC", "checkmk-analysis"),
@@ -60,9 +74,12 @@ func loadConfig() checkmk.Config {
 		CheckMKAPIURL:     envOrDefault("CHECKMK_API_URL", "http://checkmk-service.monitoring:5000/cmk/check_mk/api/1.0/"),
 		CheckMKAPIUser:    checkmkUser,
 		CheckMKAPISecret:  checkmkSecret,
+		SSHEnabled:        envOrDefault("SSH_ENABLED", "true") == "true",
 		SSHUser:           envOrDefault("SSH_USER", "nagios"),
 		SSHKeyPath:        envOrDefault("SSH_KEY_PATH", "/ssh/id_ed25519"),
 		SSHKnownHostsPath: envOrDefault("SSH_KNOWN_HOSTS_PATH", "/ssh/known_hosts"),
+		SSHDeniedCommands: sshDeniedCommands,
+		MaxAgentRounds:    maxAgentRounds,
 	}
 }
 
@@ -160,35 +177,36 @@ func processAlert(ctx context.Context, cfg checkmk.Config, cooldownMgr *shared.C
 	actx := checkmk.GatherContext(ctx, cfg, alert)
 	alertContext := actx.FormatForPrompt()
 
-	// Validate host before SSH
 	var analysis string
-	if err := checkmk.ValidateHost(ctx, cfg, hostname, hostAddress); err != nil {
-		slog.Warn("host validation failed, running analysis without SSH",
-			"error", err,
-			"hostname", hostname,
-			"host_address", hostAddress,
-		)
-		// Fall back to non-agentic analysis without SSH
-		alertContext += "\n## Note\nSSH diagnostics unavailable: " + err.Error() + "\n"
-		var analyzeErr error
-		analysis, analyzeErr = shared.AnalyzeWithClaude(ctx, baseCfg, checkmk.AgentSystemPrompt, alertContext)
-		if analyzeErr != nil {
-			slog.Error("analysis failed", "error", analyzeErr)
-			_ = shared.PublishToNtfy(ctx, baseCfg,
-				fmt.Sprintf("Analysis FAILED: %s", alert.Title), "5",
-				fmt.Sprintf("**Analysis failed** for %s: %v\n\nManual investigation needed.", alert.Title, analyzeErr))
-			cooldownMgr.Clear(alert.Fingerprint)
-			return
+	sshOK := cfg.SSHEnabled
+	if sshOK {
+		if err := checkmk.ValidateHost(ctx, cfg, hostname, hostAddress); err != nil {
+			slog.Warn("host validation failed, running analysis without SSH",
+				"error", err, "hostname", hostname, "host_address", hostAddress)
+			alertContext += "\n## Note\nSSH diagnostics unavailable: " + err.Error() + "\n"
+			sshOK = false
 		}
-	} else {
-		// Run agentic SSH diagnostics (includes analysis)
+	}
+
+	if sshOK {
 		var err error
-		analysis, err = checkmk.RunAgenticDiagnostics(ctx, cfg, baseCfg, hostname, alertContext, 10)
+		analysis, err = checkmk.RunAgenticDiagnostics(ctx, cfg, baseCfg, hostname, alertContext, cfg.MaxAgentRounds)
 		if err != nil {
 			slog.Error("agentic diagnostics failed", "error", err)
 			_ = shared.PublishToNtfy(ctx, baseCfg,
 				fmt.Sprintf("Analysis FAILED: %s", alert.Title), "5",
 				fmt.Sprintf("**Agentic diagnostics failed** for %s: %v\n\nManual investigation needed.", alert.Title, err))
+			cooldownMgr.Clear(alert.Fingerprint)
+			return
+		}
+	} else {
+		var err error
+		analysis, err = shared.AnalyzeWithClaude(ctx, baseCfg, checkmk.AgentSystemPrompt, alertContext)
+		if err != nil {
+			slog.Error("analysis failed", "error", err)
+			_ = shared.PublishToNtfy(ctx, baseCfg,
+				fmt.Sprintf("Analysis FAILED: %s", alert.Title), "5",
+				fmt.Sprintf("**Analysis failed** for %s: %v\n\nManual investigation needed.", alert.Title, err))
 			cooldownMgr.Clear(alert.Fingerprint)
 			return
 		}

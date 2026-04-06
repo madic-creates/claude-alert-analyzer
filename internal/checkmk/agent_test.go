@@ -27,7 +27,7 @@ func TestIsDenied_BlocksDestructiveCommands(t *testing.T) {
 		{"chown", "root:root", "/tmp/foo"},
 	}
 	for _, argv := range denied {
-		if !isDenied(argv) {
+		if !isDenied(DefaultDeniedCommands, argv) {
 			t.Errorf("expected denied: %v", argv)
 		}
 	}
@@ -55,7 +55,7 @@ func TestIsDenied_AllowsReadOnlyCommands(t *testing.T) {
 		{"lsof", "-i", ":80"},
 	}
 	for _, argv := range allowed {
-		if isDenied(argv) {
+		if isDenied(DefaultDeniedCommands, argv) {
 			t.Errorf("expected allowed: %v", argv)
 		}
 	}
@@ -71,7 +71,7 @@ func TestIsDenied_SystemctlSpecialCases(t *testing.T) {
 		{"systemctl", "list-timers"},
 	}
 	for _, argv := range allowed {
-		if isDenied(argv) {
+		if isDenied(DefaultDeniedCommands, argv) {
 			t.Errorf("expected allowed: %v", argv)
 		}
 	}
@@ -86,18 +86,48 @@ func TestIsDenied_SystemctlSpecialCases(t *testing.T) {
 		{"systemctl", "daemon-reload"},
 	}
 	for _, argv := range denied {
-		if !isDenied(argv) {
+		if !isDenied(DefaultDeniedCommands, argv) {
 			t.Errorf("expected denied: %v", argv)
 		}
 	}
 }
 
 func TestIsDenied_EmptyCommand(t *testing.T) {
-	if !isDenied(nil) {
+	if !isDenied(DefaultDeniedCommands, nil) {
 		t.Error("expected denied for nil")
 	}
-	if !isDenied([]string{}) {
+	if !isDenied(DefaultDeniedCommands, []string{}) {
 		t.Error("expected denied for empty")
+	}
+}
+
+func TestIsDenied_EmptyDenylist(t *testing.T) {
+	empty := map[string]bool{}
+	// With empty denylist, everything is allowed (except empty commands)
+	if !isDenied(empty, nil) {
+		t.Error("expected denied for nil even with empty denylist")
+	}
+	if isDenied(empty, []string{"rm", "-rf", "/"}) {
+		t.Error("expected allowed with empty denylist")
+	}
+	if isDenied(empty, []string{"sudo", "cat", "/etc/shadow"}) {
+		t.Error("expected allowed with empty denylist")
+	}
+	if isDenied(empty, []string{"systemctl", "restart", "nginx"}) {
+		t.Error("expected systemctl restart allowed with empty denylist")
+	}
+}
+
+func TestIsDenied_CustomDenylist(t *testing.T) {
+	custom := map[string]bool{"rm": true, "dd": true}
+	if !isDenied(custom, []string{"rm", "-rf", "/"}) {
+		t.Error("expected rm denied with custom list")
+	}
+	if isDenied(custom, []string{"sudo", "cat", "/etc/shadow"}) {
+		t.Error("expected sudo allowed with custom list (not in denylist)")
+	}
+	if isDenied(custom, []string{"reboot"}) {
+		t.Error("expected reboot allowed with custom list")
 	}
 }
 

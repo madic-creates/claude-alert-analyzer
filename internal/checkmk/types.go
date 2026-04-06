@@ -26,7 +26,10 @@ type Config struct {
 	CheckMKAPIURL     string
 	CheckMKAPIUser    string
 	CheckMKAPISecret  string
-	SSHUser           string
-	SSHKeyPath        string
-	SSHKnownHostsPath string
+	SSHEnabled         bool
+	SSHUser            string
+	SSHKeyPath         string
+	SSHKnownHostsPath  string
+	SSHDeniedCommands  map[string]bool // nil = use default, empty = no guardrails
+	MaxAgentRounds     int
 }

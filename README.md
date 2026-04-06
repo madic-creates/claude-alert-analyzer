@@ -84,9 +84,12 @@ The k8s-analyzer uses in-cluster config (`rest.InClusterConfig()`) and must run 
 | `CHECKMK_API_URL` | `http://checkmk-service.monitoring:5000/cmk/check_mk/api/1.0/` | CheckMK REST API URL |
 | `CHECKMK_API_USER` | **(required)** | CheckMK automation user |
 | `CHECKMK_API_SECRET` | **(required)** | CheckMK automation secret |
+| `SSH_ENABLED` | `true` | Enable agentic SSH diagnostics (`false` = analyze without SSH) |
 | `SSH_USER` | `nagios` | SSH user for host diagnostics |
 | `SSH_KEY_PATH` | `/ssh/id_ed25519` | Path to SSH private key |
 | `SSH_KNOWN_HOSTS_PATH` | `/ssh/known_hosts` | Path to known_hosts file |
+| `SSH_DENIED_COMMANDS` | *(default denylist)* | Comma-separated list of denied SSH commands. Empty = no guardrails |
+| `MAX_AGENT_ROUNDS` | `10` | Max SSH command rounds per agentic analysis |
 | `NTFY_PUBLISH_TOPIC` | `checkmk-analysis` | Default ntfy topic |
 
 ### LLM Provider Configuration
@@ -143,7 +146,7 @@ The checkmk-analyzer uses an **agentic approach**: Claude autonomously decides w
 
 **Allowed:** Any read-only diagnostic command (e.g. `df`, `free`, `top`, `ps`, `journalctl`, `cat`/`tail`/`head` on log files, `ss`, `ip`, `du`, `lsblk`, `lsof`, `find`, `systemctl status/show`, etc.)
 
-**Denied (denylist):** Destructive or state-modifying commands are blocked: `rm`, `dd`, `mkfs`, `shutdown`, `reboot`, `sudo`, `su`, `chmod`, `chown`, `kill`, `mv`, `cp`, `mount`, `iptables`, `passwd`, `crontab`, `systemctl start/stop/restart`, and similar.
+**Denied (denylist):** Destructive or state-modifying commands are blocked by default: `rm`, `dd`, `mkfs`, `shutdown`, `reboot`, `sudo`, `su`, `chmod`, `chown`, `kill`, `mv`, `cp`, `mount`, `iptables`, `passwd`, `crontab`, `systemctl start/stop/restart`, and similar. The denylist is configurable via `SSH_DENIED_COMMANDS`. Set to empty to remove all guardrails.
 
 Output is redacted (secrets removed) and truncated per command before being sent to Claude.
 
