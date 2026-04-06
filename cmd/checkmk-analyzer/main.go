@@ -62,9 +62,6 @@ func loadConfig() checkmk.Config {
 	}
 
 	return checkmk.Config{
-		NtfyPublishURL:    envOrDefault("NTFY_PUBLISH_URL", "https://ntfy.example.com"),
-		NtfyPublishTopic:  envOrDefault("NTFY_PUBLISH_TOPIC", "checkmk-analysis"),
-		NtfyPublishToken:  os.Getenv("NTFY_PUBLISH_TOKEN"),
 		ClaudeModel:       envOrDefault("CLAUDE_MODEL", "claude-sonnet-4-6"),
 		CooldownSeconds:   cooldown,
 		Port:              envOrDefault("PORT", "8080"),
@@ -83,8 +80,23 @@ func loadConfig() checkmk.Config {
 	}
 }
 
+func buildPublishers() []shared.Publisher {
+	var publishers []shared.Publisher
+
+	ntfyURL := envOrDefault("NTFY_PUBLISH_URL", "https://ntfy.example.com")
+	ntfyTopic := envOrDefault("NTFY_PUBLISH_TOPIC", "checkmk-analysis")
+	publishers = append(publishers, &shared.NtfyPublisher{
+		URL:   ntfyURL,
+		Topic: ntfyTopic,
+		Token: os.Getenv("NTFY_PUBLISH_TOKEN"),
+	})
+
+	return publishers
+}
+
 func main() {
 	cfg := loadConfig()
+	publishers := buildPublishers()
 	cooldownMgr := shared.NewCooldownManager()
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 
@@ -97,7 +109,7 @@ func main() {
 		go func() {
 			defer wg.Done()
 			for item := range workQueue {
-				processAlert(workerCtx, cfg, cooldownMgr, item.alert)
+				processAlert(workerCtx, cfg, publishers, cooldownMgr, item.alert)
 			}
 		}()
 	}
@@ -156,7 +168,7 @@ func main() {
 	slog.Info("shutdown complete")
 }
 
-func processAlert(ctx context.Context, cfg checkmk.Config, cooldownMgr *shared.CooldownManager, alert shared.AlertPayload) {
+func processAlert(ctx context.Context, cfg checkmk.Config, publishers []shared.Publisher, cooldownMgr *shared.CooldownManager, alert shared.AlertPayload) {
 	hostname := alert.Fields["hostname"]
 	hostAddress := alert.Fields["host_address"]
 
@@ -165,12 +177,9 @@ func processAlert(ctx context.Context, cfg checkmk.Config, cooldownMgr *shared.C
 		"service", alert.Fields["service_description"])
 
 	baseCfg := shared.BaseConfig{
-		ClaudeModel:      cfg.ClaudeModel,
-		APIBaseURL:       cfg.APIBaseURL,
-		APIKey:           cfg.APIKey,
-		NtfyPublishURL:   cfg.NtfyPublishURL,
-		NtfyPublishTopic: cfg.NtfyPublishTopic,
-		NtfyPublishToken: cfg.NtfyPublishToken,
+		ClaudeModel: cfg.ClaudeModel,
+		APIBaseURL:  cfg.APIBaseURL,
+		APIKey:      cfg.APIKey,
 	}
 
 	// Gather CheckMK context (alert details + host services)
@@ -193,7 +202,7 @@ func processAlert(ctx context.Context, cfg checkmk.Config, cooldownMgr *shared.C
 		analysis, err = checkmk.RunAgenticDiagnostics(ctx, cfg, baseCfg, hostname, alertContext, cfg.MaxAgentRounds)
 		if err != nil {
 			slog.Error("agentic diagnostics failed", "error", err)
-			_ = shared.PublishToNtfy(ctx, baseCfg,
+			_ = shared.PublishAll(ctx, publishers,
 				fmt.Sprintf("Analysis FAILED: %s", alert.Title), "5",
 				fmt.Sprintf("**Agentic diagnostics failed** for %s: %v\n\nManual investigation needed.", alert.Title, err))
 			cooldownMgr.Clear(alert.Fingerprint)
@@ -204,7 +213,7 @@ func processAlert(ctx context.Context, cfg checkmk.Config, cooldownMgr *shared.C
 		analysis, err = shared.AnalyzeWithClaude(ctx, baseCfg, checkmk.AgentSystemPrompt, alertContext)
 		if err != nil {
 			slog.Error("analysis failed", "error", err)
-			_ = shared.PublishToNtfy(ctx, baseCfg,
+			_ = shared.PublishAll(ctx, publishers,
 				fmt.Sprintf("Analysis FAILED: %s", alert.Title), "5",
 				fmt.Sprintf("**Analysis failed** for %s: %v\n\nManual investigation needed.", alert.Title, err))
 			cooldownMgr.Clear(alert.Fingerprint)
@@ -219,8 +228,7 @@ func processAlert(ctx context.Context, cfg checkmk.Config, cooldownMgr *shared.C
 	}
 
 	title := fmt.Sprintf("Analysis: %s", alert.Title)
-	if err := shared.PublishToNtfy(ctx, baseCfg, title, priority, analysis); err != nil {
-		slog.Error("publish failed", "error", err)
+	if err := shared.PublishAll(ctx, publishers, title, priority, analysis); err != nil {
 		cooldownMgr.Clear(alert.Fingerprint)
 		return
 	}

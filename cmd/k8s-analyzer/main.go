@@ -61,9 +61,6 @@ func loadConfig() k8s.Config {
 	}
 
 	return k8s.Config{
-		NtfyPublishURL:    envOrDefault("NTFY_PUBLISH_URL", "https://ntfy.example.com"),
-		NtfyPublishTopic:  envOrDefault("NTFY_PUBLISH_TOPIC", "kubernetes-analysis"),
-		NtfyPublishToken:  os.Getenv("NTFY_PUBLISH_TOKEN"),
 		PrometheusURL:     envOrDefault("PROMETHEUS_URL", "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"),
 		ClaudeModel:       envOrDefault("CLAUDE_MODEL", "claude-sonnet-4-6"),
 		CooldownSeconds:   cooldown,
@@ -77,8 +74,23 @@ func loadConfig() k8s.Config {
 	}
 }
 
+func buildPublishers() []shared.Publisher {
+	var publishers []shared.Publisher
+
+	ntfyURL := envOrDefault("NTFY_PUBLISH_URL", "https://ntfy.example.com")
+	ntfyTopic := envOrDefault("NTFY_PUBLISH_TOPIC", "kubernetes-analysis")
+	publishers = append(publishers, &shared.NtfyPublisher{
+		URL:   ntfyURL,
+		Topic: ntfyTopic,
+		Token: os.Getenv("NTFY_PUBLISH_TOKEN"),
+	})
+
+	return publishers
+}
+
 func main() {
 	cfg := loadConfig()
+	publishers := buildPublishers()
 
 	k8sConfig, err := rest.InClusterConfig()
 	if err != nil {
@@ -103,7 +115,7 @@ func main() {
 		go func() {
 			defer wg.Done()
 			for item := range workQueue {
-				processAlert(workerCtx, cfg, clientset, cooldownMgr, item.alert)
+				processAlert(workerCtx, cfg, publishers, clientset, cooldownMgr, item.alert)
 			}
 		}()
 	}
@@ -163,7 +175,7 @@ func main() {
 	slog.Info("shutdown complete")
 }
 
-func processAlert(ctx context.Context, cfg k8s.Config, clientset kubernetes.Interface, cooldownMgr *shared.CooldownManager, alert shared.AlertPayload) {
+func processAlert(ctx context.Context, cfg k8s.Config, publishers []shared.Publisher, clientset kubernetes.Interface, cooldownMgr *shared.CooldownManager, alert shared.AlertPayload) {
 	alertname := alert.Title
 	namespace := alert.Fields["label:namespace"]
 	slog.Info("processing alert", "alertname", alertname, "namespace", namespace)
@@ -192,7 +204,7 @@ func processAlert(ctx context.Context, cfg k8s.Config, clientset kubernetes.Inte
 	analysis, err := shared.AnalyzeWithClaude(ctx, baseCfg, systemPrompt, userPrompt)
 	if err != nil {
 		slog.Error("analysis failed", "alertname", alertname, "error", err)
-		_ = shared.PublishToNtfy(ctx, baseCfg,
+		_ = shared.PublishAll(ctx, publishers,
 			fmt.Sprintf("Analysis FAILED: %s", alertname), "5",
 			fmt.Sprintf("**Analysis failed** for %s: %v\n\nManual investigation needed.", alertname, err))
 		cooldownMgr.Clear(alert.Fingerprint)
@@ -210,8 +222,7 @@ func processAlert(ctx context.Context, cfg k8s.Config, clientset kubernetes.Inte
 		priority = "3"
 	}
 
-	if err := shared.PublishToNtfy(ctx, baseCfg, title, priority, analysis); err != nil {
-		slog.Error("publish failed", "alertname", alertname, "error", err)
+	if err := shared.PublishAll(ctx, publishers, title, priority, analysis); err != nil {
 		cooldownMgr.Clear(alert.Fingerprint)
 		return
 	}

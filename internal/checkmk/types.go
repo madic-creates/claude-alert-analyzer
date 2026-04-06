@@ -14,9 +14,6 @@ type CheckMKNotification struct {
 }
 
 type Config struct {
-	NtfyPublishURL    string
-	NtfyPublishTopic  string
-	NtfyPublishToken  string
 	ClaudeModel       string
 	CooldownSeconds   int
 	Port              string

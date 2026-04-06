@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -11,9 +12,18 @@ import (
 
 var ntfyHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
-func PublishToNtfy(ctx context.Context, cfg BaseConfig, title, priority, analysis string) error {
-	ntfyURL := fmt.Sprintf("%s/%s", cfg.NtfyPublishURL, cfg.NtfyPublishTopic)
-	req, err := http.NewRequestWithContext(ctx, "POST", ntfyURL, strings.NewReader(analysis))
+// NtfyPublisher sends notifications to an ntfy server.
+type NtfyPublisher struct {
+	URL   string
+	Topic string
+	Token string
+}
+
+func (n *NtfyPublisher) Name() string { return "ntfy" }
+
+func (n *NtfyPublisher) Publish(ctx context.Context, title, priority, body string) error {
+	ntfyURL := fmt.Sprintf("%s/%s", n.URL, n.Topic)
+	req, err := http.NewRequestWithContext(ctx, "POST", ntfyURL, strings.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
@@ -22,8 +32,8 @@ func PublishToNtfy(ctx context.Context, cfg BaseConfig, title, priority, analysi
 	req.Header.Set("Priority", priority)
 	req.Header.Set("Tags", "robot,mag")
 	req.Header.Set("Markdown", "yes")
-	if cfg.NtfyPublishToken != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.NtfyPublishToken)
+	if n.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+n.Token)
 	}
 
 	resp, err := ntfyHTTPClient.Do(req)
@@ -37,4 +47,18 @@ func PublishToNtfy(ctx context.Context, cfg BaseConfig, title, priority, analysi
 		return fmt.Errorf("ntfy returned %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// PublishAll sends to all publishers, logging errors. Returns the first error encountered.
+func PublishAll(ctx context.Context, publishers []Publisher, title, priority, body string) error {
+	var firstErr error
+	for _, p := range publishers {
+		if err := p.Publish(ctx, title, priority, body); err != nil {
+			slog.Error("publish failed", "publisher", p.Name(), "error", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
 }

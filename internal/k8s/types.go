@@ -47,9 +47,6 @@ type PromResult struct {
 
 // Config holds all configuration for the K8s alert analyzer.
 type Config struct {
-	NtfyPublishURL    string
-	NtfyPublishTopic  string
-	NtfyPublishToken  string
 	PrometheusURL     string
 	ClaudeModel       string
 	CooldownSeconds   int
@@ -65,14 +62,11 @@ type Config struct {
 // BaseConfig returns a shared.BaseConfig derived from this Config.
 func (c Config) BaseConfig() shared.BaseConfig {
 	return shared.BaseConfig{
-		NtfyPublishURL:   c.NtfyPublishURL,
-		NtfyPublishTopic: c.NtfyPublishTopic,
-		NtfyPublishToken: c.NtfyPublishToken,
-		ClaudeModel:      c.ClaudeModel,
-		CooldownSeconds:  c.CooldownSeconds,
-		Port:             c.Port,
-		WebhookSecret:    c.WebhookSecret,
-		APIBaseURL:       c.APIBaseURL,
-		APIKey:           c.APIKey,
+		ClaudeModel:     c.ClaudeModel,
+		CooldownSeconds: c.CooldownSeconds,
+		Port:            c.Port,
+		WebhookSecret:   c.WebhookSecret,
+		APIBaseURL:      c.APIBaseURL,
+		APIKey:          c.APIKey,
 	}
 }

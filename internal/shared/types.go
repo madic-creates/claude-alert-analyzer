@@ -1,6 +1,9 @@
 package shared
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+)
 
 // AnalysisContext holds named text sections injected into the Claude user prompt.
 type AnalysisContext struct {
@@ -21,6 +24,12 @@ func (ac AnalysisContext) FormatForPrompt() string {
 	return s
 }
 
+// Publisher sends analysis results to a notification target.
+type Publisher interface {
+	Publish(ctx context.Context, title, priority, body string) error
+	Name() string
+}
+
 // AlertPayload is the common alert representation.
 type AlertPayload struct {
 	Fingerprint string
@@ -32,15 +41,12 @@ type AlertPayload struct {
 
 // BaseConfig holds configuration shared by all analyzers.
 type BaseConfig struct {
-	NtfyPublishURL   string
-	NtfyPublishTopic string
-	NtfyPublishToken string
-	ClaudeModel      string
-	CooldownSeconds  int
-	Port             string
-	WebhookSecret    string
-	APIBaseURL       string
-	APIKey           string
+	ClaudeModel     string
+	CooldownSeconds int
+	Port            string
+	WebhookSecret   string
+	APIBaseURL      string
+	APIKey          string
 }
 
 // ClaudeRequest is the Claude Messages API request body.
