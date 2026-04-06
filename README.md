@@ -139,17 +139,13 @@ The script sends host/service alert data as JSON to the webhook. Exit codes: `0`
 
 ### SSH Diagnostic Commands
 
-The checkmk-analyzer connects to the alerted host via SSH and runs diagnostic commands based on the alert category (heuristically detected from the service description):
+The checkmk-analyzer uses an **agentic approach**: Claude autonomously decides which commands to run on the alerted host via SSH, based on the alert context and previous command outputs. This replaces a static command list with a dynamic investigation loop (max 10 rounds).
 
-| Category | Keywords | Commands |
-|----------|----------|----------|
-| Always | -- | `journalctl --no-pager -p err -n 50 --since "1 hour ago"` |
-| CPU/Load | cpu, load | `top -bn1 -o %CPU` (first 20 lines), `uptime` |
-| Disk | disk, filesystem, mount | `df -h` |
-| Memory | memory, swap, mem | `free -h`, `ps aux --sort=-%mem` (first 10 lines) |
-| Service | systemd, service, process | `systemctl status <svc>`, `journalctl --no-pager -u <svc> -n 30` |
+**Allowed:** Any read-only diagnostic command (e.g. `df`, `free`, `top`, `ps`, `journalctl`, `cat`/`tail`/`head` on log files, `ss`, `ip`, `du`, `lsblk`, `lsof`, `find`, `systemctl status/show`, etc.)
 
-Output is truncated Go-side after reading the full response (no shell pipes).
+**Denied (denylist):** Destructive or state-modifying commands are blocked: `rm`, `dd`, `mkfs`, `shutdown`, `reboot`, `sudo`, `su`, `chmod`, `chown`, `kill`, `mv`, `cp`, `mount`, `iptables`, `passwd`, `crontab`, `systemctl start/stop/restart`, and similar.
+
+Output is redacted (secrets removed) and truncated per command before being sent to Claude.
 
 ## Security
 
@@ -166,8 +162,7 @@ Output is truncated Go-side after reading the full response (no shell pipes).
 
 - **Host validation**: Both `hostname` and `host_address` from the alert must match a known CheckMK host before any SSH connection is attempted
 - **Strict SSH**: `known_hosts` from ConfigMap (no TOFU), key mounted as volume (not env var), no ForwardAgent
-- **Command allowlist**: Only the predefined diagnostic commands above are executed
-- **Input validation**: Service names validated against `^[a-zA-Z0-9_@.\-]+$` (max 128 chars)
+- **Command denylist**: Destructive/privileged commands blocked (defense-in-depth alongside unprivileged SSH user)
 - **No shell**: Commands executed via SSH exec (argv), not through a shell
 - **No privilege escalation**: SSH user has unprivileged access only; no `sudo`, `su`, `dmesg`, or `pkexec`
 
