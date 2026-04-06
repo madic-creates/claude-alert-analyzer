@@ -114,7 +114,7 @@ func RunDiagnostics(ctx context.Context, cfg Config, hostname, serviceDesc, serv
 		slog.Debug("SSH running command", "hostname", hostname, "command", cmdStr)
 		output, err := runSSHCommand(client, cmd.argv, 10*time.Second)
 		if err != nil {
-			slog.Warn("SSH command failed", "hostname", hostname, "command", cmdStr, "error", err)
+			slog.Warn("SSH command failed, continuing with remaining commands", "hostname", hostname, "command", cmdStr, "error", err)
 			sections = append(sections, fmt.Sprintf("$ %s\n(error: %v)", cmdStr, err))
 			continue
 		}
