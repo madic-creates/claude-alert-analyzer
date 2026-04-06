@@ -88,7 +88,15 @@ The k8s-analyzer uses in-cluster config (`rest.InClusterConfig()`) and must run 
 | `SSH_USER` | `nagios` | SSH user for host diagnostics |
 | `SSH_KEY_PATH` | `/ssh/id_ed25519` | Path to SSH private key |
 | `SSH_KNOWN_HOSTS_PATH` | `/ssh/known_hosts` | Path to known_hosts file |
-| `SSH_DENIED_COMMANDS` | *(default denylist)* | Comma-separated list of denied SSH commands. Empty = no guardrails |
+| `SSH_DENIED_COMMANDS` | *(see below)* | Comma-separated list of denied SSH commands. Empty = no guardrails |
+
+Default denylist for `SSH_DENIED_COMMANDS` (used when the variable is not set):
+
+```
+rm,rmdir,dd,mkfs,mke2fs,shutdown,reboot,poweroff,halt,init,sudo,su,pkexec,doas,chmod,chown,chgrp,kill,killall,pkill,mv,cp,ln,useradd,userdel,usermod,groupadd,groupdel,passwd,crontab,iptables,ip6tables,nft,mount,umount,mkswap,swapon,swapoff,insmod,rmmod,modprobe,systemctl
+```
+
+`systemctl` is a special case: when denied, read-only subcommands (`status`, `show`, `is-active`, `is-failed`, `is-enabled`, `list-units`, `list-unit-files`, `list-timers`, `list-sockets`, `list-dependencies`) are still allowed.
 | `MAX_AGENT_ROUNDS` | `10` | Max SSH command rounds per agentic analysis |
 | `NTFY_PUBLISH_TOPIC` | `checkmk-analysis` | Default ntfy topic |
 
