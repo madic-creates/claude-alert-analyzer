@@ -182,20 +182,28 @@ func processAlert(ctx context.Context, cfg checkmk.Config, publishers []shared.P
 		APIKey:      cfg.APIKey,
 	}
 
-	// Gather CheckMK context (alert details + host services)
-	actx := checkmk.GatherContext(ctx, cfg, alert)
-	alertContext := actx.FormatForPrompt()
-
-	var analysis string
+	// Validate host and fetch metadata (including ai_context)
+	var hostInfo *checkmk.HostInfo
 	sshOK := cfg.SSHEnabled
 	if sshOK {
-		if err := checkmk.ValidateHost(ctx, cfg, hostname, hostAddress); err != nil {
+		var err error
+		hostInfo, err = checkmk.ValidateAndDescribeHost(ctx, cfg, hostname, hostAddress)
+		if err != nil {
 			slog.Warn("host validation failed, running analysis without SSH",
 				"error", err, "hostname", hostname, "host_address", hostAddress)
-			alertContext += "\n## Note\nSSH diagnostics unavailable: " + err.Error() + "\n"
 			sshOK = false
 		}
 	}
+
+	// Gather CheckMK context (alert details + host services + optional host context)
+	actx := checkmk.GatherContext(ctx, cfg, alert, hostInfo)
+	alertContext := actx.FormatForPrompt()
+
+	if !sshOK && cfg.SSHEnabled {
+		alertContext += "\n## Note\nSSH diagnostics unavailable: host validation failed\n"
+	}
+
+	var analysis string
 
 	if sshOK {
 		var err error
