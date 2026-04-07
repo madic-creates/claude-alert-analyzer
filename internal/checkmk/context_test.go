@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 )
 
 func TestValidateAndDescribeHost_Match(t *testing.T) {
@@ -133,4 +136,141 @@ func TestValidateAndDescribeHost_NoAIContext(t *testing.T) {
 	if hostInfo.AIContext != "" {
 		t.Errorf("expected empty ai_context, got %q", hostInfo.AIContext)
 	}
+}
+
+func TestGatherContext_WithHostContext(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"value":[]}`)
+	}))
+	defer srv.Close()
+
+	cfg := Config{
+		CheckMKAPIURL:    srv.URL + "/",
+		CheckMKAPIUser:   "automation",
+		CheckMKAPISecret: "secret",
+	}
+	alert := shared.AlertPayload{
+		Fields: map[string]string{
+			"hostname":            "web01",
+			"host_address":        "10.0.0.1",
+			"service_description": "CPU",
+			"service_state":       "WARN",
+			"service_output":      "high",
+			"notification_type":   "PROBLEM",
+			"perf_data":           "",
+		},
+	}
+	hostInfo := &HostInfo{AIContext: "Debian 12, Nginx reverse proxy"}
+
+	actx := GatherContext(context.Background(), cfg, alert, hostInfo)
+
+	if len(actx.Sections) < 3 {
+		t.Fatalf("expected at least 3 sections, got %d", len(actx.Sections))
+	}
+	if actx.Sections[0].Name != "Host Context (operator-provided)" {
+		t.Errorf("first section should be host context, got %q", actx.Sections[0].Name)
+	}
+	if actx.Sections[0].Content != "Debian 12, Nginx reverse proxy" {
+		t.Errorf("unexpected content: %q", actx.Sections[0].Content)
+	}
+	if actx.Sections[1].Name != "Alert Details" {
+		t.Errorf("second section should be alert details, got %q", actx.Sections[1].Name)
+	}
+}
+
+func TestGatherContext_NilHostInfo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"value":[]}`)
+	}))
+	defer srv.Close()
+
+	cfg := Config{
+		CheckMKAPIURL:    srv.URL + "/",
+		CheckMKAPIUser:   "automation",
+		CheckMKAPISecret: "secret",
+	}
+	alert := shared.AlertPayload{
+		Fields: map[string]string{
+			"hostname":            "web01",
+			"host_address":        "10.0.0.1",
+			"service_description": "CPU",
+			"service_state":       "WARN",
+			"service_output":      "high",
+			"notification_type":   "PROBLEM",
+			"perf_data":           "",
+		},
+	}
+
+	actx := GatherContext(context.Background(), cfg, alert, nil)
+
+	if len(actx.Sections) != 2 {
+		t.Fatalf("expected 2 sections, got %d", len(actx.Sections))
+	}
+	if actx.Sections[0].Name != "Alert Details" {
+		t.Errorf("first section should be alert details, got %q", actx.Sections[0].Name)
+	}
+}
+
+func TestGatherContext_HostContextSanitized(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"value":[]}`)
+	}))
+	defer srv.Close()
+
+	cfg := Config{
+		CheckMKAPIURL:    srv.URL + "/",
+		CheckMKAPIUser:   "automation",
+		CheckMKAPISecret: "secret",
+	}
+	alert := shared.AlertPayload{
+		Fields: map[string]string{
+			"hostname":            "web01",
+			"host_address":        "10.0.0.1",
+			"service_description": "CPU",
+			"service_state":       "WARN",
+			"service_output":      "high",
+			"notification_type":   "PROBLEM",
+			"perf_data":           "",
+		},
+	}
+
+	t.Run("strips control chars", func(t *testing.T) {
+		hostInfo := &HostInfo{AIContext: "Debian\x00 12\x07"}
+		actx := GatherContext(context.Background(), cfg, alert, hostInfo)
+		if actx.Sections[0].Content != "Debian 12" {
+			t.Errorf("expected control chars stripped, got %q", actx.Sections[0].Content)
+		}
+	})
+
+	t.Run("trims whitespace", func(t *testing.T) {
+		hostInfo := &HostInfo{AIContext: "  Debian 12  "}
+		actx := GatherContext(context.Background(), cfg, alert, hostInfo)
+		if actx.Sections[0].Content != "Debian 12" {
+			t.Errorf("expected trimmed, got %q", actx.Sections[0].Content)
+		}
+	})
+
+	t.Run("truncates over 2048 bytes", func(t *testing.T) {
+		long := strings.Repeat("A", 2100)
+		hostInfo := &HostInfo{AIContext: long}
+		actx := GatherContext(context.Background(), cfg, alert, hostInfo)
+		content := actx.Sections[0].Content
+		if len(content) > 2048+len(" [truncated]") {
+			t.Errorf("expected truncation, got length %d", len(content))
+		}
+		if !strings.HasSuffix(content, " [truncated]") {
+			t.Errorf("expected truncation marker, got %q", content[len(content)-20:])
+		}
+	})
+
+	t.Run("empty after sanitize skips section", func(t *testing.T) {
+		hostInfo := &HostInfo{AIContext: "  \x00\x07  "}
+		actx := GatherContext(context.Background(), cfg, alert, hostInfo)
+		if actx.Sections[0].Name == "Host Context (operator-provided)" {
+			t.Error("expected no host context section for empty-after-sanitize input")
+		}
+	})
 }

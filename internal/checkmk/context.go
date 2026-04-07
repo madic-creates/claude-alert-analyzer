@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 )
@@ -46,6 +47,23 @@ type checkmkServiceExtensions struct {
 
 type checkmkServicesResponse struct {
 	Value []checkmkServiceEntry `json:"value"`
+}
+
+const maxAIContextBytes = 2048
+
+// sanitizeHostContext trims, strips control characters, and truncates.
+func sanitizeHostContext(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r == '\t' || !unicode.IsControl(r) {
+			b.WriteRune(r)
+		}
+	}
+	s = strings.TrimSpace(b.String())
+	if len(s) > maxAIContextBytes {
+		s = s[:maxAIContextBytes] + " [truncated]"
+	}
+	return s
 }
 
 func ValidateAndDescribeHost(ctx context.Context, cfg Config, hostname, hostAddress string) (*HostInfo, error) {
@@ -141,11 +159,20 @@ func getHostServices(ctx context.Context, cfg Config, hostname string) string {
 
 // GatherContext collects alert details and CheckMK host services.
 // SSH diagnostics are handled separately by RunAgenticDiagnostics.
-func GatherContext(ctx context.Context, cfg Config, alert shared.AlertPayload) shared.AnalysisContext {
+func GatherContext(ctx context.Context, cfg Config, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 	hostname := alert.Fields["hostname"]
 	hostAddress := alert.Fields["host_address"]
 
 	var sections []shared.ContextSection
+
+	if hostInfo != nil {
+		if cleaned := sanitizeHostContext(hostInfo.AIContext); cleaned != "" {
+			sections = append(sections, shared.ContextSection{
+				Name:    "Host Context (operator-provided)",
+				Content: cleaned,
+			})
+		}
+	}
 
 	sections = append(sections, shared.ContextSection{
 		Name: "Alert Details",
