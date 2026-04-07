@@ -99,17 +99,19 @@ func ValidateAndDescribeHost(ctx context.Context, cfg Config, hostname, hostAddr
 		return nil, fmt.Errorf("parse host response: %w", err)
 	}
 
-	knownAddress := hostResp.Extensions.Attributes.IPAddress
-	if knownAddress == "" {
-		return nil, fmt.Errorf("host %q has no IP address configured in CheckMK", hostname)
-	}
-	if knownAddress != hostAddress {
-		return nil, fmt.Errorf("host_address %q does not match CheckMK-known address %q for host %q", hostAddress, knownAddress, hostname)
+	info := &HostInfo{
+		AIContext: hostResp.Extensions.Attributes.AIContext,
 	}
 
-	return &HostInfo{
-		AIContext: hostResp.Extensions.Attributes.AIContext,
-	}, nil
+	knownAddress := hostResp.Extensions.Attributes.IPAddress
+	if knownAddress == "" {
+		return info, fmt.Errorf("host %q has no IP address configured in CheckMK", hostname)
+	}
+	if knownAddress != hostAddress {
+		return info, fmt.Errorf("host_address %q does not match CheckMK-known address %q for host %q", hostAddress, knownAddress, hostname)
+	}
+
+	return info, nil
 }
 
 func getHostServices(ctx context.Context, cfg Config, hostname string) string {
