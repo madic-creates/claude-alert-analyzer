@@ -148,6 +148,26 @@ For Kubernetes deployments, the script can be deployed as a ConfigMap volume mou
 
 The script sends host/service alert data as JSON to the webhook. Exit codes: `0` = success, `1` = 503/queue full (CheckMK will retry), `2` = error.
 
+### Host Context via Custom Attributes
+
+The checkmk-analyzer can inject operator-provided host notes into the analysis prompt, giving Claude host-specific context (OS, config paths, operational hints) before it starts investigating. This saves SSH rounds that would otherwise be spent discovering basics.
+
+**Setup in CheckMK:**
+
+1. Go to **Setup > Custom host attributes > Create new attribute**
+2. Name: `ai_context`, Tpoc: Custom attributes, Data type: Simple Text, Help text (example): Information beeing send to claude analyzer
+3. Mark "Show in host tables"
+3. Save
+
+**Example value:**
+```
+Debian 12, Nginx reverse proxy. Config: /etc/nginx/sites-enabled/. On disk-alerts first check /var/log/nginx.
+```
+
+When the attribute is set, it appears as a "Host Context (operator-provided)" section in the Claude prompt, before alert details and service list. Hosts without the attribute work exactly as before — no section is added.
+
+The content is sanitized (control characters stripped, trimmed, truncated at 2 KB).
+
 ### SSH Diagnostic Commands
 
 The checkmk-analyzer uses an **agentic approach**: Claude autonomously decides which commands to run on the alerted host via SSH, based on the alert context and previous command outputs. This replaces a static command list with a dynamic investigation loop (max 10 rounds).
