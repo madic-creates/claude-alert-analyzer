@@ -170,13 +170,20 @@ func RunToolLoop(
 		messages = append(messages, ToolMessage{Role: "user", Content: toolResults})
 	}
 
-	// Max rounds reached — send final request without tools to force a text response
+	// Max rounds reached — add explicit prompt and send with tools (required by API
+	// when conversation contains tool_use blocks) to force a text summary.
 	slog.Info("tool loop max rounds reached, requesting summary", "maxRounds", maxRounds)
+
+	messages = append(messages, ToolMessage{
+		Role:    "user",
+		Content: "You have reached the maximum number of diagnostic rounds. Do NOT call any more tools. Provide your final analysis now based on all information gathered so far.",
+	})
 
 	reqBody := ToolRequest{
 		Model:     cfg.ClaudeModel,
 		MaxTokens: 4096,
 		System:    systemPrompt,
+		Tools:     tools,
 		Messages:  messages,
 	}
 
@@ -197,12 +204,19 @@ func RunToolLoop(
 	totalInput += resp.Usage.InputTokens
 	totalOutput += resp.Usage.OutputTokens
 
+	analysis := extractText(resp.Content)
+
 	slog.Info("tool loop complete (forced summary)",
 		"totalRounds", maxRounds,
 		"totalInputTokens", totalInput,
-		"totalOutputTokens", totalOutput)
+		"totalOutputTokens", totalOutput,
+		"analysisLen", len(analysis))
 
-	return extractText(resp.Content), nil
+	if len(analysis) == 0 {
+		slog.Warn("forced summary produced empty analysis", "contentBlocks", len(resp.Content))
+	}
+
+	return analysis, nil
 }
 
 func extractText(blocks []ContentBlock) string {

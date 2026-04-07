@@ -96,11 +96,8 @@ func TestRunToolLoop_MaxRoundsForcesSummary(t *testing.T) {
 		call := callCount.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 
-		var reqBody ToolRequest
-		json.NewDecoder(r.Body).Decode(&reqBody)
-
-		// If no tools in request, Claude must produce text
-		if len(reqBody.Tools) == 0 {
+		// Call 3 = forced summary (after 2 tool rounds with maxRounds=2)
+		if call == 3 {
 			fmt.Fprint(w, `{
 				"content": [{"type": "text", "text": "Forced summary after max rounds."}],
 				"stop_reason": "end_turn",
@@ -109,7 +106,7 @@ func TestRunToolLoop_MaxRoundsForcesSummary(t *testing.T) {
 			return
 		}
 
-		// Always request a tool
+		// Rounds 1-2: always request a tool
 		fmt.Fprintf(w, `{
 			"content": [
 				{"type": "tool_use", "id": "toolu_%d", "name": "execute_command", "input": {"command": ["uptime"]}}
