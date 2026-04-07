@@ -26,6 +26,12 @@ type checkmkHostExtensions struct {
 type checkmkHostAttributes struct {
 	IPAddress       string `json:"ipaddress"`
 	IPAddressFamily string `json:"ip_address_family"`
+	AIContext       string `json:"ai_context"`
+}
+
+// HostInfo holds host metadata extracted from the CheckMK API.
+type HostInfo struct {
+	AIContext string
 }
 
 type checkmkServiceEntry struct {
@@ -42,47 +48,49 @@ type checkmkServicesResponse struct {
 	Value []checkmkServiceEntry `json:"value"`
 }
 
-func ValidateHost(ctx context.Context, cfg Config, hostname, hostAddress string) error {
+func ValidateAndDescribeHost(ctx context.Context, cfg Config, hostname, hostAddress string) (*HostInfo, error) {
 	url := fmt.Sprintf("%sobjects/host_config/%s", cfg.CheckMKAPIURL, hostname)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s %s", cfg.CheckMKAPIUser, cfg.CheckMKAPISecret))
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := checkmkHTTPClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("CheckMK API request: %w", err)
+		return nil, fmt.Errorf("CheckMK API request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("read response: %w", err)
+		return nil, fmt.Errorf("read response: %w", err)
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("host %q not found in CheckMK", hostname)
+		return nil, fmt.Errorf("host %q not found in CheckMK", hostname)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("CheckMK API returned %d for host %q", resp.StatusCode, hostname)
+		return nil, fmt.Errorf("CheckMK API returned %d for host %q", resp.StatusCode, hostname)
 	}
 
 	var hostResp checkmkHostResponse
 	if err := json.Unmarshal(body, &hostResp); err != nil {
-		return fmt.Errorf("parse host response: %w", err)
+		return nil, fmt.Errorf("parse host response: %w", err)
 	}
 
 	knownAddress := hostResp.Extensions.Attributes.IPAddress
 	if knownAddress == "" {
-		return fmt.Errorf("host %q has no IP address configured in CheckMK", hostname)
+		return nil, fmt.Errorf("host %q has no IP address configured in CheckMK", hostname)
 	}
 	if knownAddress != hostAddress {
-		return fmt.Errorf("host_address %q does not match CheckMK-known address %q for host %q", hostAddress, knownAddress, hostname)
+		return nil, fmt.Errorf("host_address %q does not match CheckMK-known address %q for host %q", hostAddress, knownAddress, hostname)
 	}
 
-	return nil
+	return &HostInfo{
+		AIContext: hostResp.Extensions.Attributes.AIContext,
+	}, nil
 }
 
 func getHostServices(ctx context.Context, cfg Config, hostname string) string {
