@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 )
@@ -263,6 +264,21 @@ func TestGatherContext_HostContextSanitized(t *testing.T) {
 		}
 		if !strings.HasSuffix(content, " [truncated]") {
 			t.Errorf("expected truncation marker, got %q", content[len(content)-20:])
+		}
+	})
+
+	t.Run("truncation preserves valid UTF-8", func(t *testing.T) {
+		// Place a 4-byte emoji right at the truncation boundary
+		emoji := "🚀" // 4 bytes
+		long := strings.Repeat("A", 2046) + emoji + strings.Repeat("B", 100)
+		hostInfo := &HostInfo{AIContext: long}
+		actx := GatherContext(context.Background(), cfg, alert, hostInfo)
+		content := actx.Sections[0].Content
+		if !utf8.ValidString(content) {
+			t.Fatal("truncation produced invalid UTF-8")
+		}
+		if !strings.HasSuffix(content, " [truncated]") {
+			t.Errorf("expected truncation marker")
 		}
 	})
 

@@ -61,7 +61,8 @@ func sanitizeHostContext(s string) string {
 	}
 	s = strings.TrimSpace(b.String())
 	if len(s) > maxAIContextBytes {
-		s = s[:maxAIContextBytes] + " [truncated]"
+		// Truncate at a valid UTF-8 boundary to avoid splitting multi-byte characters.
+		s = strings.ToValidUTF8(s[:maxAIContextBytes], "") + " [truncated]"
 	}
 	return s
 }
