@@ -21,7 +21,12 @@ type NtfyPublisher struct {
 
 func (n *NtfyPublisher) Name() string { return "ntfy" }
 
+// maxNtfyBodyBytes is the maximum message body size before ntfy converts it to
+// an attachment. We truncate to stay under this limit for inline display.
+const maxNtfyBodyBytes = 4096
+
 func (n *NtfyPublisher) Publish(ctx context.Context, title, priority, body string) error {
+	body = Truncate(body, maxNtfyBodyBytes)
 	ntfyURL := fmt.Sprintf("%s/%s", n.URL, n.Topic)
 	req, err := http.NewRequestWithContext(ctx, "POST", ntfyURL, strings.NewReader(body))
 	if err != nil {

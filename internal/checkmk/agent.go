@@ -31,7 +31,8 @@ Output your final analysis in markdown (headings, bold, lists, code blocks — n
 3. Remediation steps (concrete actions, no sudo)
 4. Correlations between services if applicable
 
-Reference actual values from command outputs. Keep response under 500 words.`
+Reference actual values from command outputs. Keep response under 500 words.
+Start directly with the analysis — no preamble, meta-commentary, or introductory sentences like "I have enough data" or "Let me analyze this".`
 
 var sshTool = shared.Tool{
 	Name:        "execute_command",

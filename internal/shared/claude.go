@@ -176,7 +176,7 @@ func RunToolLoop(
 
 	messages = append(messages, ToolMessage{
 		Role:    "user",
-		Content: "You have reached the maximum number of diagnostic rounds. Do NOT call any more tools. Provide your final analysis now based on all information gathered so far.",
+		Content: "You have reached the maximum number of diagnostic rounds. Do NOT call any more tools. Provide your final analysis now based on all information gathered so far. Start directly with the analysis — no preamble or meta-commentary.",
 	})
 
 	reqBody := ToolRequest{

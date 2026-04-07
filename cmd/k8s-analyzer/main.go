@@ -27,7 +27,8 @@ Analyze the provided alert with its cluster context and produce a concise root-c
 3. Suggest concrete remediation steps (kubectl commands, config changes)
 4. Note correlations with other active alerts
 
-Keep response under 500 words. Use markdown for formatting (headings, bold, lists, code blocks) but never use markdown tables. Use bullet lists instead of tables. Reference actual metric values and pod names.`
+Keep response under 500 words. Use markdown for formatting (headings, bold, lists, code blocks) but never use markdown tables. Use bullet lists instead of tables. Reference actual metric values and pod names.
+Start directly with the analysis — no preamble, meta-commentary, or introductory sentences like "I have enough data" or "Let me analyze this".`
 
 func envOrDefault(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
