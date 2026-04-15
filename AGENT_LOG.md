@@ -10,6 +10,7 @@ This file is maintained by the autonomous improvement agent. Read it at the star
 - **test: ntfy publisher** — Added `internal/shared/ntfy_test.go` with 9 tests covering `Publish` success, headers (Title/Priority/Authorization), no-token path, non-2xx error, body truncation, context cancellation, `Name()`, and `PublishAll` (all succeed, one fails, all fail, empty list).
 - **test: k8s context.go** — Added `internal/k8s/context_test.go` with 20 tests covering `GetKubeContext` (no namespace, empty namespace, pod status output, log allowlist enforcement, wildcard allowlist, warning events), `GetPrometheusMetrics` (all alert-name categories: crashloop/memory/cpu/disk/node, namespace sections, result data formatting, unreachable server), and `GatherContext` (four sections returned, non-empty content, Prometheus failure still yields kube context, cancelled context does not block).
 - **security: expand RedactSecrets patterns** — Added AWS Access Key ID pattern (`AKIA[0-9A-Z]{16}`) and database connection string pattern covering postgres, mysql, mongodb, redis, amqp URLs with embedded credentials. Added 6 regression tests in `redact_test.go`.
+- **feat: ntfy retry with backoff** — `Publish` in `ntfy.go` now retries up to 3 times (2s then 5s delay) on network errors and 5xx responses. 4xx errors are not retried. Context cancellation aborts retries early. Added 4 regression tests in `ntfy_test.go`.
 
 ## Test Coverage Status
 
@@ -23,6 +24,5 @@ This file is maintained by the autonomous improvement agent. Read it at the star
 
 ## Potential Next Improvements
 
-- **Reliability: ntfy retry** — `Publish` in `ntfy.go` has no retry logic; a transient ntfy outage silently drops the analysis result.
 - **Reliability: Claude API timeout** — The HTTP client in `claude.go` uses no explicit timeout beyond what the caller's context provides.
 - **Observability** — No structured logging or metrics anywhere; all log output is `log.Printf`.

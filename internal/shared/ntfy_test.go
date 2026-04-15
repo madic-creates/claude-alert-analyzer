@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNtfyPublisher_Publish_Success(t *testing.T) {
@@ -175,5 +176,111 @@ func TestPublishAll_Empty(t *testing.T) {
 	err := PublishAll(context.Background(), nil, "title", "default", "body")
 	if err != nil {
 		t.Fatalf("unexpected error for empty publisher list: %v", err)
+	}
+}
+
+// TestNtfyPublisher_Publish_RetryOn5xx verifies that a 5xx response is retried
+// and ultimately succeeds on a later attempt.
+func TestNtfyPublisher_Publish_RetryOn5xx(t *testing.T) {
+	// Speed up test by using instant delays.
+	orig := ntfyRetryDelays
+	ntfyRetryDelays = []time.Duration{0, 0}
+	defer func() { ntfyRetryDelays = orig }()
+
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable) // 503
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	p := &NtfyPublisher{URL: srv.URL, Topic: "alerts"}
+	err := p.Publish(context.Background(), "t", "default", "body")
+	if err != nil {
+		t.Fatalf("expected success after retries, got: %v", err)
+	}
+	if callCount != 3 {
+		t.Errorf("expected 3 attempts, got %d", callCount)
+	}
+}
+
+// TestNtfyPublisher_Publish_ExhaustsRetries verifies that after all retries are
+// exhausted the last error is returned.
+func TestNtfyPublisher_Publish_ExhaustsRetries(t *testing.T) {
+	orig := ntfyRetryDelays
+	ntfyRetryDelays = []time.Duration{0, 0}
+	defer func() { ntfyRetryDelays = orig }()
+
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(http.StatusInternalServerError) // 500 every time
+	}))
+	defer srv.Close()
+
+	p := &NtfyPublisher{URL: srv.URL, Topic: "alerts"}
+	err := p.Publish(context.Background(), "t", "default", "body")
+	if err == nil {
+		t.Fatal("expected error after all retries exhausted")
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("error should mention status code, got: %v", err)
+	}
+	// 1 initial attempt + 2 retries = 3 total.
+	if callCount != 3 {
+		t.Errorf("expected 3 total attempts, got %d", callCount)
+	}
+}
+
+// TestNtfyPublisher_Publish_NoRetryOn4xx verifies that 4xx errors are not retried.
+func TestNtfyPublisher_Publish_NoRetryOn4xx(t *testing.T) {
+	orig := ntfyRetryDelays
+	ntfyRetryDelays = []time.Duration{0, 0}
+	defer func() { ntfyRetryDelays = orig }()
+
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(http.StatusUnauthorized) // 401
+	}))
+	defer srv.Close()
+
+	p := &NtfyPublisher{URL: srv.URL, Topic: "alerts"}
+	err := p.Publish(context.Background(), "t", "default", "body")
+	if err == nil {
+		t.Fatal("expected error for 401 response")
+	}
+	if callCount != 1 {
+		t.Errorf("expected exactly 1 attempt (no retry on 4xx), got %d", callCount)
+	}
+}
+
+// TestNtfyPublisher_Publish_RetryContextCancelled verifies that a cancelled
+// context aborts retries before the next delay completes.
+func TestNtfyPublisher_Publish_RetryContextCancelled(t *testing.T) {
+	orig := ntfyRetryDelays
+	ntfyRetryDelays = []time.Duration{5 * time.Second, 5 * time.Second} // long delays
+	defer func() { ntfyRetryDelays = orig }()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel after the first failed attempt triggers a retry delay.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	p := &NtfyPublisher{URL: srv.URL, Topic: "alerts"}
+	err := p.Publish(ctx, "t", "default", "body")
+	if err == nil {
+		t.Fatal("expected error when context cancelled during retry")
 	}
 }
