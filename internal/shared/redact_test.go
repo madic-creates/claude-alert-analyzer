@@ -3,6 +3,7 @@ package shared
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestRedactSecrets_Password(t *testing.T) {
@@ -74,5 +75,32 @@ func TestTruncateLines_Long(t *testing.T) {
 	}
 	if strings.Contains(result, "line3") {
 		t.Errorf("should not contain line3: %s", result)
+	}
+}
+
+func TestTruncate_PreservesValidUTF8(t *testing.T) {
+	// Place a 4-byte emoji right at the truncation boundary so a naive byte
+	// slice would split the sequence and produce invalid UTF-8.
+	emoji := "🔥" // 4 bytes: 0xF0 0x9F 0x94 0xA5
+	// Build a string where the emoji starts at byte 98, so a cut at 100 bytes
+	// lands inside the emoji.
+	input := strings.Repeat("a", 98) + emoji + strings.Repeat("b", 50)
+	result := Truncate(input, 100)
+	if !utf8.ValidString(result) {
+		t.Errorf("Truncate produced invalid UTF-8: %q", result)
+	}
+	if !strings.Contains(result, "[truncated]") {
+		t.Errorf("missing truncation marker: %s", result)
+	}
+}
+
+func TestTruncate_ExactBoundary(t *testing.T) {
+	// Truncating exactly at a multi-byte boundary should keep the character.
+	emoji := "🚀" // 4 bytes
+	input := strings.Repeat("x", 96) + emoji // 100 bytes total
+	result := Truncate(input, 100)
+	// No truncation needed — string fits exactly.
+	if result != input {
+		t.Errorf("expected no truncation for exact-length string, got len=%d", len(result))
 	}
 }

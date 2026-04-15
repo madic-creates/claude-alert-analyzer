@@ -1,6 +1,9 @@
 package shared
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 var sensitivePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(password|passwd|secret|token|key|authorization|bearer)\s*[=:]\s*\S+`),
@@ -22,7 +25,9 @@ func Truncate(s string, maxBytes int) string {
 	if len(s) <= maxBytes {
 		return s
 	}
-	return s[:maxBytes] + "\n... [truncated]"
+	// Trim to a valid UTF-8 boundary to avoid splitting multi-byte characters.
+	trimmed := strings.ToValidUTF8(s[:maxBytes], "")
+	return trimmed + "\n... [truncated]"
 }
 
 func TruncateLines(s string, maxLines int) string {
