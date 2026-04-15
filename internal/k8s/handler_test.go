@@ -1,0 +1,403 @@
+package k8s
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
+)
+
+func makeConfig() Config {
+	return Config{
+		WebhookSecret:   "test-secret",
+		CooldownSeconds: 5,
+		SkipResolved:    true,
+	}
+}
+
+func makeWebhook(alerts []Alert) AlertmanagerWebhook {
+	return AlertmanagerWebhook{
+		Version: "4",
+		Alerts:  alerts,
+	}
+}
+
+func makeAlert(fingerprint, alertname, status string) Alert {
+	return Alert{
+		Fingerprint: fingerprint,
+		Status:      status,
+		Labels:      map[string]string{"alertname": alertname, "severity": "warning"},
+		Annotations: map[string]string{"summary": "test alert"},
+		StartsAt:    time.Now(),
+	}
+}
+
+func postWebhook(t *testing.T, handler http.HandlerFunc, authToken string, payload any) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	req := httptest.NewRequest("POST", "/webhook", bytes.NewReader(body))
+	if authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+authToken)
+	}
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+	return rr
+}
+
+func TestHandleWebhook_UnauthorizedMissingToken(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	})
+
+	req := httptest.NewRequest("POST", "/webhook", bytes.NewReader([]byte(`{}`)))
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", rr.Code)
+	}
+	if enqueued.Load() != 0 {
+		t.Error("no alerts should be enqueued for unauthorized request")
+	}
+}
+
+func TestHandleWebhook_UnauthorizedWrongToken(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true })
+
+	rr := postWebhook(t, handler, "wrong-secret", makeWebhook(nil))
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", rr.Code)
+	}
+}
+
+func TestHandleWebhook_InvalidJSON(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true })
+
+	req := httptest.NewRequest("POST", "/webhook", bytes.NewReader([]byte(`not json`)))
+	req.Header.Set("Authorization", "Bearer test-secret")
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestHandleWebhook_EmptyAlerts(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	})
+
+	rr := postWebhook(t, handler, "test-secret", makeWebhook([]Alert{}))
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+	if enqueued.Load() != 0 {
+		t.Error("expected no enqueued alerts")
+	}
+}
+
+func TestHandleWebhook_SkipsResolvedAlerts(t *testing.T) {
+	cfg := makeConfig()
+	cfg.SkipResolved = true
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	})
+
+	alerts := []Alert{
+		makeAlert("fp1", "TestAlert", "resolved"),
+	}
+	rr := postWebhook(t, handler, "test-secret", makeWebhook(alerts))
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+	if enqueued.Load() != 0 {
+		t.Errorf("expected 0 enqueued, got %d", enqueued.Load())
+	}
+}
+
+func TestHandleWebhook_EnqueuesFiringAlert(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	var receivedAlert shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		receivedAlert = ap
+		return true
+	})
+
+	alerts := []Alert{
+		makeAlert("fp-firing", "TestFiring", "firing"),
+	}
+	rr := postWebhook(t, handler, "test-secret", makeWebhook(alerts))
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+	if enqueued.Load() != 1 {
+		t.Errorf("expected 1 enqueued, got %d", enqueued.Load())
+	}
+	if receivedAlert.Fingerprint != "fp-firing" {
+		t.Errorf("unexpected fingerprint: %s", receivedAlert.Fingerprint)
+	}
+	if receivedAlert.Source != "k8s" {
+		t.Errorf("expected source k8s, got %s", receivedAlert.Source)
+	}
+	if receivedAlert.Fields["label:alertname"] != "TestFiring" {
+		t.Errorf("expected label:alertname=TestFiring, got %s", receivedAlert.Fields["label:alertname"])
+	}
+	if receivedAlert.Fields["annotation:summary"] != "test alert" {
+		t.Errorf("expected annotation:summary, got %s", receivedAlert.Fields["annotation:summary"])
+	}
+	if receivedAlert.Fields["status"] != "firing" {
+		t.Errorf("expected status=firing, got %s", receivedAlert.Fields["status"])
+	}
+}
+
+func TestHandleWebhook_CooldownDeduplicates(t *testing.T) {
+	cfg := makeConfig()
+	cfg.CooldownSeconds = 60
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	})
+
+	alerts := []Alert{makeAlert("fp-dedup", "TestDedup", "firing")}
+
+	// First request: should enqueue
+	postWebhook(t, handler, "test-secret", makeWebhook(alerts))
+	if enqueued.Load() != 1 {
+		t.Fatalf("expected 1 after first request, got %d", enqueued.Load())
+	}
+
+	// Second request with same fingerprint: should be blocked by cooldown
+	postWebhook(t, handler, "test-secret", makeWebhook(alerts))
+	if enqueued.Load() != 1 {
+		t.Errorf("expected still 1 after second request (cooldown), got %d", enqueued.Load())
+	}
+}
+
+func TestHandleWebhook_QueueFull_Returns503(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		return false // queue always full
+	})
+
+	alerts := []Alert{makeAlert("fp-full", "TestFull", "firing")}
+	rr := postWebhook(t, handler, "test-secret", makeWebhook(alerts))
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rr.Code)
+	}
+}
+
+func TestHandleWebhook_QueueFull_ClearsCooldown(t *testing.T) {
+	cfg := makeConfig()
+	cfg.CooldownSeconds = 60
+	cd := shared.NewCooldownManager()
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		return false // queue always full
+	})
+
+	alerts := []Alert{makeAlert("fp-clear", "TestClear", "firing")}
+	postWebhook(t, handler, "test-secret", makeWebhook(alerts))
+
+	// After queue-full, cooldown should be cleared so next request can retry
+	var enqueued atomic.Int32
+	handler2 := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	})
+	postWebhook(t, handler2, "test-secret", makeWebhook(alerts))
+	if enqueued.Load() != 1 {
+		t.Errorf("expected alert re-enqueued after cooldown cleared, got %d", enqueued.Load())
+	}
+}
+
+func TestHandleWebhook_MultipleAlerts_PartialEnqueue(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		// Accept fp1 only
+		if ap.Fingerprint == "fp-multi-1" {
+			enqueued.Add(1)
+			return true
+		}
+		return false // queue full for fp2
+	})
+
+	alerts := []Alert{
+		makeAlert("fp-multi-1", "Alert1", "firing"),
+		makeAlert("fp-multi-2", "Alert2", "firing"),
+	}
+	rr := postWebhook(t, handler, "test-secret", makeWebhook(alerts))
+	// Any dropped alert should cause 503
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 for partial drop, got %d", rr.Code)
+	}
+	if enqueued.Load() != 1 {
+		t.Errorf("expected 1 enqueued, got %d", enqueued.Load())
+	}
+}
+
+func TestHandleWebhook_ResolvedNotSkipped_WhenDisabled(t *testing.T) {
+	cfg := makeConfig()
+	cfg.SkipResolved = false
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	})
+
+	alerts := []Alert{makeAlert("fp-res", "TestResolved", "resolved")}
+	postWebhook(t, handler, "test-secret", makeWebhook(alerts))
+	if enqueued.Load() != 1 {
+		t.Errorf("expected resolved alert enqueued when SkipResolved=false, got %d", enqueued.Load())
+	}
+}
+
+func TestHandleWebhook_AlertFieldsPopulated(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	var received shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		received = ap
+		return true
+	})
+
+	alert := Alert{
+		Fingerprint: "fp-fields",
+		Status:      "firing",
+		Labels:      map[string]string{"alertname": "HighCPU", "severity": "critical", "namespace": "production"},
+		Annotations: map[string]string{"description": "CPU is high", "runbook": "http://wiki/runbook"},
+		StartsAt:    time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC),
+	}
+	postWebhook(t, handler, "test-secret", makeWebhook([]Alert{alert}))
+
+	if received.Title != "HighCPU" {
+		t.Errorf("expected title HighCPU, got %q", received.Title)
+	}
+	if received.Severity != "critical" {
+		t.Errorf("expected severity critical, got %q", received.Severity)
+	}
+	if received.Fields["label:namespace"] != "production" {
+		t.Errorf("expected namespace label, got %q", received.Fields["label:namespace"])
+	}
+	if received.Fields["annotation:runbook"] != "http://wiki/runbook" {
+		t.Errorf("expected runbook annotation, got %q", received.Fields["annotation:runbook"])
+	}
+	startsAt := received.Fields["startsAt"]
+	if startsAt == "" {
+		t.Error("expected startsAt field")
+	}
+}
+
+func TestIsNamespaceAllowed(t *testing.T) {
+	cases := []struct {
+		ns      string
+		allowed []string
+		want    bool
+	}{
+		{"production", []string{"production", "staging"}, true},
+		{"production", []string{"staging"}, false},
+		{"anything", []string{"*"}, true},
+		{"anything", []string{}, false},
+		{"", []string{"production"}, false},
+	}
+	for _, tc := range cases {
+		got := isNamespaceAllowed(tc.ns, tc.allowed)
+		if got != tc.want {
+			t.Errorf("isNamespaceAllowed(%q, %v) = %v, want %v", tc.ns, tc.allowed, got, tc.want)
+		}
+	}
+}
+
+func TestPromqlQuery_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/query" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `{
+			"status": "success",
+			"data": {
+				"resultType": "vector",
+				"result": [
+					{"metric": {"job": "node"}, "value": [1700000000, "0.42"]}
+				]
+			}
+		}`)
+	}))
+	defer srv.Close()
+
+	result := promqlQuery(context.Background(), srv.URL, `up`)
+	if result == "" {
+		t.Error("expected non-empty result")
+	}
+	if result == "(no data)" || result == "(failed to parse response)" {
+		t.Errorf("unexpected result: %s", result)
+	}
+}
+
+func TestPromqlQuery_NoData(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
+	}))
+	defer srv.Close()
+
+	result := promqlQuery(context.Background(), srv.URL, `up`)
+	if result != "(no data)" {
+		t.Errorf("expected (no data), got %q", result)
+	}
+}
+
+func TestPromqlQuery_ServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, "error")
+	}))
+	defer srv.Close()
+
+	// The function reads the body regardless of status code and tries to parse JSON.
+	// An unparseable body results in a parse error message.
+	result := promqlQuery(context.Background(), srv.URL, `up`)
+	if result == "" {
+		t.Error("expected non-empty error result")
+	}
+}
+
+func TestPromqlQuery_Unreachable(t *testing.T) {
+	result := promqlQuery(context.Background(), "http://127.0.0.1:1", `up`)
+	if result == "" {
+		t.Error("expected non-empty error result for unreachable server")
+	}
+}
