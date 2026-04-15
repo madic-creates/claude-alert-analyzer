@@ -6,9 +6,237 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
+
+// ---- AnalyzeWithClaude tests ----
+
+func TestAnalyzeWithClaude_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"content": [{"type": "text", "text": "Root cause: OOMKilled pod."}],
+			"usage": {"input_tokens": 100, "output_tokens": 20}
+		}`)
+	}))
+	defer srv.Close()
+
+	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "claude-3"}
+	result, err := AnalyzeWithClaude(context.Background(), cfg, "sys prompt", "user prompt")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "Root cause: OOMKilled pod." {
+		t.Errorf("unexpected result: %q", result)
+	}
+}
+
+func TestAnalyzeWithClaude_MultipleTextBlocks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"content": [
+				{"type": "text", "text": "Part one."},
+				{"type": "text", "text": "Part two."}
+			],
+			"usage": {"input_tokens": 50, "output_tokens": 10}
+		}`)
+	}))
+	defer srv.Close()
+
+	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "claude-3"}
+	result, err := AnalyzeWithClaude(context.Background(), cfg, "sys", "user")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "Part one.\nPart two." {
+		t.Errorf("unexpected result: %q", result)
+	}
+}
+
+func TestAnalyzeWithClaude_EmptyContent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"content": [],
+			"usage": {"input_tokens": 10, "output_tokens": 0}
+		}`)
+	}))
+	defer srv.Close()
+
+	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "claude-3"}
+	result, err := AnalyzeWithClaude(context.Background(), cfg, "sys", "user")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "" {
+		t.Errorf("expected empty result, got %q", result)
+	}
+}
+
+func TestAnalyzeWithClaude_NonTextBlocksIgnored(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// A tool_use block mixed with text; only text should be returned
+		fmt.Fprint(w, `{
+			"content": [
+				{"type": "tool_use", "id": "tu_1", "name": "some_tool", "input": {}},
+				{"type": "text", "text": "Analysis result."}
+			],
+			"usage": {"input_tokens": 20, "output_tokens": 5}
+		}`)
+	}))
+	defer srv.Close()
+
+	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "claude-3"}
+	result, err := AnalyzeWithClaude(context.Background(), cfg, "sys", "user")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "Analysis result." {
+		t.Errorf("unexpected result: %q", result)
+	}
+}
+
+func TestAnalyzeWithClaude_APIErrorInBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"error": {"type": "invalid_request_error", "message": "model not found"},
+			"content": []
+		}`)
+	}))
+	defer srv.Close()
+
+	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "bad-model"}
+	_, err := AnalyzeWithClaude(context.Background(), cfg, "sys", "user")
+	if err == nil {
+		t.Fatal("expected error for API error body")
+	}
+	if !strings.Contains(err.Error(), "invalid_request_error") {
+		t.Errorf("error should mention error type, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "model not found") {
+		t.Errorf("error should mention error message, got: %v", err)
+	}
+}
+
+func TestAnalyzeWithClaude_HTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprint(w, "rate limited")
+	}))
+	defer srv.Close()
+
+	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "claude-3"}
+	_, err := AnalyzeWithClaude(context.Background(), cfg, "sys", "user")
+	if err == nil {
+		t.Fatal("expected error for non-200 response")
+	}
+	if !strings.Contains(err.Error(), "429") {
+		t.Errorf("error should contain status code, got: %v", err)
+	}
+}
+
+func TestAnalyzeWithClaude_AnthropicAuthHeader(t *testing.T) {
+	var capturedAPIKey, capturedVersion, capturedAuthHeader string
+	srvAnthropic := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAPIKey = r.Header.Get("x-api-key")
+		capturedVersion = r.Header.Get("anthropic-version")
+		capturedAuthHeader = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"content": [{"type": "text", "text": "ok"}], "usage": {}}`)
+	}))
+	defer srvAnthropic.Close()
+
+	// Inject "anthropic.com" into the URL string so the branch triggers,
+	// while still pointing to our test server by using a custom transport.
+	origClient := claudeHTTPClient
+	claudeHTTPClient = &http.Client{
+		Transport: rewriteHostTransport{target: srvAnthropic.URL},
+	}
+	defer func() { claudeHTTPClient = origClient }()
+
+	cfg := BaseConfig{
+		APIBaseURL:  "https://api.anthropic.com/v1/messages",
+		APIKey:      "anthropic-secret",
+		ClaudeModel: "claude-3",
+	}
+	_, err := AnalyzeWithClaude(context.Background(), cfg, "sys", "user")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capturedAPIKey != "anthropic-secret" {
+		t.Errorf("expected x-api-key header, got %q", capturedAPIKey)
+	}
+	if capturedVersion != anthropicVersion {
+		t.Errorf("expected anthropic-version header %q, got %q", anthropicVersion, capturedVersion)
+	}
+	if capturedAuthHeader != "" {
+		t.Errorf("Authorization header should not be set for Anthropic, got %q", capturedAuthHeader)
+	}
+}
+
+func TestAnalyzeWithClaude_OpenRouterAuthHeader(t *testing.T) {
+	var capturedAuth, capturedAPIKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuth = r.Header.Get("Authorization")
+		capturedAPIKey = r.Header.Get("x-api-key")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"content": [{"type": "text", "text": "ok"}], "usage": {}}`)
+	}))
+	defer srv.Close()
+
+	// srv.URL does not contain "anthropic.com" so OpenRouter branch fires.
+	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "openrouter-key", ClaudeModel: "claude-3"}
+	_, err := AnalyzeWithClaude(context.Background(), cfg, "sys", "user")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capturedAuth != "Bearer openrouter-key" {
+		t.Errorf("expected Bearer auth, got %q", capturedAuth)
+	}
+	if capturedAPIKey != "" {
+		t.Errorf("x-api-key should not be set for OpenRouter, got %q", capturedAPIKey)
+	}
+}
+
+func TestAnalyzeWithClaude_ContextCancellation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Never responds — context should cancel the request.
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "claude-3"}
+	_, err := AnalyzeWithClaude(ctx, cfg, "sys", "user")
+	if err == nil {
+		t.Fatal("expected error for cancelled context")
+	}
+}
+
+// rewriteHostTransport redirects all requests to a fixed target URL, allowing
+// test servers to intercept requests nominally sent to external URLs
+// (e.g., api.anthropic.com).
+type rewriteHostTransport struct {
+	target string // e.g. "http://127.0.0.1:PORT"
+}
+
+func (t rewriteHostTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	targetURL := t.target + req.URL.Path
+	if req.URL.RawQuery != "" {
+		targetURL += "?" + req.URL.RawQuery
+	}
+	newReq := req.Clone(req.Context())
+	newReq.URL, _ = req.URL.Parse(targetURL)
+	newReq.Host = newReq.URL.Host
+	return http.DefaultTransport.RoundTrip(newReq)
+}
 
 func TestRunToolLoop_EndTurnImmediately(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

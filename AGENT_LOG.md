@@ -12,12 +12,13 @@ This file is maintained by the autonomous improvement agent. Read it at the star
 - **security: expand RedactSecrets patterns** — Added AWS Access Key ID pattern (`AKIA[0-9A-Z]{16}`) and database connection string pattern covering postgres, mysql, mongodb, redis, amqp URLs with embedded credentials. Added 6 regression tests in `redact_test.go`.
 - **feat: ntfy retry with backoff** — `Publish` in `ntfy.go` now retries up to 3 times (2s then 5s delay) on network errors and 5xx responses. 4xx errors are not retried. Context cancellation aborts retries early. Added 4 regression tests in `ntfy_test.go`.
 - **fix: two pre-existing test failures** — (1) DB connection-string pattern in `redact.go` moved before the email regex; the email pattern was matching `password@host` before the DB URL pattern ran, leaving the username unredacted. (2) `GetKubeContext` in `context.go` now returns `"(no pods)"` for an empty pod list instead of `""`, consistent with how events returns `"(no warning events)"`; updated `TestGetKubeContext_EmptyNamespace_NoEvents` to match.
+- **test: AnalyzeWithClaude** — Added 8 tests in `claude_test.go` covering: success path, multiple text blocks joined with newline, empty content response, non-text blocks ignored, API error in body, HTTP non-2xx error, Anthropic vs OpenRouter auth header selection (via custom `rewriteHostTransport`), and context cancellation.
 
 ## Test Coverage Status
 
 | Package | Source Files | Test Files | Coverage Notes |
 |---|---|---|---|
-| `internal/shared/` | claude.go, cooldown.go, ntfy.go, redact.go, types.go | claude_test.go, cooldown_test.go, ntfy_test.go, redact_test.go, types_test.go | All files covered |
+| `internal/shared/` | claude.go, cooldown.go, ntfy.go, redact.go, types.go | claude_test.go, cooldown_test.go, ntfy_test.go, redact_test.go, types_test.go | All files covered; `AnalyzeWithClaude` now fully tested (8 tests) |
 | `internal/k8s/` | handler.go, context.go, types.go | handler_test.go, context_test.go | `context.go` fully covered: GatherContext, GetKubeContext, GetPrometheusMetrics all tested directly with fake k8s client and httptest |
 | `internal/checkmk/` | agent.go, context.go, handler.go, ssh.go, types.go | agent_test.go, context_test.go, handler_test.go, ssh_test.go | Good coverage |
 | `cmd/k8s-analyzer/` | main.go | none | Entrypoint, hard to unit test |
@@ -25,6 +26,5 @@ This file is maintained by the autonomous improvement agent. Read it at the star
 
 ## Potential Next Improvements
 
-- **test: AnalyzeWithClaude** — `claude_test.go` covers `RunToolLoop` but has no tests for `AnalyzeWithClaude`; success path, error path, and empty-content response are untested.
 - **Reliability: Claude API timeout** — The HTTP client in `claude.go` uses no explicit timeout beyond what the caller's context provides. A dedicated timeout (e.g. 120s) on the HTTP client would guard against hung connections.
 - **Observability** — No structured logging or metrics anywhere; all log output is `log.Printf`. Switching to `log/slog` would enable JSON log output and log-level filtering without new dependencies.
