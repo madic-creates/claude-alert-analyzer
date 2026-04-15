@@ -33,6 +33,57 @@ func TestRedactSecrets_PrivateKey(t *testing.T) {
 	}
 }
 
+func TestRedactSecrets_AWSAccessKeyID(t *testing.T) {
+	input := "aws_access_key_id = AKIAIOSFODNN7EXAMPLE"
+	result := RedactSecrets(input)
+	if strings.Contains(result, "AKIAIOSFODNN7EXAMPLE") {
+		t.Errorf("AWS access key ID not redacted: %s", result)
+	}
+}
+
+func TestRedactSecrets_AWSKeyInText(t *testing.T) {
+	input := "Using key AKIAI44QH8DHBEXAMPLE for upload"
+	result := RedactSecrets(input)
+	if strings.Contains(result, "AKIAI44QH8DHBEXAMPLE") {
+		t.Errorf("AWS access key not redacted in free text: %s", result)
+	}
+}
+
+func TestRedactSecrets_PostgresURL(t *testing.T) {
+	input := "DATABASE_URL=postgres://myuser:s3cr3t@db.example.com:5432/mydb"
+	result := RedactSecrets(input)
+	if strings.Contains(result, "s3cr3t") {
+		t.Errorf("postgres credentials not redacted: %s", result)
+	}
+	if strings.Contains(result, "myuser") {
+		t.Errorf("postgres username not redacted: %s", result)
+	}
+}
+
+func TestRedactSecrets_MySQLURL(t *testing.T) {
+	input := "connect to mysql://root:hunter2@localhost/app"
+	result := RedactSecrets(input)
+	if strings.Contains(result, "hunter2") {
+		t.Errorf("mysql credentials not redacted: %s", result)
+	}
+}
+
+func TestRedactSecrets_RedisURL(t *testing.T) {
+	input := "cache: redis://:supersecret@redis.internal:6379/0"
+	result := RedactSecrets(input)
+	if strings.Contains(result, "supersecret") {
+		t.Errorf("redis credentials not redacted: %s", result)
+	}
+}
+
+func TestRedactSecrets_MongoDBURL(t *testing.T) {
+	input := "uri: mongodb+srv://admin:p%40ss@cluster0.example.net/mydb"
+	result := RedactSecrets(input)
+	if strings.Contains(result, "p%40ss") {
+		t.Errorf("mongodb credentials not redacted: %s", result)
+	}
+}
+
 func TestRedactSecrets_NoFalsePositive(t *testing.T) {
 	input := "CPU load is 4.5 at 12:00"
 	result := RedactSecrets(input)
