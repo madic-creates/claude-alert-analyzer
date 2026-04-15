@@ -42,6 +42,11 @@ func dialSSH(cfg Config, hostAddress string) (*ssh.Client, error) {
 	return client, nil
 }
 
+type sshResult struct {
+	output string
+	err    error
+}
+
 func runSSHCommand(client *ssh.Client, argv []string, timeout time.Duration) (string, error) {
 	session, err := client.NewSession()
 	if err != nil {
@@ -51,18 +56,18 @@ func runSSHCommand(client *ssh.Client, argv []string, timeout time.Duration) (st
 
 	cmdStr := strings.Join(argv, " ")
 
-	done := make(chan struct{})
-	var output []byte
-	var cmdErr error
+	// Buffered channel so the goroutine can always send without blocking,
+	// even when the timeout case is selected and the caller has returned.
+	done := make(chan sshResult, 1)
 
 	go func() {
-		output, cmdErr = session.CombinedOutput(cmdStr)
-		close(done)
+		out, cmdErr := session.CombinedOutput(cmdStr)
+		done <- sshResult{string(out), cmdErr}
 	}()
 
 	select {
-	case <-done:
-		return string(output), cmdErr
+	case r := <-done:
+		return r.output, r.err
 	case <-time.After(timeout):
 		session.Close()
 		return "", fmt.Errorf("timeout after %v", timeout)
