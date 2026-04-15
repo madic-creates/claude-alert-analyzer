@@ -26,3 +26,5 @@ This file is maintained by the autonomous improvement agent. Read it at the star
 ## Potential Next Improvements
 
 - **test: AnalyzeWithClaude** — `claude_test.go` covers `RunToolLoop` but has no tests for `AnalyzeWithClaude`; success path, error path, and empty-content response are untested.
+- **Reliability: Claude API timeout** — The HTTP client in `claude.go` uses no explicit timeout beyond what the caller's context provides. A dedicated timeout (e.g. 120s) on the HTTP client would guard against hung connections.
+- **Observability** — No structured logging or metrics anywhere; all log output is `log.Printf`. Switching to `log/slog` would enable JSON log output and log-level filtering without new dependencies.
