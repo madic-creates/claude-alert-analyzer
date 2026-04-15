@@ -10,9 +10,12 @@ var sensitivePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(sk-ant-|sk-|ghp_|gho_|github_pat_|xox[bpas]-)\S+`),
 	regexp.MustCompile(`(?i)-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----`),
 	regexp.MustCompile(`(?i)(basic|bearer)\s+[A-Za-z0-9+/=]{20,}`),
-	regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`),
-	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
+	// DB connection strings must come before the generic email pattern, because
+	// the user:pass@host portion of a URL would otherwise be partially consumed
+	// by the email regex (matching pass@host), leaving the username unredacted.
 	regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://[^:\s/]+:[^@\s]+@\S+`),
+	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
+	regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`),
 }
 
 func RedactSecrets(input string) string {

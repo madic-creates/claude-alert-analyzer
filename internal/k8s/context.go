@@ -167,7 +167,11 @@ func GetKubeContext(ctx context.Context, clientset kubernetes.Interface, alert A
 			lines = append(lines, fmt.Sprintf("%s %s %d/%d restarts=%d",
 				p.Name, phase, ready, total, restarts))
 		}
-		pods = strings.Join(lines, "\n")
+		if len(lines) == 0 {
+			pods = "(no pods)"
+		} else {
+			pods = strings.Join(lines, "\n")
+		}
 	}
 
 	// Logs -- only for allowlisted namespaces, redacted, truncated

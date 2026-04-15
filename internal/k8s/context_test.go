@@ -69,8 +69,8 @@ func TestGetKubeContext_EmptyNamespace_NoEvents(t *testing.T) {
 	if events != "(no warning events)" {
 		t.Errorf("expected (no warning events), got %q", events)
 	}
-	if pods != "" {
-		t.Errorf("expected empty pods (no pods exist), got %q", pods)
+	if pods != "(no pods)" {
+		t.Errorf("expected (no pods), got %q", pods)
 	}
 	_ = logs // logs depend on failing pods; no pods means no failing pods
 }

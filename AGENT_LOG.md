@@ -11,6 +11,7 @@ This file is maintained by the autonomous improvement agent. Read it at the star
 - **test: k8s context.go** — Added `internal/k8s/context_test.go` with 20 tests covering `GetKubeContext` (no namespace, empty namespace, pod status output, log allowlist enforcement, wildcard allowlist, warning events), `GetPrometheusMetrics` (all alert-name categories: crashloop/memory/cpu/disk/node, namespace sections, result data formatting, unreachable server), and `GatherContext` (four sections returned, non-empty content, Prometheus failure still yields kube context, cancelled context does not block).
 - **security: expand RedactSecrets patterns** — Added AWS Access Key ID pattern (`AKIA[0-9A-Z]{16}`) and database connection string pattern covering postgres, mysql, mongodb, redis, amqp URLs with embedded credentials. Added 6 regression tests in `redact_test.go`.
 - **feat: ntfy retry with backoff** — `Publish` in `ntfy.go` now retries up to 3 times (2s then 5s delay) on network errors and 5xx responses. 4xx errors are not retried. Context cancellation aborts retries early. Added 4 regression tests in `ntfy_test.go`.
+- **fix: two pre-existing test failures** — (1) DB connection-string pattern in `redact.go` moved before the email regex; the email pattern was matching `password@host` before the DB URL pattern ran, leaving the username unredacted. (2) `GetKubeContext` in `context.go` now returns `"(no pods)"` for an empty pod list instead of `""`, consistent with how events returns `"(no warning events)"`; updated `TestGetKubeContext_EmptyNamespace_NoEvents` to match.
 
 ## Test Coverage Status
 
@@ -24,5 +25,4 @@ This file is maintained by the autonomous improvement agent. Read it at the star
 
 ## Potential Next Improvements
 
-- **Reliability: Claude API timeout** — The HTTP client in `claude.go` uses no explicit timeout beyond what the caller's context provides.
-- **Observability** — No structured logging or metrics anywhere; all log output is `log.Printf`.
+- **test: AnalyzeWithClaude** — `claude_test.go` covers `RunToolLoop` but has no tests for `AnalyzeWithClaude`; success path, error path, and empty-content response are untested.
