@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
@@ -16,17 +17,32 @@ func (m *mockAnalyzer) Analyze(ctx context.Context, systemPrompt, userPrompt str
 	return m.result, m.err
 }
 
+type publishCall struct {
+	title    string
+	priority string
+	body     string
+}
+
 type mockPublisher struct {
-	published []string
-	err       error
+	calls []publishCall
+	err   error
 }
 
 func (m *mockPublisher) Publish(ctx context.Context, title, priority, body string) error {
-	m.published = append(m.published, body)
+	m.calls = append(m.calls, publishCall{title: title, priority: priority, body: body})
 	return m.err
 }
 
 func (m *mockPublisher) Name() string { return "mock" }
+
+// published returns the bodies published so far (backward-compatible helper).
+func (m *mockPublisher) published() []string {
+	out := make([]string, len(m.calls))
+	for i, c := range m.calls {
+		out[i] = c.body
+	}
+	return out
+}
 
 func TestProcessAlert_Success(t *testing.T) {
 	pub := &mockPublisher{}
@@ -59,11 +75,12 @@ func TestProcessAlert_Success(t *testing.T) {
 	if metrics.AlertsProcessed.Load() != 1 {
 		t.Errorf("AlertsProcessed = %d, want 1", metrics.AlertsProcessed.Load())
 	}
-	if len(pub.published) != 1 {
-		t.Fatalf("published %d, want 1", len(pub.published))
+	bodies := pub.published()
+	if len(bodies) != 1 {
+		t.Fatalf("published %d, want 1", len(bodies))
 	}
-	if pub.published[0] != "root cause: OOM" {
-		t.Errorf("published body = %q", pub.published[0])
+	if bodies[0] != "root cause: OOM" {
+		t.Errorf("published body = %q", bodies[0])
 	}
 }
 
@@ -92,5 +109,137 @@ func TestProcessAlert_AnalysisFails(t *testing.T) {
 	// Cooldown should be cleared on failure
 	if !cooldown.CheckAndSet("abc", 300*1e9) {
 		t.Error("cooldown not cleared after failure")
+	}
+}
+
+// TestProcessAlert_PublishFails verifies that when PublishAll returns an error
+// the cooldown is cleared (so the alert can be retried) and AlertsFailed is
+// incremented.
+func TestProcessAlert_PublishFails(t *testing.T) {
+	pub := &mockPublisher{err: fmt.Errorf("ntfy unavailable")}
+	cooldown := shared.NewCooldownManager()
+	metrics := new(shared.AlertMetrics)
+
+	deps := PipelineDeps{
+		Analyzer:     &mockAnalyzer{result: "some analysis"},
+		Publishers:   []shared.Publisher{pub},
+		Cooldown:     cooldown,
+		Metrics:      metrics,
+		SystemPrompt: "test",
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+	}
+
+	alert := shared.AlertPayload{Fingerprint: "fp1", Title: "DiskFull", Severity: "critical", Fields: map[string]string{}}
+	ProcessAlert(context.Background(), deps, alert)
+
+	if metrics.AlertsFailed.Load() != 1 {
+		t.Errorf("AlertsFailed = %d, want 1", metrics.AlertsFailed.Load())
+	}
+	if metrics.AlertsProcessed.Load() != 0 {
+		t.Errorf("AlertsProcessed = %d, want 0", metrics.AlertsProcessed.Load())
+	}
+	// Cooldown must be cleared so the next webhook can re-trigger analysis.
+	if !cooldown.CheckAndSet("fp1", 300*1e9) {
+		t.Error("cooldown not cleared after publish failure")
+	}
+}
+
+// TestProcessAlert_PriorityMapping verifies the severity → ntfy priority table
+// and that an unrecognised severity falls back to "3".
+func TestProcessAlert_PriorityMapping(t *testing.T) {
+	cases := []struct {
+		severity string
+		want     string
+	}{
+		{"critical", "5"},
+		{"warning", "4"},
+		{"info", "2"},
+		{"unknown", "3"},  // not in the map → default
+		{"", "3"},         // empty → default
+		{"CRITICAL", "3"}, // case-sensitive → default
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(fmt.Sprintf("severity=%q", tc.severity), func(t *testing.T) {
+			pub := &mockPublisher{}
+			metrics := new(shared.AlertMetrics)
+
+			deps := PipelineDeps{
+				Analyzer:     &mockAnalyzer{result: "analysis"},
+				Publishers:   []shared.Publisher{pub},
+				Cooldown:     shared.NewCooldownManager(),
+				Metrics:      metrics,
+				SystemPrompt: "test",
+				GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
+					return shared.AnalysisContext{}
+				},
+			}
+
+			alert := shared.AlertPayload{
+				Fingerprint: "fp-" + tc.severity,
+				Title:       "TestAlert",
+				Severity:    tc.severity,
+				Fields:      map[string]string{},
+			}
+			ProcessAlert(context.Background(), deps, alert)
+
+			if len(pub.calls) != 1 {
+				t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
+			}
+			if pub.calls[0].priority != tc.want {
+				t.Errorf("priority = %q, want %q", pub.calls[0].priority, tc.want)
+			}
+		})
+	}
+}
+
+// TestProcessAlert_TitleFormatting verifies that the published title includes
+// the namespace when present and omits it when absent.
+func TestProcessAlert_TitleFormatting(t *testing.T) {
+	cases := []struct {
+		name      string
+		namespace string
+		wantTitle string
+	}{
+		{"with namespace", "monitoring", "Analysis: HighMemory (monitoring)"},
+		{"no namespace", "", "Analysis: HighMemory"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			pub := &mockPublisher{}
+			metrics := new(shared.AlertMetrics)
+
+			deps := PipelineDeps{
+				Analyzer:     &mockAnalyzer{result: "analysis"},
+				Publishers:   []shared.Publisher{pub},
+				Cooldown:     shared.NewCooldownManager(),
+				Metrics:      metrics,
+				SystemPrompt: "test",
+				GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
+					return shared.AnalysisContext{}
+				},
+			}
+
+			fields := map[string]string{"label:namespace": tc.namespace}
+			alert := shared.AlertPayload{
+				Fingerprint: "fp-title",
+				Title:       "HighMemory",
+				Severity:    "warning",
+				Fields:      fields,
+			}
+			ProcessAlert(context.Background(), deps, alert)
+
+			if len(pub.calls) != 1 {
+				t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
+			}
+			if pub.calls[0].title != tc.wantTitle {
+				t.Errorf("title = %q, want %q", pub.calls[0].title, tc.wantTitle)
+			}
+		})
 	}
 }
