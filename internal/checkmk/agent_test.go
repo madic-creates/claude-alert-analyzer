@@ -1,9 +1,197 @@
 package checkmk
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"strings"
 	"testing"
+
+	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
+	"golang.org/x/crypto/ssh"
 )
+
+// capturingToolRunner invokes handleTool for each pre-configured call,
+// records the results, then returns a fixed final response. This exercises
+// the handleTool closure inside RunAgenticDiagnostics without a Claude API.
+type capturingToolRunner struct {
+	calls       []agentToolCall
+	toolOutputs []string
+	toolErrors  []error
+	result      string
+	err         error
+}
+
+type agentToolCall struct {
+	name  string
+	input string
+}
+
+func (r *capturingToolRunner) RunToolLoop(
+	_ context.Context, _, _ string,
+	_ []shared.Tool, _ int,
+	handleTool func(string, json.RawMessage) (string, error),
+) (string, error) {
+	for _, call := range r.calls {
+		out, err := handleTool(call.name, json.RawMessage(call.input))
+		r.toolOutputs = append(r.toolOutputs, out)
+		r.toolErrors = append(r.toolErrors, err)
+	}
+	return r.result, r.err
+}
+
+// fixedDialer always returns the same pre-connected SSH client (or error).
+type fixedDialer struct {
+	client *ssh.Client
+	err    error
+}
+
+func (d *fixedDialer) Dial(_ string) (*ssh.Client, error) {
+	return d.client, d.err
+}
+
+func TestRunAgenticDiagnostics_DialFailure(t *testing.T) {
+	dialer := &fixedDialer{err: fmt.Errorf("connection refused")}
+	runner := &capturingToolRunner{result: "should not reach"}
+
+	_, err := RunAgenticDiagnostics(context.Background(), Config{}, runner, dialer, "host1", "ctx", 3)
+	if err == nil {
+		t.Fatal("expected error when dial fails")
+	}
+	if !strings.Contains(err.Error(), "SSH connection failed") {
+		t.Errorf("error should mention SSH connection failure, got: %v", err)
+	}
+}
+
+func TestRunAgenticDiagnostics_DeniedCommandBlocked(t *testing.T) {
+	sshCalled := false
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		sshCalled = true
+		sendExitStatus(ch, 0)
+	})
+
+	runner := &capturingToolRunner{
+		calls:  []agentToolCall{{name: "execute_command", input: `{"command": ["rm", "-rf", "/"]}`}},
+		result: "final analysis",
+	}
+	dialer := &fixedDialer{client: client}
+
+	analysis, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, dialer, "host1", "ctx", 3,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if analysis != "final analysis" {
+		t.Errorf("got analysis %q", analysis)
+	}
+	if sshCalled {
+		t.Error("SSH server should not be called for denied command")
+	}
+	if len(runner.toolOutputs) != 1 {
+		t.Fatalf("expected 1 tool output, got %d", len(runner.toolOutputs))
+	}
+	if !strings.Contains(runner.toolOutputs[0], "denied") {
+		t.Errorf("expected denial message in output, got: %q", runner.toolOutputs[0])
+	}
+	if runner.toolErrors[0] != nil {
+		t.Errorf("expected nil error for denied command, got: %v", runner.toolErrors[0])
+	}
+}
+
+func TestRunAgenticDiagnostics_AllowedCommandExecuted(t *testing.T) {
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		_, _ = io.WriteString(ch, "Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1        50G   20G   30G  40% /\n")
+		sendExitStatus(ch, 0)
+	})
+
+	runner := &capturingToolRunner{
+		calls:  []agentToolCall{{name: "execute_command", input: `{"command": ["df", "-h"]}`}},
+		result: "disk analysis",
+	}
+	dialer := &fixedDialer{client: client}
+
+	analysis, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, dialer, "host1", "ctx", 3,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if analysis != "disk analysis" {
+		t.Errorf("got analysis %q", analysis)
+	}
+	if len(runner.toolOutputs) != 1 {
+		t.Fatalf("expected 1 tool output, got %d", len(runner.toolOutputs))
+	}
+	if !strings.Contains(runner.toolOutputs[0], "Filesystem") {
+		t.Errorf("expected SSH output in tool result, got: %q", runner.toolOutputs[0])
+	}
+	if !strings.Contains(runner.toolOutputs[0], "$ df -h") {
+		t.Errorf("expected command echo in tool result, got: %q", runner.toolOutputs[0])
+	}
+}
+
+func TestRunAgenticDiagnostics_UnknownToolReturnsError(t *testing.T) {
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		sendExitStatus(ch, 0)
+	})
+
+	runner := &capturingToolRunner{
+		calls:  []agentToolCall{{name: "unknown_tool", input: `{}`}},
+		result: "analysis",
+	}
+	dialer := &fixedDialer{client: client}
+
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, dialer, "host1", "ctx", 3,
+	)
+	if err != nil {
+		t.Fatalf("unexpected top-level error: %v", err)
+	}
+	if len(runner.toolErrors) != 1 {
+		t.Fatalf("expected 1 tool error captured, got %d", len(runner.toolErrors))
+	}
+	if runner.toolErrors[0] == nil {
+		t.Error("expected error for unknown tool, got nil")
+	}
+	if !strings.Contains(runner.toolErrors[0].Error(), "unknown tool") {
+		t.Errorf("unexpected error: %v", runner.toolErrors[0])
+	}
+}
+
+func TestRunAgenticDiagnostics_OutputRedacted(t *testing.T) {
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		_, _ = io.WriteString(ch, "config: password=supersecret123\n")
+		sendExitStatus(ch, 0)
+	})
+
+	runner := &capturingToolRunner{
+		calls:  []agentToolCall{{name: "execute_command", input: `{"command": ["cat", "/etc/app.conf"]}`}},
+		result: "config analysis",
+	}
+	dialer := &fixedDialer{client: client}
+
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, dialer, "host1", "ctx", 3,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(runner.toolOutputs) != 1 {
+		t.Fatalf("expected 1 tool output, got %d", len(runner.toolOutputs))
+	}
+	if strings.Contains(runner.toolOutputs[0], "supersecret123") {
+		t.Errorf("secret leaked in tool output: %q", runner.toolOutputs[0])
+	}
+	if !strings.Contains(runner.toolOutputs[0], "[REDACTED]") {
+		t.Errorf("expected [REDACTED] in output, got: %q", runner.toolOutputs[0])
+	}
+}
 
 func TestIsDenied_BlocksDestructiveCommands(t *testing.T) {
 	denied := [][]string{
