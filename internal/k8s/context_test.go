@@ -313,6 +313,27 @@ func TestGetPrometheusMetrics_PrometheusUnreachable(t *testing.T) {
 	}
 }
 
+func TestGetPrometheusMetrics_ErrorStatus(t *testing.T) {
+	// Prometheus returns status="error" for a bad query; should surface the error, not "(no data)"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"error","errorType":"bad_data","error":"invalid parameter 'query': parse error"}`))
+	}))
+	defer srv.Close()
+
+	alert := makeAlertWithLabels(map[string]string{})
+	result := GetPrometheusMetrics(context.Background(), srv.URL, alert)
+	if !strings.Contains(result, "query error") {
+		t.Errorf("expected query error in result, got %q", result)
+	}
+	if !strings.Contains(result, "bad_data") {
+		t.Errorf("expected errorType in result, got %q", result)
+	}
+	if strings.Contains(result, "(no data)") {
+		t.Errorf("result should not say '(no data)' for an error response, got %q", result)
+	}
+}
+
 // ----- GatherContext integration tests -----
 
 func TestGatherContext_ReturnsFourSections(t *testing.T) {

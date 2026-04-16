@@ -32,8 +32,10 @@ type Alert struct {
 
 // PromQueryResponse is the Prometheus /api/v1/query response.
 type PromQueryResponse struct {
-	Status string `json:"status"`
-	Data   struct {
+	Status    string `json:"status"`
+	ErrorType string `json:"errorType"`
+	Error     string `json:"error"`
+	Data      struct {
 		ResultType string       `json:"resultType"`
 		Result     []PromResult `json:"result"`
 	} `json:"data"`

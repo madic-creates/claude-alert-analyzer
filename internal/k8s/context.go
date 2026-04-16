@@ -51,6 +51,12 @@ func promqlQuery(ctx context.Context, prometheusURL, query string) string {
 	if err := json.Unmarshal(body, &result); err != nil {
 		return "(failed to parse response)"
 	}
+	if result.Status != "success" {
+		if result.Error != "" {
+			return fmt.Sprintf("(query error: %s: %s)", result.ErrorType, result.Error)
+		}
+		return fmt.Sprintf("(query error: status=%q)", result.Status)
+	}
 	if len(result.Data.Result) == 0 {
 		return "(no data)"
 	}
