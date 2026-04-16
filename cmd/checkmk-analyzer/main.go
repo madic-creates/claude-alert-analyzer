@@ -79,6 +79,27 @@ func loadConfig() checkmk.Config {
 }
 
 func main() {
+	var logLevel slog.Level
+	switch strings.ToLower(shared.EnvOrDefault("LOG_LEVEL", "info")) {
+	case "debug":
+		logLevel = slog.LevelDebug
+	case "warn":
+		logLevel = slog.LevelWarn
+	case "error":
+		logLevel = slog.LevelError
+	default:
+		logLevel = slog.LevelInfo
+	}
+
+	logFormat := shared.EnvOrDefault("LOG_FORMAT", "text")
+	var logHandler slog.Handler
+	if logFormat == "json" {
+		logHandler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})
+	} else {
+		logHandler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})
+	}
+	slog.SetDefault(slog.New(logHandler))
+
 	cfg := loadConfig()
 
 	claudeClient := shared.NewClaudeClient(cfg.BaseConfig())

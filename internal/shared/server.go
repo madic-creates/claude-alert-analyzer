@@ -22,10 +22,11 @@ type ServerConfig struct {
 
 // Server manages a webhook-driven worker pool with graceful shutdown.
 type Server struct {
-	cfg     ServerConfig
-	metrics *AlertMetrics
-	process func(ctx context.Context, alert AlertPayload)
-	queue   chan AlertPayload
+	cfg        ServerConfig
+	metrics    *AlertMetrics
+	process    func(ctx context.Context, alert AlertPayload)
+	queue      chan AlertPayload
+	ReadyCheck func(ctx context.Context) error
 }
 
 // NewServer creates a Server. Call Enqueue to add alerts, Run to start.
@@ -58,6 +59,19 @@ func (s *Server) BuildMux(webhookHandler http.HandlerFunc) *http.ServeMux {
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "ok")
+	})
+	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
+		if s.ReadyCheck != nil {
+			checkCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			defer cancel()
+			if err := s.ReadyCheck(checkCtx); err != nil {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				fmt.Fprintf(w, "not ready: %v", err)
+				return
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "ready")
 	})
 	mux.HandleFunc("GET /metrics", s.metrics.MetricsHandler())
 	mux.HandleFunc("POST /webhook", func(w http.ResponseWriter, r *http.Request) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 )
@@ -24,6 +25,11 @@ type PipelineDeps struct {
 
 // ProcessAlert gathers context, optionally runs agentic SSH diagnostics, and publishes results.
 func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayload) {
+	start := time.Now()
+	defer func() {
+		deps.Metrics.ProcessingDurationSum.Add(time.Since(start).Microseconds())
+		deps.Metrics.ProcessingDurationCount.Add(1)
+	}()
 	hostname := alert.Fields["hostname"]
 	hostAddress := alert.Fields["host_address"]
 

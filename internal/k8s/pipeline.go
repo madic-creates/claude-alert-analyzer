@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 )
@@ -20,6 +21,11 @@ type PipelineDeps struct {
 
 // ProcessAlert gathers context, analyzes via Claude, and publishes results.
 func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayload) {
+	start := time.Now()
+	defer func() {
+		deps.Metrics.ProcessingDurationSum.Add(time.Since(start).Microseconds())
+		deps.Metrics.ProcessingDurationCount.Add(1)
+	}()
 	alertname := alert.Title
 	namespace := alert.Fields["label:namespace"]
 	slog.Info("processing alert", "alertname", alertname, "namespace", namespace)
