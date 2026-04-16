@@ -81,6 +81,17 @@ func (s *Server) BuildMux(webhookHandler http.HandlerFunc) *http.ServeMux {
 	return mux
 }
 
+// safeProcess calls s.process and recovers from any panic so the worker
+// goroutine stays alive and continues processing subsequent alerts.
+func (s *Server) safeProcess(ctx context.Context, alert AlertPayload) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("worker panic recovered", "recover", r, "fingerprint", alert.Fingerprint)
+		}
+	}()
+	s.process(ctx, alert)
+}
+
 // Run starts workers, serves HTTP, and blocks until SIGINT/SIGTERM triggers
 // graceful shutdown. This function does not return until shutdown is complete.
 func (s *Server) Run(webhookHandler http.HandlerFunc) {
@@ -93,7 +104,7 @@ func (s *Server) Run(webhookHandler http.HandlerFunc) {
 		go func() {
 			defer wg.Done()
 			for alert := range s.queue {
-				s.process(workerCtx, alert)
+				s.safeProcess(workerCtx, alert)
 			}
 		}()
 	}

@@ -92,6 +92,32 @@ func TestServer_BuildMux_Metrics(t *testing.T) {
 	}
 }
 
+func TestServer_SafeProcess_PanicDoesNotPropagate(t *testing.T) {
+	// safeProcess must recover panics so the caller (worker goroutine) stays alive.
+	metrics := new(AlertMetrics)
+	var processed atomic.Int64
+	callCount := atomic.Int64{}
+
+	srv := NewServer(ServerConfig{
+		Port: "0", WorkerCount: 1, QueueSize: 5, DrainTimeout: time.Second,
+	}, metrics, func(ctx context.Context, alert AlertPayload) {
+		if callCount.Add(1) == 1 {
+			panic("deliberate test panic")
+		}
+		processed.Add(1)
+	})
+
+	ctx := context.Background()
+	// First call panics — safeProcess must not panic itself.
+	srv.safeProcess(ctx, AlertPayload{Fingerprint: "panic-me"})
+	// Second call must execute normally, proving the panic was recovered.
+	srv.safeProcess(ctx, AlertPayload{Fingerprint: "ok"})
+
+	if processed.Load() != 1 {
+		t.Errorf("processed = %d after panic, want 1", processed.Load())
+	}
+}
+
 func TestServer_BuildMux_WebhookCountsMetric(t *testing.T) {
 	metrics := new(AlertMetrics)
 	srv := NewServer(ServerConfig{Port: "0", WorkerCount: 1, QueueSize: 5, DrainTimeout: 5 * time.Second}, metrics,
