@@ -98,6 +98,7 @@ func main() {
 	cfg := loadConfig()
 	publishers := buildPublishers()
 	cooldownMgr := shared.NewCooldownManager()
+	claudeClient := shared.NewClaudeClient(cfg.BaseConfig())
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	defer workerCancel()
 	metrics := new(shared.AlertMetrics)
@@ -111,7 +112,7 @@ func main() {
 		go func() {
 			defer wg.Done()
 			for item := range workQueue {
-				processAlert(workerCtx, cfg, publishers, cooldownMgr, metrics, item.alert)
+				processAlert(workerCtx, cfg, publishers, claudeClient, cooldownMgr, metrics, item.alert)
 			}
 		}()
 	}
@@ -179,15 +180,13 @@ func main() {
 	slog.Info("shutdown complete")
 }
 
-func processAlert(ctx context.Context, cfg checkmk.Config, publishers []shared.Publisher, cooldownMgr *shared.CooldownManager, metrics *shared.AlertMetrics, alert shared.AlertPayload) {
+func processAlert(ctx context.Context, cfg checkmk.Config, publishers []shared.Publisher, claudeClient *shared.ClaudeClient, cooldownMgr *shared.CooldownManager, metrics *shared.AlertMetrics, alert shared.AlertPayload) {
 	hostname := alert.Fields["hostname"]
 	hostAddress := alert.Fields["host_address"]
 
 	slog.Info("processing CheckMK alert",
 		"hostname", hostname,
 		"service", alert.Fields["service_description"])
-
-	baseCfg := cfg.BaseConfig()
 
 	// Fetch host metadata (including ai_context) and validate host identity
 	hostInfo, validationErr := checkmk.ValidateAndDescribeHost(ctx, cfg, hostname, hostAddress)
@@ -208,7 +207,7 @@ func processAlert(ctx context.Context, cfg checkmk.Config, publishers []shared.P
 
 	if sshOK {
 		var err error
-		analysis, err = checkmk.RunAgenticDiagnostics(ctx, cfg, baseCfg, hostAddress, alertContext, cfg.MaxAgentRounds)
+		analysis, err = checkmk.RunAgenticDiagnostics(ctx, cfg, claudeClient, hostAddress, alertContext, cfg.MaxAgentRounds)
 		if err != nil {
 			slog.Error("agentic diagnostics failed", "error", err)
 			_ = shared.PublishAll(ctx, publishers,
@@ -220,7 +219,7 @@ func processAlert(ctx context.Context, cfg checkmk.Config, publishers []shared.P
 		}
 	} else {
 		var err error
-		analysis, err = shared.AnalyzeWithClaude(ctx, baseCfg, checkmk.AgentSystemPrompt, alertContext)
+		analysis, err = claudeClient.Analyze(ctx, checkmk.AgentSystemPrompt, alertContext)
 		if err != nil {
 			slog.Error("analysis failed", "error", err)
 			_ = shared.PublishAll(ctx, publishers,

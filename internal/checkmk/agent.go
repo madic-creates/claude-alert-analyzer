@@ -113,7 +113,7 @@ func parseCommandInput(input json.RawMessage) ([]string, error) {
 func RunAgenticDiagnostics(
 	ctx context.Context,
 	cfg Config,
-	claudeCfg shared.BaseConfig,
+	client shared.ToolLoopRunner,
 	hostname string,
 	alertContext string,
 	maxRounds int,
@@ -125,11 +125,11 @@ func RunAgenticDiagnostics(
 
 	slog.Info("starting agentic SSH diagnostics", "hostname", hostname, "maxRounds", maxRounds, "deniedCommands", len(denied))
 
-	client, err := dialSSH(cfg, hostname)
+	sshClient, err := dialSSH(cfg, hostname)
 	if err != nil {
 		return "", fmt.Errorf("SSH connection failed: %w", err)
 	}
-	defer client.Close()
+	defer sshClient.Close()
 	slog.Info("SSH connected for agentic diagnostics", "hostname", hostname)
 
 	handleTool := func(name string, input json.RawMessage) (string, error) {
@@ -151,7 +151,7 @@ func RunAgenticDiagnostics(
 		cmdStr := strings.Join(argv, " ")
 		slog.Info("agentic SSH command", "hostname", hostname, "command", cmdStr)
 
-		output, err := runSSHCommand(client, argv, 10*time.Second)
+		output, err := runSSHCommand(sshClient, argv, 10*time.Second)
 		if err != nil {
 			slog.Warn("agentic SSH command failed", "hostname", hostname, "command", cmdStr, "error", err)
 			return fmt.Sprintf("Command failed: %v", err), nil
@@ -163,8 +163,8 @@ func RunAgenticDiagnostics(
 		return fmt.Sprintf("$ %s\n%s", cmdStr, output), nil
 	}
 
-	analysis, err := shared.RunToolLoop(
-		ctx, claudeCfg, AgentSystemPrompt, alertContext,
+	analysis, err := client.RunToolLoop(
+		ctx, AgentSystemPrompt, alertContext,
 		[]shared.Tool{sshTool}, maxRounds, handleTool,
 	)
 	if err != nil {
