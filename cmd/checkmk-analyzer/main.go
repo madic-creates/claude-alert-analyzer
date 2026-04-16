@@ -210,7 +210,7 @@ func processAlert(ctx context.Context, cfg checkmk.Config, publishers []shared.P
 
 	if sshOK {
 		var err error
-		analysis, err = checkmk.RunAgenticDiagnostics(ctx, cfg, baseCfg, hostname, alertContext, cfg.MaxAgentRounds)
+		analysis, err = checkmk.RunAgenticDiagnostics(ctx, cfg, baseCfg, hostAddress, alertContext, cfg.MaxAgentRounds)
 		if err != nil {
 			slog.Error("agentic diagnostics failed", "error", err)
 			_ = shared.PublishAll(ctx, publishers,
