@@ -102,6 +102,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	promClient := k8s.NewPrometheusClient(cfg.PrometheusURL)
 	cooldownMgr := shared.NewCooldownManager()
 	claudeClient := shared.NewClaudeClient(cfg.BaseConfig())
 	workerCtx, workerCancel := context.WithCancel(context.Background())
@@ -117,7 +118,7 @@ func main() {
 		go func() {
 			defer wg.Done()
 			for item := range workQueue {
-				processAlert(workerCtx, cfg, publishers, clientset, claudeClient, cooldownMgr, metrics, item.alert)
+				processAlert(workerCtx, cfg, publishers, promClient, clientset, claudeClient, cooldownMgr, metrics, item.alert)
 			}
 		}()
 	}
@@ -186,7 +187,7 @@ func main() {
 	slog.Info("shutdown complete")
 }
 
-func processAlert(ctx context.Context, cfg k8s.Config, publishers []shared.Publisher, clientset kubernetes.Interface, claudeClient shared.Analyzer, cooldownMgr *shared.CooldownManager, metrics *shared.AlertMetrics, alert shared.AlertPayload) {
+func processAlert(ctx context.Context, cfg k8s.Config, publishers []shared.Publisher, promClient *k8s.PrometheusClient, clientset kubernetes.Interface, claudeClient shared.Analyzer, cooldownMgr *shared.CooldownManager, metrics *shared.AlertMetrics, alert shared.AlertPayload) {
 	alertname := alert.Title
 	namespace := alert.Fields["label:namespace"]
 	slog.Info("processing alert", "alertname", alertname, "namespace", namespace)
@@ -206,7 +207,7 @@ func processAlert(ctx context.Context, cfg k8s.Config, publishers []shared.Publi
 		}
 	}
 
-	actx := k8s.GatherContext(ctx, clientset, cfg.PrometheusURL, k8sAlert, cfg)
+	actx := k8s.GatherContext(ctx, promClient, clientset, k8sAlert, cfg)
 
 	userPrompt := fmt.Sprintf("## Alert: %s\n- Status: %s\n- Severity: %s\n- Namespace: %s\n\n%s",
 		alertname, alert.Fields["status"], alert.Severity, namespace, actx.FormatForPrompt())
