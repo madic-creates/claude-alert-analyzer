@@ -186,3 +186,112 @@ func TestRunSSHCommand_Timeout(t *testing.T) {
 		t.Errorf("expected timeout error message, got: %v", err)
 	}
 }
+
+func TestShellQuote(t *testing.T) {
+	tests := []struct {
+		name string
+		argv []string
+		want string
+	}{
+		{
+			name: "normal args",
+			argv: []string{"ls", "-la", "/tmp"},
+			want: "'ls' '-la' '/tmp'",
+		},
+		{
+			name: "embedded single quotes",
+			argv: []string{"echo", "it's"},
+			want: `'echo' 'it'\''s'`,
+		},
+		{
+			name: "semicolons and pipes",
+			argv: []string{"cat", "/etc/passwd; rm -rf /", "| grep root"},
+			want: `'cat' '/etc/passwd; rm -rf /' '| grep root'`,
+		},
+		{
+			name: "dollar and backticks",
+			argv: []string{"echo", "$(whoami)", "`id`"},
+			want: "'echo' '$(whoami)' '`id`'",
+		},
+		{
+			name: "nil/empty slice",
+			argv: nil,
+			want: "",
+		},
+		{
+			name: "empty string argument",
+			argv: []string{"echo", ""},
+			want: "'echo' ''",
+		},
+		{
+			name: "multiple single quotes",
+			argv: []string{"echo", "it's a 'test'"},
+			want: `'echo' 'it'\''s a '\''test'\'''`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shellQuote(tc.argv)
+			if got != tc.want {
+				t.Errorf("shellQuote(%q)\n  got:  %s\n  want: %s", tc.argv, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunSSHCommand_ShellMetacharsEscaped(t *testing.T) {
+	// The test SSH server captures the raw command string that the client
+	// sends. We verify that shell metacharacters in argv are properly
+	// single-quoted so the remote shell cannot interpret them.
+	tests := []struct {
+		name string
+		argv []string
+	}{
+		{
+			name: "semicolon injection",
+			argv: []string{"cat", "/tmp/safe; rm -rf /"},
+		},
+		{
+			name: "command substitution with dollar-paren",
+			argv: []string{"echo", "$(cat /etc/shadow)"},
+		},
+		{
+			name: "backtick command substitution",
+			argv: []string{"echo", "`id`"},
+		},
+		{
+			name: "pipe injection",
+			argv: []string{"ls", "| cat /etc/passwd"},
+		},
+		{
+			name: "embedded single quotes with injection",
+			argv: []string{"echo", "'; rm -rf / #"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var captured string
+			client := startTestSSHServer(t, func(cmd string, ch ssh.Channel) {
+				captured = cmd
+				sendExitStatus(ch, 0)
+			})
+
+			_, _ = runSSHCommand(client, tc.argv, 5*time.Second)
+
+			expected := shellQuote(tc.argv)
+			if captured != expected {
+				t.Errorf("server received unexpected command\n  got:  %s\n  want: %s", captured, expected)
+			}
+
+			// Every argument must be single-quoted in the transmitted command.
+			for _, arg := range tc.argv {
+				// The raw argument should NOT appear unquoted. It must be
+				// surrounded by single quotes (with any embedded single
+				// quotes escaped).
+				if strings.Contains(captured, " "+arg+" ") {
+					t.Errorf("argument %q appears unquoted in command: %s", arg, captured)
+				}
+			}
+		})
+	}
+}

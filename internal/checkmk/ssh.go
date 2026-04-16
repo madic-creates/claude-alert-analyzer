@@ -47,6 +47,19 @@ type sshResult struct {
 	err    error
 }
 
+// shellQuote joins argv into a single string safe for remote shell
+// interpretation. Each element is wrapped in single quotes, and any
+// embedded single quotes are escaped using the '\'' idiom (end the
+// current single-quoted string, insert an escaped single quote, and
+// start a new single-quoted string).
+func shellQuote(argv []string) string {
+	quoted := make([]string, len(argv))
+	for i, arg := range argv {
+		quoted[i] = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+	}
+	return strings.Join(quoted, " ")
+}
+
 func runSSHCommand(client *ssh.Client, argv []string, timeout time.Duration) (string, error) {
 	session, err := client.NewSession()
 	if err != nil {
@@ -54,7 +67,7 @@ func runSSHCommand(client *ssh.Client, argv []string, timeout time.Duration) (st
 	}
 	defer session.Close()
 
-	cmdStr := strings.Join(argv, " ")
+	cmdStr := shellQuote(argv)
 
 	// Buffered channel so the goroutine can always send without blocking,
 	// even when the timeout case is selected and the caller has returned.
