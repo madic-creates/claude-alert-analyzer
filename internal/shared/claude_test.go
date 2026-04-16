@@ -11,6 +11,34 @@ import (
 	"testing"
 )
 
+func TestSendRequest_OversizedResponseIsBounded(t *testing.T) {
+	// Serve a response body larger than maxResponseBytes (2 MiB).
+	oversized := 3 * 1024 * 1024 // 3 MiB
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		// Write oversized payload of repeated 'A' bytes.
+		buf := make([]byte, oversized)
+		for i := range buf {
+			buf[i] = 'A'
+		}
+		w.Write(buf)
+	}))
+	defer srv.Close()
+
+	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "test"}
+	body, err := sendRequest(context.Background(), cfg, map[string]string{"msg": "hi"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(body) > maxResponseBytes {
+		t.Errorf("response should be bounded to %d bytes, got %d", maxResponseBytes, len(body))
+	}
+	if len(body) != maxResponseBytes {
+		t.Errorf("expected exactly %d bytes (LimitReader cap), got %d", maxResponseBytes, len(body))
+	}
+}
+
 // ---- AnalyzeWithClaude tests ----
 
 func TestAnalyzeWithClaude_Success(t *testing.T) {
