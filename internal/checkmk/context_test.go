@@ -290,3 +290,80 @@ func TestGatherContext_HostContextSanitized(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateAndDescribeHost_RejectsInvalidHostname(t *testing.T) {
+	cfg := Config{
+		CheckMKAPIURL:    "http://localhost/api/",
+		CheckMKAPIUser:   "automation",
+		CheckMKAPISecret: "secret",
+	}
+
+	tests := []struct {
+		name     string
+		hostname string
+	}{
+		{"path traversal", "../../etc/passwd"},
+		{"null byte", "host\x00evil"},
+		{"spaces", "host name"},
+		{"empty string", ""},
+		{"forward slash", "host/evil"},
+		{"backslash", "host\\evil"},
+		{"url encoded traversal", "..%2F..%2Fetc%2Fpasswd"},
+		{"leading dash", "-badhost"},
+		{"trailing dash", "badhost-"},
+		{"leading dot", ".hidden"},
+		{"trailing dot", "hidden."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ValidateAndDescribeHost(context.Background(), cfg, tt.hostname, "1.2.3.4")
+			if err == nil {
+				t.Errorf("expected error for hostname %q, got nil", tt.hostname)
+			}
+			if err != nil && !strings.Contains(err.Error(), "invalid hostname") {
+				t.Errorf("expected 'invalid hostname' error, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateAndDescribeHost_AcceptsValidHostname(t *testing.T) {
+	// This test verifies that isValidHostname accepts legitimate hostnames.
+	// We use a test server that returns 404 for any host — the point is that
+	// the call must NOT fail with "invalid hostname".
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	cfg := Config{
+		CheckMKAPIURL:    srv.URL + "/",
+		CheckMKAPIUser:   "automation",
+		CheckMKAPISecret: "secret",
+	}
+
+	tests := []struct {
+		name     string
+		hostname string
+	}{
+		{"simple hostname", "webserver01"},
+		{"FQDN", "web01.example.com"},
+		{"IPv4 address", "192.168.1.1"},
+		{"hostname with dash", "my-host"},
+		{"hostname with underscore", "my_host"},
+		{"single char", "a"},
+		{"two chars", "ab"},
+		{"uppercase", "MYHOST"},
+		{"mixed case FQDN", "Web01.Example.COM"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ValidateAndDescribeHost(context.Background(), cfg, tt.hostname, "1.2.3.4")
+			if err != nil && strings.Contains(err.Error(), "invalid hostname") {
+				t.Errorf("hostname %q should be accepted, got: %v", tt.hostname, err)
+			}
+		})
+	}
+}

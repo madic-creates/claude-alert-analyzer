@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -14,6 +15,14 @@ import (
 )
 
 var checkmkHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
+// validHostnameRe matches DNS hostnames, FQDNs, and IPv4 addresses.
+// It rejects path separators, whitespace, null bytes, and URL-encoding.
+var validHostnameRe = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,253}[a-zA-Z0-9])?$`)
+
+func isValidHostname(hostname string) bool {
+	return validHostnameRe.MatchString(hostname)
+}
 
 type checkmkHostResponse struct {
 	ID         string                `json:"id"`
@@ -68,6 +77,9 @@ func sanitizeHostContext(s string) string {
 }
 
 func ValidateAndDescribeHost(ctx context.Context, cfg Config, hostname, hostAddress string) (*HostInfo, error) {
+	if !isValidHostname(hostname) {
+		return nil, fmt.Errorf("invalid hostname %q", hostname)
+	}
 	url := fmt.Sprintf("%sobjects/host_config/%s", cfg.CheckMKAPIURL, hostname)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -82,7 +94,7 @@ func ValidateAndDescribeHost(ctx context.Context, cfg Config, hostname, hostAddr
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
@@ -115,6 +127,9 @@ func ValidateAndDescribeHost(ctx context.Context, cfg Config, hostname, hostAddr
 }
 
 func getHostServices(ctx context.Context, cfg Config, hostname string) string {
+	if !isValidHostname(hostname) {
+		return fmt.Sprintf("(invalid hostname %q)", hostname)
+	}
 	url := fmt.Sprintf("%sobjects/host/%s/collections/services", cfg.CheckMKAPIURL, hostname)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -129,7 +144,7 @@ func getHostServices(ctx context.Context, cfg Config, hostname string) string {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
 	if err != nil {
 		return "(failed to read response)"
 	}
