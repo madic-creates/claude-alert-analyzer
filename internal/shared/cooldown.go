@@ -24,11 +24,9 @@ func (cm *CooldownManager) CheckAndSet(fingerprint string, ttl time.Duration) bo
 
 	now := time.Now()
 
-	evicted := 0
 	for k, v := range cm.entries {
-		if now.Sub(v.setAt) > ttl && evicted < 100 {
+		if now.Sub(v.setAt) > ttl {
 			delete(cm.entries, k)
-			evicted++
 		}
 	}
 
