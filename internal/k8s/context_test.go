@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -331,6 +332,25 @@ func TestGetPrometheusMetrics_ErrorStatus(t *testing.T) {
 	}
 	if strings.Contains(result, "(no data)") {
 		t.Errorf("result should not say '(no data)' for an error response, got %q", result)
+	}
+}
+
+func TestGetPrometheusMetrics_OversizedResponse(t *testing.T) {
+	// A Prometheus server that returns more than MaxResponseBytes should not
+	// cause unbounded memory allocation; promqlQuery must cap reads via LimitReader.
+	// The truncated body will fail JSON parsing and return the parse-error sentinel.
+	huge := strings.Repeat("x", shared.MaxResponseBytes+1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, huge)
+	}))
+	defer srv.Close()
+
+	alert := makeAlertWithLabels(map[string]string{})
+	result := GetPrometheusMetrics(context.Background(), srv.URL, alert)
+	// The oversized, truncated body cannot parse as JSON — expect the parse-failure sentinel.
+	if !strings.Contains(result, "failed to parse") {
+		t.Errorf("expected parse-failure sentinel for oversized response, got %q", result)
 	}
 }
 
