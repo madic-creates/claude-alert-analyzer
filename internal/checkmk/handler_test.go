@@ -53,7 +53,7 @@ func TestCheckmkHandleWebhook_UnauthorizedMissingToken(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	})
+	}, nil)
 
 	req := httptest.NewRequest("POST", "/webhook", bytes.NewReader([]byte(`{}`)))
 	rr := httptest.NewRecorder()
@@ -70,7 +70,7 @@ func TestCheckmkHandleWebhook_UnauthorizedMissingToken(t *testing.T) {
 func TestCheckmkHandleWebhook_UnauthorizedWrongToken(t *testing.T) {
 	cfg := makeCheckmkConfig()
 	cd := shared.NewCooldownManager()
-	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true })
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil)
 
 	notif := makeNotification("host1", "CPU", "WARNING", "PROBLEM")
 	rr := postCheckmkWebhook(t, handler, "wrong-secret", notif)
@@ -82,7 +82,7 @@ func TestCheckmkHandleWebhook_UnauthorizedWrongToken(t *testing.T) {
 func TestCheckmkHandleWebhook_InvalidJSON(t *testing.T) {
 	cfg := makeCheckmkConfig()
 	cd := shared.NewCooldownManager()
-	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true })
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil)
 
 	req := httptest.NewRequest("POST", "/webhook", bytes.NewReader([]byte(`not json`)))
 	req.Header.Set("Authorization", "Bearer test-secret")
@@ -101,7 +101,7 @@ func TestCheckmkHandleWebhook_SkipsRecovery(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	})
+	}, nil)
 
 	notif := makeNotification("host1", "CPU", "OK", "RECOVERY")
 	rr := postCheckmkWebhook(t, handler, "test-secret", notif)
@@ -120,7 +120,7 @@ func TestCheckmkHandleWebhook_EnqueuesProblem(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		received = ap
 		return true
-	})
+	}, nil)
 
 	notif := makeNotification("webserver01", "HTTP", "CRITICAL", "PROBLEM")
 	rr := postCheckmkWebhook(t, handler, "test-secret", notif)
@@ -166,7 +166,7 @@ func TestCheckmkHandleWebhook_SeverityMapping(t *testing.T) {
 			handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 				received = ap
 				return true
-			})
+			}, nil)
 			notif := makeNotification("host1", "SVC", tc.state, "PROBLEM")
 			postCheckmkWebhook(t, handler, "test-secret", notif)
 			if received.Severity != tc.expected {
@@ -184,7 +184,7 @@ func TestCheckmkHandleWebhook_CooldownDeduplicates(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	})
+	}, nil)
 
 	notif := makeNotification("host1", "CPU", "WARNING", "PROBLEM")
 
@@ -201,12 +201,34 @@ func TestCheckmkHandleWebhook_CooldownDeduplicates(t *testing.T) {
 	}
 }
 
+func TestCheckmkHandleWebhook_CooldownIncrementsMetric(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cfg.CooldownSeconds = 60
+	cd := shared.NewCooldownManager()
+	metrics := new(shared.AlertMetrics)
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		return true
+	}, metrics)
+
+	notif := makeNotification("host1", "CPU", "WARNING", "PROBLEM")
+
+	postCheckmkWebhook(t, handler, "test-secret", notif)
+	if metrics.AlertsCooldown.Load() != 0 {
+		t.Errorf("expected 0 cooldown skips after first request, got %d", metrics.AlertsCooldown.Load())
+	}
+
+	postCheckmkWebhook(t, handler, "test-secret", notif)
+	if metrics.AlertsCooldown.Load() != 1 {
+		t.Errorf("expected 1 cooldown skip after duplicate request, got %d", metrics.AlertsCooldown.Load())
+	}
+}
+
 func TestCheckmkHandleWebhook_QueueFull_Returns503(t *testing.T) {
 	cfg := makeCheckmkConfig()
 	cd := shared.NewCooldownManager()
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		return false // queue always full
-	})
+	}, nil)
 
 	notif := makeNotification("host1", "CPU", "WARNING", "PROBLEM")
 	rr := postCheckmkWebhook(t, handler, "test-secret", notif)
@@ -223,7 +245,7 @@ func TestCheckmkHandleWebhook_QueueFull_ClearsCooldown(t *testing.T) {
 	// First attempt: queue full
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		return false
-	})
+	}, nil)
 	notif := makeNotification("host1", "Disk", "CRITICAL", "PROBLEM")
 	postCheckmkWebhook(t, handler, "test-secret", notif)
 
@@ -232,7 +254,7 @@ func TestCheckmkHandleWebhook_QueueFull_ClearsCooldown(t *testing.T) {
 	handler2 := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	})
+	}, nil)
 	postCheckmkWebhook(t, handler2, "test-secret", notif)
 	if enqueued.Load() != 1 {
 		t.Errorf("expected alert re-enqueued after cooldown cleared, got %d", enqueued.Load())
@@ -246,7 +268,7 @@ func TestCheckmkHandleWebhook_AllFieldsPopulated(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		received = ap
 		return true
-	})
+	}, nil)
 
 	notif := CheckMKNotification{
 		Hostname:           "db01",
@@ -294,7 +316,7 @@ func TestCheckmkHandleWebhook_FingerprintNotEmpty(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		received = ap
 		return true
-	})
+	}, nil)
 
 	notif := makeNotification("host1", "CPU", "WARNING", "PROBLEM")
 	postCheckmkWebhook(t, handler, "test-secret", notif)

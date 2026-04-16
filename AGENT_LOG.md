@@ -16,12 +16,13 @@ This file is maintained by the autonomous improvement agent. Read it at the star
 - **fix: runSSHCommand data race** — Replaced shared `output`/`cmdErr` variables (written by the goroutine after timeout returns) with a buffered `chan sshResult`. The goroutine now sends its result into the channel and can always complete without blocking, eliminating the data race. Added three tests in `ssh_test.go` using an in-process SSH server: `TestRunSSHCommand_Success`, `TestRunSSHCommand_CommandError`, and `TestRunSSHCommand_Timeout`.
 - **test: RunToolLoop branch coverage** — Added 4 tests covering previously untested paths: API error in JSON body (`resp.Error` field), tool handler returning an error (error string sent as tool_result content), multiple tool calls in a single round (both handlers invoked in order), and forced summary request failing with HTTP error.
 - **feat: Prometheus-compatible /metrics endpoint** — Added `internal/shared/metrics.go` with `AlertMetrics` (5 `atomic.Int64` counters: webhooks received, alerts queued, queue full, processed, failed) and `MetricsHandler()` producing Prometheus text format (version 0.0.4). Both `main.go` entrypoints now register `GET /metrics`, wrap the webhook handler to count received requests, and thread `*AlertMetrics` through to `processAlert` for success/failure counting. No new dependencies — standard library only. 6 tests added in `metrics_test.go`.
+- **feat: cooldown counter in AlertMetrics** — Added `AlertsCooldown atomic.Int64` to `AlertMetrics` and exposed it as `alert_analyzer_alerts_cooldown_total` in `MetricsHandler()`. Both `HandleWebhook` functions now accept `*shared.AlertMetrics` (nil-safe) and increment `AlertsCooldown` when an alert is skipped due to deduplication cooldown. Both `main.go` entrypoints pass `metrics` to the handler. 2 new tests (`TestHandleWebhook_CooldownIncrementsMetric`, `TestCheckmkHandleWebhook_CooldownIncrementsMetric`) verify counter behavior; existing handler tests updated to pass `nil` metrics.
 
 ## Test Coverage Status
 
 | Package | Source Files | Test Files | Coverage Notes |
 |---|---|---|---|
-| `internal/shared/` | claude.go, cooldown.go, metrics.go, ntfy.go, redact.go, types.go | claude_test.go, cooldown_test.go, metrics_test.go, ntfy_test.go, redact_test.go, types_test.go | All files covered; `metrics.go` tested for init, content-type, metric names, HELP/TYPE lines, counter values, and concurrent safety |
+| `internal/shared/` | claude.go, cooldown.go, metrics.go, ntfy.go, redact.go, types.go | claude_test.go, cooldown_test.go, metrics_test.go, ntfy_test.go, redact_test.go, types_test.go | All files covered; `metrics.go` tested for init (including `AlertsCooldown`), content-type, metric names, HELP/TYPE lines, counter values, and concurrent safety |
 | `internal/k8s/` | handler.go, context.go, types.go | handler_test.go, context_test.go | `context.go` fully covered: GatherContext, GetKubeContext, GetPrometheusMetrics all tested directly with fake k8s client and httptest |
 | `internal/checkmk/` | agent.go, context.go, handler.go, ssh.go, types.go | agent_test.go, context_test.go, handler_test.go, ssh_test.go | Good coverage; `ssh.go` now has success, command-error, and timeout tests via in-process server |
 | `cmd/k8s-analyzer/` | main.go | none | Entrypoint, hard to unit test |
@@ -29,4 +30,4 @@ This file is maintained by the autonomous improvement agent. Read it at the star
 
 ## Potential Next Improvements
 
-- **Observability: cooldown counter** — `AlertMetrics` does not yet count cooldown-skipped alerts because that decision happens inside the handlers. Adding an `AlertsCooldown atomic.Int64` field and threading it through `HandleWebhook` (requires adding a `*shared.AlertMetrics` param + updating all handler tests) would complete the metrics picture.
+_(no items pending)_

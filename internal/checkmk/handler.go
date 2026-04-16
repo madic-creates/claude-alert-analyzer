@@ -13,7 +13,10 @@ import (
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 )
 
-func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(shared.AlertPayload) bool) http.HandlerFunc {
+// HandleWebhook returns an HTTP handler that receives CheckMK webhook payloads,
+// validates auth, applies cooldown, and enqueues alerts for processing.
+// metrics may be nil, in which case no counters are incremented by the handler.
+func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(shared.AlertPayload) bool, metrics *shared.AlertMetrics) http.HandlerFunc {
 	cooldownTTL := time.Duration(cfg.CooldownSeconds) * time.Second
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +49,9 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 
 		if !cooldown.CheckAndSet(fp, cooldownTTL) {
 			slog.Info("in cooldown", "hostname", notif.Hostname, "service", notif.ServiceDescription)
+			if metrics != nil {
+				metrics.AlertsCooldown.Add(1)
+			}
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, "in cooldown")
 			return

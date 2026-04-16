@@ -15,6 +15,8 @@ type AlertMetrics struct {
 	AlertsQueued atomic.Int64
 	// AlertsQueueFull counts alerts dropped because the work queue was at capacity.
 	AlertsQueueFull atomic.Int64
+	// AlertsCooldown counts alerts skipped because a duplicate is already in cooldown.
+	AlertsCooldown atomic.Int64
 	// AlertsProcessed counts alerts that were fully analyzed and published.
 	AlertsProcessed atomic.Int64
 	// AlertsFailed counts alerts where analysis or publishing failed.
@@ -35,6 +37,9 @@ func (m *AlertMetrics) MetricsHandler() http.HandlerFunc {
 		fmt.Fprintf(w, "# HELP alert_analyzer_alerts_queue_full_total Alerts dropped because the work queue was full.\n")
 		fmt.Fprintf(w, "# TYPE alert_analyzer_alerts_queue_full_total counter\n")
 		fmt.Fprintf(w, "alert_analyzer_alerts_queue_full_total %d\n", m.AlertsQueueFull.Load())
+		fmt.Fprintf(w, "# HELP alert_analyzer_alerts_cooldown_total Alerts skipped because a duplicate is in cooldown.\n")
+		fmt.Fprintf(w, "# TYPE alert_analyzer_alerts_cooldown_total counter\n")
+		fmt.Fprintf(w, "alert_analyzer_alerts_cooldown_total %d\n", m.AlertsCooldown.Load())
 		fmt.Fprintf(w, "# HELP alert_analyzer_alerts_processed_total Alerts successfully analyzed and published.\n")
 		fmt.Fprintf(w, "# TYPE alert_analyzer_alerts_processed_total counter\n")
 		fmt.Fprintf(w, "alert_analyzer_alerts_processed_total %d\n", m.AlertsProcessed.Load())

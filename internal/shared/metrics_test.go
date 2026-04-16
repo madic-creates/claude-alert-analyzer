@@ -18,6 +18,9 @@ func TestAlertMetrics_InitialCountersAreZero(t *testing.T) {
 	if m.AlertsQueueFull.Load() != 0 {
 		t.Errorf("AlertsQueueFull initial value = %d, want 0", m.AlertsQueueFull.Load())
 	}
+	if m.AlertsCooldown.Load() != 0 {
+		t.Errorf("AlertsCooldown initial value = %d, want 0", m.AlertsCooldown.Load())
+	}
 	if m.AlertsProcessed.Load() != 0 {
 		t.Errorf("AlertsProcessed initial value = %d, want 0", m.AlertsProcessed.Load())
 	}
@@ -61,6 +64,7 @@ func TestMetricsHandler_AllMetricNamesPresent(t *testing.T) {
 		"alert_analyzer_webhooks_received_total",
 		"alert_analyzer_alerts_queued_total",
 		"alert_analyzer_alerts_queue_full_total",
+		"alert_analyzer_alerts_cooldown_total",
 		"alert_analyzer_alerts_processed_total",
 		"alert_analyzer_alerts_failed_total",
 	}
@@ -94,6 +98,7 @@ func TestMetricsHandler_CounterValuesReflected(t *testing.T) {
 	m.WebhooksReceived.Add(3)
 	m.AlertsQueued.Add(2)
 	m.AlertsQueueFull.Add(1)
+	m.AlertsCooldown.Add(4)
 	m.AlertsProcessed.Add(5)
 	m.AlertsFailed.Add(1)
 
@@ -106,6 +111,7 @@ func TestMetricsHandler_CounterValuesReflected(t *testing.T) {
 		"alert_analyzer_webhooks_received_total 3",
 		"alert_analyzer_alerts_queued_total 2",
 		"alert_analyzer_alerts_queue_full_total 1",
+		"alert_analyzer_alerts_cooldown_total 4",
 		"alert_analyzer_alerts_processed_total 5",
 		"alert_analyzer_alerts_failed_total 1",
 	}

@@ -131,7 +131,7 @@ func main() {
 			metrics.AlertsQueueFull.Add(1)
 			return false
 		}
-	})
+	}, metrics)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {

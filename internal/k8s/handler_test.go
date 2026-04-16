@@ -61,7 +61,7 @@ func TestHandleWebhook_UnauthorizedMissingToken(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	})
+	}, nil)
 
 	req := httptest.NewRequest("POST", "/webhook", bytes.NewReader([]byte(`{}`)))
 	rr := httptest.NewRecorder()
@@ -78,7 +78,7 @@ func TestHandleWebhook_UnauthorizedMissingToken(t *testing.T) {
 func TestHandleWebhook_UnauthorizedWrongToken(t *testing.T) {
 	cfg := makeConfig()
 	cd := shared.NewCooldownManager()
-	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true })
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil)
 
 	rr := postWebhook(t, handler, "wrong-secret", makeWebhook(nil))
 	if rr.Code != http.StatusUnauthorized {
@@ -89,7 +89,7 @@ func TestHandleWebhook_UnauthorizedWrongToken(t *testing.T) {
 func TestHandleWebhook_InvalidJSON(t *testing.T) {
 	cfg := makeConfig()
 	cd := shared.NewCooldownManager()
-	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true })
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil)
 
 	req := httptest.NewRequest("POST", "/webhook", bytes.NewReader([]byte(`not json`)))
 	req.Header.Set("Authorization", "Bearer test-secret")
@@ -108,7 +108,7 @@ func TestHandleWebhook_EmptyAlerts(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	})
+	}, nil)
 
 	rr := postWebhook(t, handler, "test-secret", makeWebhook([]Alert{}))
 	if rr.Code != http.StatusOK {
@@ -127,7 +127,7 @@ func TestHandleWebhook_SkipsResolvedAlerts(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	})
+	}, nil)
 
 	alerts := []Alert{
 		makeAlert("fp1", "TestAlert", "resolved"),
@@ -150,7 +150,7 @@ func TestHandleWebhook_EnqueuesFiringAlert(t *testing.T) {
 		enqueued.Add(1)
 		receivedAlert = ap
 		return true
-	})
+	}, nil)
 
 	alerts := []Alert{
 		makeAlert("fp-firing", "TestFiring", "firing"),
@@ -187,7 +187,7 @@ func TestHandleWebhook_CooldownDeduplicates(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	})
+	}, nil)
 
 	alerts := []Alert{makeAlert("fp-dedup", "TestDedup", "firing")}
 
@@ -204,12 +204,34 @@ func TestHandleWebhook_CooldownDeduplicates(t *testing.T) {
 	}
 }
 
+func TestHandleWebhook_CooldownIncrementsMetric(t *testing.T) {
+	cfg := makeConfig()
+	cfg.CooldownSeconds = 60
+	cd := shared.NewCooldownManager()
+	metrics := new(shared.AlertMetrics)
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		return true
+	}, metrics)
+
+	alerts := []Alert{makeAlert("fp-metric", "TestMetric", "firing")}
+
+	postWebhook(t, handler, "test-secret", makeWebhook(alerts))
+	if metrics.AlertsCooldown.Load() != 0 {
+		t.Errorf("expected 0 cooldown skips after first request, got %d", metrics.AlertsCooldown.Load())
+	}
+
+	postWebhook(t, handler, "test-secret", makeWebhook(alerts))
+	if metrics.AlertsCooldown.Load() != 1 {
+		t.Errorf("expected 1 cooldown skip after duplicate request, got %d", metrics.AlertsCooldown.Load())
+	}
+}
+
 func TestHandleWebhook_QueueFull_Returns503(t *testing.T) {
 	cfg := makeConfig()
 	cd := shared.NewCooldownManager()
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		return false // queue always full
-	})
+	}, nil)
 
 	alerts := []Alert{makeAlert("fp-full", "TestFull", "firing")}
 	rr := postWebhook(t, handler, "test-secret", makeWebhook(alerts))
@@ -224,7 +246,7 @@ func TestHandleWebhook_QueueFull_ClearsCooldown(t *testing.T) {
 	cd := shared.NewCooldownManager()
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		return false // queue always full
-	})
+	}, nil)
 
 	alerts := []Alert{makeAlert("fp-clear", "TestClear", "firing")}
 	postWebhook(t, handler, "test-secret", makeWebhook(alerts))
@@ -234,7 +256,7 @@ func TestHandleWebhook_QueueFull_ClearsCooldown(t *testing.T) {
 	handler2 := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	})
+	}, nil)
 	postWebhook(t, handler2, "test-secret", makeWebhook(alerts))
 	if enqueued.Load() != 1 {
 		t.Errorf("expected alert re-enqueued after cooldown cleared, got %d", enqueued.Load())
@@ -252,7 +274,7 @@ func TestHandleWebhook_MultipleAlerts_PartialEnqueue(t *testing.T) {
 			return true
 		}
 		return false // queue full for fp2
-	})
+	}, nil)
 
 	alerts := []Alert{
 		makeAlert("fp-multi-1", "Alert1", "firing"),
@@ -276,7 +298,7 @@ func TestHandleWebhook_ResolvedNotSkipped_WhenDisabled(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	})
+	}, nil)
 
 	alerts := []Alert{makeAlert("fp-res", "TestResolved", "resolved")}
 	postWebhook(t, handler, "test-secret", makeWebhook(alerts))
@@ -292,7 +314,7 @@ func TestHandleWebhook_AlertFieldsPopulated(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		received = ap
 		return true
-	})
+	}, nil)
 
 	alert := Alert{
 		Fingerprint: "fp-fields",

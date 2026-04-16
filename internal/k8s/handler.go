@@ -14,7 +14,8 @@ import (
 
 // HandleWebhook returns an HTTP handler that receives Alertmanager webhook payloads,
 // validates auth, applies cooldown, and enqueues alerts for processing.
-func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(shared.AlertPayload) bool) http.HandlerFunc {
+// metrics may be nil, in which case no counters are incremented by the handler.
+func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(shared.AlertPayload) bool, metrics *shared.AlertMetrics) http.HandlerFunc {
 	cooldownTTL := time.Duration(cfg.CooldownSeconds) * time.Second
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +47,9 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 
 			if !cooldown.CheckAndSet(alert.Fingerprint, cooldownTTL) {
 				slog.Info("in cooldown", "alertname", alert.Labels["alertname"])
+				if metrics != nil {
+					metrics.AlertsCooldown.Add(1)
+				}
 				continue
 			}
 
