@@ -106,6 +106,7 @@ func main() {
 
 	cooldownMgr := shared.NewCooldownManager()
 	workerCtx, workerCancel := context.WithCancel(context.Background())
+	defer workerCancel()
 	metrics := new(shared.AlertMetrics)
 
 	type workItem struct{ alert shared.AlertPayload }
@@ -145,11 +146,12 @@ func main() {
 	})
 
 	server := &http.Server{
-		Addr:         ":" + cfg.Port,
-		Handler:      mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:              ":" + cfg.Port,
+		Handler:           mux,
+		ReadTimeout:       10 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
