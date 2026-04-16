@@ -2,6 +2,7 @@ package shared
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -115,6 +116,68 @@ func TestServer_SafeProcess_PanicDoesNotPropagate(t *testing.T) {
 
 	if processed.Load() != 1 {
 		t.Errorf("processed = %d after panic, want 1", processed.Load())
+	}
+}
+
+func TestServer_BuildMux_Ready_NilReadyCheck(t *testing.T) {
+	metrics := new(AlertMetrics)
+	srv := NewServer(ServerConfig{Port: "0", WorkerCount: 1, QueueSize: 5, DrainTimeout: 5 * time.Second}, metrics,
+		func(ctx context.Context, alert AlertPayload) {})
+	// ReadyCheck is nil — should always return 200.
+	mux := srv.BuildMux(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+
+	req := httptest.NewRequest("GET", "/ready", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("GET /ready (nil check) = %d, want 200", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "ready") {
+		t.Errorf("body = %q, want 'ready'", w.Body.String())
+	}
+}
+
+func TestServer_BuildMux_Ready_CheckPasses(t *testing.T) {
+	metrics := new(AlertMetrics)
+	srv := NewServer(ServerConfig{Port: "0", WorkerCount: 1, QueueSize: 5, DrainTimeout: 5 * time.Second}, metrics,
+		func(ctx context.Context, alert AlertPayload) {})
+	srv.ReadyCheck = func(ctx context.Context) error { return nil }
+
+	mux := srv.BuildMux(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+
+	req := httptest.NewRequest("GET", "/ready", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("GET /ready (check passes) = %d, want 200", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "ready") {
+		t.Errorf("body = %q, want 'ready'", w.Body.String())
+	}
+}
+
+func TestServer_BuildMux_Ready_CheckFails(t *testing.T) {
+	metrics := new(AlertMetrics)
+	srv := NewServer(ServerConfig{Port: "0", WorkerCount: 1, QueueSize: 5, DrainTimeout: 5 * time.Second}, metrics,
+		func(ctx context.Context, alert AlertPayload) {})
+	srv.ReadyCheck = func(ctx context.Context) error { return fmt.Errorf("k8s api unreachable") }
+
+	mux := srv.BuildMux(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+
+	req := httptest.NewRequest("GET", "/ready", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("GET /ready (check fails) = %d, want 503", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "not ready") {
+		t.Errorf("body = %q, want 'not ready: ...'", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "k8s api unreachable") {
+		t.Errorf("body = %q, want error message included", w.Body.String())
 	}
 }
 

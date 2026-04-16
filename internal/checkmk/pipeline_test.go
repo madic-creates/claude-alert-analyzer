@@ -24,17 +24,32 @@ func (m *mockAnalyzer) RunToolLoop(ctx context.Context, systemPrompt, userPrompt
 	return m.result, m.err
 }
 
+type publishCall struct {
+	title    string
+	priority string
+	body     string
+}
+
 type mockPublisher struct {
-	published []string
-	err       error
+	calls []publishCall
+	err   error
 }
 
 func (m *mockPublisher) Publish(ctx context.Context, title, priority, body string) error {
-	m.published = append(m.published, body)
+	m.calls = append(m.calls, publishCall{title: title, priority: priority, body: body})
 	return m.err
 }
 
 func (m *mockPublisher) Name() string { return "mock" }
+
+// published returns the bodies published so far (backward-compatible helper).
+func (m *mockPublisher) published() []string {
+	out := make([]string, len(m.calls))
+	for i, c := range m.calls {
+		out[i] = c.body
+	}
+	return out
+}
 
 func TestProcessAlert_NoSSH(t *testing.T) {
 	pub := &mockPublisher{}
@@ -68,8 +83,8 @@ func TestProcessAlert_NoSSH(t *testing.T) {
 	if metrics.AlertsProcessed.Load() != 1 {
 		t.Errorf("AlertsProcessed = %d, want 1", metrics.AlertsProcessed.Load())
 	}
-	if len(pub.published) != 1 || pub.published[0] != "disk full analysis" {
-		t.Errorf("published = %v", pub.published)
+	if bodies := pub.published(); len(bodies) != 1 || bodies[0] != "disk full analysis" {
+		t.Errorf("published = %v", bodies)
 	}
 }
 
@@ -150,5 +165,131 @@ func TestProcessAlert_AnalysisFails_CooldownCleared(t *testing.T) {
 
 	if metrics.AlertsFailed.Load() != 1 {
 		t.Errorf("AlertsFailed = %d, want 1", metrics.AlertsFailed.Load())
+	}
+}
+
+// TestProcessAlert_PublishFails verifies that when PublishAll returns an error
+// the cooldown is cleared (so the alert can be retried) and AlertsFailed is
+// incremented.
+func TestProcessAlert_PublishFails(t *testing.T) {
+	pub := &mockPublisher{err: fmt.Errorf("ntfy unavailable")}
+	cooldown := shared.NewCooldownManager()
+	metrics := new(shared.AlertMetrics)
+
+	deps := PipelineDeps{
+		Analyzer:   &mockAnalyzer{result: "disk analysis"},
+		Publishers: []shared.Publisher{pub},
+		Cooldown:   cooldown,
+		Metrics:    metrics,
+		SSHEnabled: false,
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		ValidateHost: func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
+			return &HostInfo{}, nil
+		},
+	}
+
+	alert := shared.AlertPayload{Fingerprint: "fp1", Title: "DiskFull", Severity: "critical", Fields: map[string]string{"hostname": "h", "host_address": "1.2.3.4"}}
+	ProcessAlert(context.Background(), deps, alert)
+
+	if metrics.AlertsFailed.Load() != 1 {
+		t.Errorf("AlertsFailed = %d, want 1", metrics.AlertsFailed.Load())
+	}
+	if metrics.AlertsProcessed.Load() != 0 {
+		t.Errorf("AlertsProcessed = %d, want 0", metrics.AlertsProcessed.Load())
+	}
+	// Cooldown must be cleared so the next webhook can re-trigger analysis.
+	if !cooldown.CheckAndSet("fp1", 300*1e9) {
+		t.Error("cooldown not cleared after publish failure")
+	}
+}
+
+// TestProcessAlert_PriorityMapping verifies the checkmk severity → ntfy priority
+// table and that an unrecognised severity falls back to "3".
+func TestProcessAlert_PriorityMapping(t *testing.T) {
+	cases := []struct {
+		severity string
+		want     string
+	}{
+		{"critical", "5"},
+		{"warning", "4"},
+		{"unknown", "3"},
+		{"ok", "2"},
+		{"", "3"},         // empty → default
+		{"CRITICAL", "3"}, // case-sensitive → default
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(fmt.Sprintf("severity=%q", tc.severity), func(t *testing.T) {
+			pub := &mockPublisher{}
+			metrics := new(shared.AlertMetrics)
+
+			deps := PipelineDeps{
+				Analyzer:   &mockAnalyzer{result: "analysis"},
+				Publishers: []shared.Publisher{pub},
+				Cooldown:   shared.NewCooldownManager(),
+				Metrics:    metrics,
+				SSHEnabled: false,
+				GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
+					return shared.AnalysisContext{}
+				},
+				ValidateHost: func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
+					return &HostInfo{}, nil
+				},
+			}
+
+			alert := shared.AlertPayload{
+				Fingerprint: "fp-" + tc.severity,
+				Title:       "TestAlert",
+				Severity:    tc.severity,
+				Fields:      map[string]string{"hostname": "h", "host_address": "1.2.3.4"},
+			}
+			ProcessAlert(context.Background(), deps, alert)
+
+			if len(pub.calls) != 1 {
+				t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
+			}
+			if pub.calls[0].priority != tc.want {
+				t.Errorf("priority = %q, want %q", pub.calls[0].priority, tc.want)
+			}
+		})
+	}
+}
+
+// TestProcessAlert_TitleFormatting verifies the published title format.
+func TestProcessAlert_TitleFormatting(t *testing.T) {
+	pub := &mockPublisher{}
+	metrics := new(shared.AlertMetrics)
+
+	deps := PipelineDeps{
+		Analyzer:   &mockAnalyzer{result: "analysis"},
+		Publishers: []shared.Publisher{pub},
+		Cooldown:   shared.NewCooldownManager(),
+		Metrics:    metrics,
+		SSHEnabled: false,
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		ValidateHost: func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
+			return &HostInfo{}, nil
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "fp-title",
+		Title:       "High CPU Usage",
+		Severity:    "warning",
+		Fields:      map[string]string{"hostname": "web01", "host_address": "10.0.0.1"},
+	}
+	ProcessAlert(context.Background(), deps, alert)
+
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
+	}
+	wantTitle := "Analysis: High CPU Usage"
+	if pub.calls[0].title != wantTitle {
+		t.Errorf("title = %q, want %q", pub.calls[0].title, wantTitle)
 	}
 }
