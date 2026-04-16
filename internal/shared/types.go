@@ -49,19 +49,6 @@ type BaseConfig struct {
 	APIKey          string
 }
 
-// ClaudeRequest is the Claude Messages API request body.
-type ClaudeRequest struct {
-	Model     string          `json:"model"`
-	MaxTokens int             `json:"max_tokens"`
-	System    string          `json:"system"`
-	Messages  []ClaudeMessage `json:"messages"`
-}
-
-type ClaudeMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
 // Tool-use types for agentic Claude interactions.
 
 type Tool struct {
@@ -126,18 +113,3 @@ type ToolResponse struct {
 	} `json:"error,omitempty"`
 }
 
-// ClaudeResponse is the Claude Messages API response body.
-type ClaudeResponse struct {
-	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text,omitempty"`
-	} `json:"content"`
-	Usage struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
-	} `json:"usage"`
-	Error *struct {
-		Type    string `json:"type"`
-		Message string `json:"message"`
-	} `json:"error,omitempty"`
-}

@@ -60,11 +60,11 @@ func sendRequest(ctx context.Context, cfg BaseConfig, body any) ([]byte, error) 
 
 // AnalyzeWithClaude sends a single-turn analysis request. Used by k8s-analyzer.
 func AnalyzeWithClaude(ctx context.Context, cfg BaseConfig, systemPrompt, userPrompt string) (string, error) {
-	reqBody := ClaudeRequest{
+	reqBody := ToolRequest{
 		Model:     cfg.ClaudeModel,
 		MaxTokens: 2048,
 		System:    systemPrompt,
-		Messages:  []ClaudeMessage{{Role: "user", Content: userPrompt}},
+		Messages:  []ToolMessage{{Role: "user", Content: userPrompt}},
 	}
 
 	respBody, err := sendRequest(ctx, cfg, reqBody)
@@ -72,7 +72,7 @@ func AnalyzeWithClaude(ctx context.Context, cfg BaseConfig, systemPrompt, userPr
 		return "", err
 	}
 
-	var result ClaudeResponse
+	var result ToolResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return "", fmt.Errorf("parse response: %w", err)
 	}
@@ -81,19 +81,12 @@ func AnalyzeWithClaude(ctx context.Context, cfg BaseConfig, systemPrompt, userPr
 		return "", fmt.Errorf("API error: %s: %s", result.Error.Type, result.Error.Message)
 	}
 
-	var parts []string
-	for _, c := range result.Content {
-		if c.Type == "text" && c.Text != "" {
-			parts = append(parts, c.Text)
-		}
-	}
-
 	slog.Info("Claude analysis complete",
 		"model", cfg.ClaudeModel,
 		"inputTokens", result.Usage.InputTokens,
 		"outputTokens", result.Usage.OutputTokens)
 
-	return strings.Join(parts, "\n"), nil
+	return extractText(result.Content), nil
 }
 
 // RunToolLoop runs a multi-turn Claude conversation with tool use.
