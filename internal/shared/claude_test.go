@@ -568,10 +568,10 @@ func TestRunToolLoop_MaxTokensStopReason(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "test"}
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	result, err := RunToolLoop(context.Background(), cfg, "system", "user prompt", tools, 10,
+	result, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) {
 			t.Fatal("tool handler should not be called on max_tokens response")
 			return "", nil
