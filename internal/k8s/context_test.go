@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +14,9 @@ import (
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 // helpers
@@ -167,6 +170,31 @@ func TestGetKubeContext_WildcardAllowlistPermitsLogs(t *testing.T) {
 		if !strings.Contains(logs, "no failing pods") && !strings.Contains(logs, "no logs") {
 			t.Errorf("unexpected logs output: %q", logs)
 		}
+	}
+}
+
+// TestGetKubeContext_PodLogsAPIError verifies that a Kubernetes API error when listing
+// failing pods is surfaced in the log output rather than being silently masked as
+// "(no failing pods)". Previously, the two conditions (err != nil) and
+// (len == 0) were merged, so an API outage was indistinguishable from a healthy cluster.
+func TestGetKubeContext_PodLogsAPIError(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	// Inject an error for any pod List call so getPodLogs hits the error path.
+	cs.Fake.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("kube api unavailable")
+	})
+	alert := makeAlertWithLabels(map[string]string{"namespace": "prod"})
+	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+
+	_, _, logs := GetKubeContext(context.Background(), cs, alert, cfg)
+	if strings.Contains(logs, "no failing pods") {
+		t.Errorf("API error must not be masked as '(no failing pods)', got %q", logs)
+	}
+	if !strings.Contains(logs, "failed to list failing pods") {
+		t.Errorf("expected error message in logs output, got %q", logs)
+	}
+	if !strings.Contains(logs, "kube api unavailable") {
+		t.Errorf("expected underlying error in logs output, got %q", logs)
 	}
 }
 

@@ -210,7 +210,11 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace s
 	podList, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		FieldSelector: "status.phase!=Running,status.phase!=Succeeded",
 	})
-	if err != nil || len(podList.Items) == 0 {
+	if err != nil {
+		slog.Warn("failed to list failing pods", "namespace", namespace, "error", err)
+		return fmt.Sprintf("(failed to list failing pods: %v)", err)
+	}
+	if len(podList.Items) == 0 {
 		return "(no failing pods)"
 	}
 
