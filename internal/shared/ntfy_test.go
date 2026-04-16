@@ -23,7 +23,7 @@ func TestNtfyPublisher_Publish_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := &NtfyPublisher{URL: srv.URL, Topic: "alerts", Token: "tok123"}
+	p := &NtfyPublisher{HTTP: srv.Client(), URL: srv.URL, Topic: "alerts", Token: "tok123"}
 	err := p.Publish(context.Background(), "Test Alert", "high", "something broke")
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -50,7 +50,7 @@ func TestNtfyPublisher_Publish_NoToken(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := &NtfyPublisher{URL: srv.URL, Topic: "alerts", Token: ""}
+	p := &NtfyPublisher{HTTP: srv.Client(), URL: srv.URL, Topic: "alerts", Token: ""}
 	if err := p.Publish(context.Background(), "t", "default", "body"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestNtfyPublisher_Publish_NonOKStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := &NtfyPublisher{URL: srv.URL, Topic: "alerts"}
+	p := &NtfyPublisher{HTTP: srv.Client(), URL: srv.URL, Topic: "alerts"}
 	err := p.Publish(context.Background(), "t", "default", "body")
 	if err == nil {
 		t.Fatal("expected error for 403 response")
@@ -84,7 +84,7 @@ func TestNtfyPublisher_Publish_TruncatesLargeBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := &NtfyPublisher{URL: srv.URL, Topic: "alerts"}
+	p := &NtfyPublisher{HTTP: srv.Client(), URL: srv.URL, Topic: "alerts"}
 	largeBody := strings.Repeat("x", maxNtfyBodyBytes*2)
 	if err := p.Publish(context.Background(), "t", "default", largeBody); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -104,7 +104,7 @@ func TestNtfyPublisher_Publish_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	p := &NtfyPublisher{URL: srv.URL, Topic: "alerts"}
+	p := &NtfyPublisher{HTTP: srv.Client(), URL: srv.URL, Topic: "alerts"}
 	err := p.Publish(ctx, "t", "default", "body")
 	if err == nil {
 		t.Fatal("expected error for cancelled context")
@@ -182,11 +182,6 @@ func TestPublishAll_Empty(t *testing.T) {
 // TestNtfyPublisher_Publish_RetryOn5xx verifies that a 5xx response is retried
 // and ultimately succeeds on a later attempt.
 func TestNtfyPublisher_Publish_RetryOn5xx(t *testing.T) {
-	// Speed up test by using instant delays.
-	orig := ntfyRetryDelays
-	ntfyRetryDelays = []time.Duration{0, 0}
-	defer func() { ntfyRetryDelays = orig }()
-
 	callCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
@@ -198,7 +193,7 @@ func TestNtfyPublisher_Publish_RetryOn5xx(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := &NtfyPublisher{URL: srv.URL, Topic: "alerts"}
+	p := &NtfyPublisher{HTTP: srv.Client(), URL: srv.URL, Topic: "alerts", RetryDelays: []time.Duration{0, 0}}
 	err := p.Publish(context.Background(), "t", "default", "body")
 	if err != nil {
 		t.Fatalf("expected success after retries, got: %v", err)
@@ -211,10 +206,6 @@ func TestNtfyPublisher_Publish_RetryOn5xx(t *testing.T) {
 // TestNtfyPublisher_Publish_ExhaustsRetries verifies that after all retries are
 // exhausted the last error is returned.
 func TestNtfyPublisher_Publish_ExhaustsRetries(t *testing.T) {
-	orig := ntfyRetryDelays
-	ntfyRetryDelays = []time.Duration{0, 0}
-	defer func() { ntfyRetryDelays = orig }()
-
 	callCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
@@ -222,7 +213,7 @@ func TestNtfyPublisher_Publish_ExhaustsRetries(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := &NtfyPublisher{URL: srv.URL, Topic: "alerts"}
+	p := &NtfyPublisher{HTTP: srv.Client(), URL: srv.URL, Topic: "alerts", RetryDelays: []time.Duration{0, 0}}
 	err := p.Publish(context.Background(), "t", "default", "body")
 	if err == nil {
 		t.Fatal("expected error after all retries exhausted")
@@ -238,10 +229,6 @@ func TestNtfyPublisher_Publish_ExhaustsRetries(t *testing.T) {
 
 // TestNtfyPublisher_Publish_NoRetryOn4xx verifies that 4xx errors are not retried.
 func TestNtfyPublisher_Publish_NoRetryOn4xx(t *testing.T) {
-	orig := ntfyRetryDelays
-	ntfyRetryDelays = []time.Duration{0, 0}
-	defer func() { ntfyRetryDelays = orig }()
-
 	callCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
@@ -249,7 +236,7 @@ func TestNtfyPublisher_Publish_NoRetryOn4xx(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := &NtfyPublisher{URL: srv.URL, Topic: "alerts"}
+	p := &NtfyPublisher{HTTP: srv.Client(), URL: srv.URL, Topic: "alerts", RetryDelays: []time.Duration{0, 0}}
 	err := p.Publish(context.Background(), "t", "default", "body")
 	if err == nil {
 		t.Fatal("expected error for 401 response")
@@ -262,10 +249,6 @@ func TestNtfyPublisher_Publish_NoRetryOn4xx(t *testing.T) {
 // TestNtfyPublisher_Publish_RetryContextCancelled verifies that a cancelled
 // context aborts retries before the next delay completes.
 func TestNtfyPublisher_Publish_RetryContextCancelled(t *testing.T) {
-	orig := ntfyRetryDelays
-	ntfyRetryDelays = []time.Duration{5 * time.Second, 5 * time.Second} // long delays
-	defer func() { ntfyRetryDelays = orig }()
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
@@ -278,7 +261,7 @@ func TestNtfyPublisher_Publish_RetryContextCancelled(t *testing.T) {
 		cancel()
 	}()
 
-	p := &NtfyPublisher{URL: srv.URL, Topic: "alerts"}
+	p := &NtfyPublisher{HTTP: srv.Client(), URL: srv.URL, Topic: "alerts", RetryDelays: []time.Duration{5 * time.Second, 5 * time.Second}}
 	err := p.Publish(ctx, "t", "default", "body")
 	if err == nil {
 		t.Fatal("expected error when context cancelled during retry")

@@ -26,8 +26,8 @@ func TestSendRequest_OversizedResponseIsBounded(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "test"}
-	body, err := sendRequest(context.Background(), cfg, map[string]string{"msg": "hi"})
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
+	body, err := client.sendRequest(context.Background(), map[string]string{"msg": "hi"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -39,9 +39,9 @@ func TestSendRequest_OversizedResponseIsBounded(t *testing.T) {
 	}
 }
 
-// ---- AnalyzeWithClaude tests ----
+// ---- Analyze tests ----
 
-func TestAnalyzeWithClaude_Success(t *testing.T) {
+func TestAnalyze_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{
@@ -51,8 +51,8 @@ func TestAnalyzeWithClaude_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "claude-3"}
-	result, err := AnalyzeWithClaude(context.Background(), cfg, "sys prompt", "user prompt")
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
+	result, err := client.Analyze(context.Background(), "sys prompt", "user prompt")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestAnalyzeWithClaude_Success(t *testing.T) {
 	}
 }
 
-func TestAnalyzeWithClaude_MultipleTextBlocks(t *testing.T) {
+func TestAnalyze_MultipleTextBlocks(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{
@@ -74,8 +74,8 @@ func TestAnalyzeWithClaude_MultipleTextBlocks(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "claude-3"}
-	result, err := AnalyzeWithClaude(context.Background(), cfg, "sys", "user")
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
+	result, err := client.Analyze(context.Background(), "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestAnalyzeWithClaude_MultipleTextBlocks(t *testing.T) {
 	}
 }
 
-func TestAnalyzeWithClaude_EmptyContent(t *testing.T) {
+func TestAnalyze_EmptyContent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{
@@ -94,8 +94,8 @@ func TestAnalyzeWithClaude_EmptyContent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "claude-3"}
-	result, err := AnalyzeWithClaude(context.Background(), cfg, "sys", "user")
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
+	result, err := client.Analyze(context.Background(), "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestAnalyzeWithClaude_EmptyContent(t *testing.T) {
 	}
 }
 
-func TestAnalyzeWithClaude_NonTextBlocksIgnored(t *testing.T) {
+func TestAnalyze_NonTextBlocksIgnored(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		// A tool_use block mixed with text; only text should be returned
@@ -118,8 +118,8 @@ func TestAnalyzeWithClaude_NonTextBlocksIgnored(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "claude-3"}
-	result, err := AnalyzeWithClaude(context.Background(), cfg, "sys", "user")
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
+	result, err := client.Analyze(context.Background(), "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestAnalyzeWithClaude_NonTextBlocksIgnored(t *testing.T) {
 	}
 }
 
-func TestAnalyzeWithClaude_APIErrorInBody(t *testing.T) {
+func TestAnalyze_APIErrorInBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{
@@ -138,8 +138,8 @@ func TestAnalyzeWithClaude_APIErrorInBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "bad-model"}
-	_, err := AnalyzeWithClaude(context.Background(), cfg, "sys", "user")
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "bad-model"}
+	_, err := client.Analyze(context.Background(), "sys", "user")
 	if err == nil {
 		t.Fatal("expected error for API error body")
 	}
@@ -151,15 +151,15 @@ func TestAnalyzeWithClaude_APIErrorInBody(t *testing.T) {
 	}
 }
 
-func TestAnalyzeWithClaude_HTTPError(t *testing.T) {
+func TestAnalyze_HTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		fmt.Fprint(w, "rate limited")
 	}))
 	defer srv.Close()
 
-	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "claude-3"}
-	_, err := AnalyzeWithClaude(context.Background(), cfg, "sys", "user")
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
+	_, err := client.Analyze(context.Background(), "sys", "user")
 	if err == nil {
 		t.Fatal("expected error for non-200 response")
 	}
@@ -168,7 +168,7 @@ func TestAnalyzeWithClaude_HTTPError(t *testing.T) {
 	}
 }
 
-func TestAnalyzeWithClaude_AnthropicAuthHeader(t *testing.T) {
+func TestAnalyze_AnthropicAuthHeader(t *testing.T) {
 	var capturedAPIKey, capturedVersion, capturedAuthHeader string
 	srvAnthropic := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedAPIKey = r.Header.Get("x-api-key")
@@ -179,20 +179,15 @@ func TestAnalyzeWithClaude_AnthropicAuthHeader(t *testing.T) {
 	}))
 	defer srvAnthropic.Close()
 
-	// Inject "anthropic.com" into the URL string so the branch triggers,
-	// while still pointing to our test server by using a custom transport.
-	origClient := claudeHTTPClient
-	claudeHTTPClient = &http.Client{
-		Transport: rewriteHostTransport{target: srvAnthropic.URL},
+	// Use a custom transport that redirects to the test server while keeping
+	// the Anthropic URL for header detection.
+	client := &ClaudeClient{
+		HTTP:    &http.Client{Transport: rewriteHostTransport{target: srvAnthropic.URL}},
+		BaseURL: "https://api.anthropic.com/v1/messages",
+		APIKey:  "anthropic-secret",
+		Model:   "claude-3",
 	}
-	defer func() { claudeHTTPClient = origClient }()
-
-	cfg := BaseConfig{
-		APIBaseURL:  "https://api.anthropic.com/v1/messages",
-		APIKey:      "anthropic-secret",
-		ClaudeModel: "claude-3",
-	}
-	_, err := AnalyzeWithClaude(context.Background(), cfg, "sys", "user")
+	_, err := client.Analyze(context.Background(), "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -207,7 +202,7 @@ func TestAnalyzeWithClaude_AnthropicAuthHeader(t *testing.T) {
 	}
 }
 
-func TestAnalyzeWithClaude_OpenRouterAuthHeader(t *testing.T) {
+func TestAnalyze_OpenRouterAuthHeader(t *testing.T) {
 	var capturedAuth, capturedAPIKey string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedAuth = r.Header.Get("Authorization")
@@ -218,8 +213,8 @@ func TestAnalyzeWithClaude_OpenRouterAuthHeader(t *testing.T) {
 	defer srv.Close()
 
 	// srv.URL does not contain "anthropic.com" so OpenRouter branch fires.
-	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "openrouter-key", ClaudeModel: "claude-3"}
-	_, err := AnalyzeWithClaude(context.Background(), cfg, "sys", "user")
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "openrouter-key", Model: "claude-3"}
+	_, err := client.Analyze(context.Background(), "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -231,7 +226,7 @@ func TestAnalyzeWithClaude_OpenRouterAuthHeader(t *testing.T) {
 	}
 }
 
-func TestAnalyzeWithClaude_ContextCancellation(t *testing.T) {
+func TestAnalyze_ContextCancellation(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Never responds — context should cancel the request.
 		<-r.Context().Done()
@@ -241,8 +236,8 @@ func TestAnalyzeWithClaude_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "claude-3"}
-	_, err := AnalyzeWithClaude(ctx, cfg, "sys", "user")
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
+	_, err := client.Analyze(ctx, "sys", "user")
 	if err == nil {
 		t.Fatal("expected error for cancelled context")
 	}
@@ -278,10 +273,10 @@ func TestRunToolLoop_EndTurnImmediately(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "test"}
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	result, err := RunToolLoop(context.Background(), cfg, "system", "user prompt", tools, 10,
+	result, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) {
 			t.Fatal("tool handler should not be called")
 			return "", nil
@@ -321,11 +316,11 @@ func TestRunToolLoop_OneToolRoundThenEnd(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "test"}
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
 	var toolCalls int
-	result, err := RunToolLoop(context.Background(), cfg, "system", "user prompt", tools, 10,
+	result, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) {
 			toolCalls++
 			if name != "execute_command" {
@@ -373,11 +368,11 @@ func TestRunToolLoop_MaxRoundsForcesSummary(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "test"}
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
 	var toolCalls int
-	result, err := RunToolLoop(context.Background(), cfg, "system", "user prompt", tools, 2,
+	result, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 2,
 		func(name string, input json.RawMessage) (string, error) {
 			toolCalls++
 			return "up 5 days", nil
@@ -401,10 +396,10 @@ func TestRunToolLoop_APIError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "test"}
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	_, err := RunToolLoop(context.Background(), cfg, "system", "user prompt", tools, 10,
+	_, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) { return "", nil })
 
 	if err == nil {
@@ -422,10 +417,10 @@ func TestRunToolLoop_APIErrorInBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "test"}
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	_, err := RunToolLoop(context.Background(), cfg, "system", "user prompt", tools, 10,
+	_, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) { return "", nil })
 
 	if err == nil {
@@ -477,10 +472,10 @@ func TestRunToolLoop_ToolHandlerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "test"}
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	result, err := RunToolLoop(context.Background(), cfg, "system", "user prompt", tools, 5,
+	result, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 5,
 		func(name string, input json.RawMessage) (string, error) {
 			return "", fmt.Errorf("command not allowed")
 		})
@@ -520,14 +515,14 @@ func TestRunToolLoop_MultipleToolsInOneRound(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "test"}
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{
 		{Name: "tool_a", Description: "first", InputSchema: InputSchema{Type: "object"}},
 		{Name: "tool_b", Description: "second", InputSchema: InputSchema{Type: "object"}},
 	}
 
 	var calledTools []string
-	result, err := RunToolLoop(context.Background(), cfg, "system", "user prompt", tools, 5,
+	result, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 5,
 		func(name string, input json.RawMessage) (string, error) {
 			calledTools = append(calledTools, name)
 			return "ok", nil
@@ -573,10 +568,10 @@ func TestRunToolLoop_MaxTokensStopReason(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "test"}
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	result, err := RunToolLoop(context.Background(), cfg, "system", "user prompt", tools, 10,
+	result, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) {
 			t.Fatal("tool handler should not be called on max_tokens response")
 			return "", nil
@@ -617,10 +612,10 @@ func TestRunToolLoop_SummaryRequestFails(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "test"}
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	_, err := RunToolLoop(context.Background(), cfg, "system", "user prompt", tools, 1,
+	_, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "ok", nil })
 
 	if err == nil {

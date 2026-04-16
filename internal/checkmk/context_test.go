@@ -30,12 +30,8 @@ func TestValidateAndDescribeHost_Match(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := Config{
-		CheckMKAPIURL:    srv.URL + "/",
-		CheckMKAPIUser:   "automation",
-		CheckMKAPISecret: "secret",
-	}
-	_, err := ValidateAndDescribeHost(context.Background(), cfg, "testhost", "192.168.1.1")
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "automation", Secret: "secret"}
+	_, err := apiClient.ValidateAndDescribeHost(context.Background(), "testhost", "192.168.1.1")
 	if err != nil {
 		t.Errorf("expected valid host, got error: %v", err)
 	}
@@ -54,12 +50,8 @@ func TestValidateAndDescribeHost_AddressMismatch(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := Config{
-		CheckMKAPIURL:    srv.URL + "/",
-		CheckMKAPIUser:   "automation",
-		CheckMKAPISecret: "secret",
-	}
-	_, err := ValidateAndDescribeHost(context.Background(), cfg, "testhost", "10.0.0.99")
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "automation", Secret: "secret"}
+	_, err := apiClient.ValidateAndDescribeHost(context.Background(), "testhost", "10.0.0.99")
 	if err == nil {
 		t.Error("expected error for address mismatch")
 	}
@@ -71,12 +63,8 @@ func TestValidateAndDescribeHost_NotFound(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := Config{
-		CheckMKAPIURL:    srv.URL + "/",
-		CheckMKAPIUser:   "automation",
-		CheckMKAPISecret: "secret",
-	}
-	_, err := ValidateAndDescribeHost(context.Background(), cfg, "unknown", "1.2.3.4")
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "automation", Secret: "secret"}
+	_, err := apiClient.ValidateAndDescribeHost(context.Background(), "unknown", "1.2.3.4")
 	if err == nil {
 		t.Error("expected error for unknown host")
 	}
@@ -98,12 +86,8 @@ func TestValidateAndDescribeHost_ReturnsAIContext(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := Config{
-		CheckMKAPIURL:    srv.URL + "/",
-		CheckMKAPIUser:   "automation",
-		CheckMKAPISecret: "secret",
-	}
-	hostInfo, err := ValidateAndDescribeHost(context.Background(), cfg, "webserver01", "10.0.0.1")
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "automation", Secret: "secret"}
+	hostInfo, err := apiClient.ValidateAndDescribeHost(context.Background(), "webserver01", "10.0.0.1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -125,12 +109,8 @@ func TestValidateAndDescribeHost_NoAIContext(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := Config{
-		CheckMKAPIURL:    srv.URL + "/",
-		CheckMKAPIUser:   "automation",
-		CheckMKAPISecret: "secret",
-	}
-	hostInfo, err := ValidateAndDescribeHost(context.Background(), cfg, "plainhost", "10.0.0.2")
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "automation", Secret: "secret"}
+	hostInfo, err := apiClient.ValidateAndDescribeHost(context.Background(), "plainhost", "10.0.0.2")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,11 +126,7 @@ func TestGatherContext_WithHostContext(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := Config{
-		CheckMKAPIURL:    srv.URL + "/",
-		CheckMKAPIUser:   "automation",
-		CheckMKAPISecret: "secret",
-	}
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "automation", Secret: "secret"}
 	alert := shared.AlertPayload{
 		Fields: map[string]string{
 			"hostname":            "web01",
@@ -164,7 +140,7 @@ func TestGatherContext_WithHostContext(t *testing.T) {
 	}
 	hostInfo := &HostInfo{AIContext: "Debian 12, Nginx reverse proxy"}
 
-	actx := GatherContext(context.Background(), cfg, alert, hostInfo)
+	actx := GatherContext(context.Background(), apiClient, alert, hostInfo)
 
 	if len(actx.Sections) < 3 {
 		t.Fatalf("expected at least 3 sections, got %d", len(actx.Sections))
@@ -187,11 +163,7 @@ func TestGatherContext_NilHostInfo(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := Config{
-		CheckMKAPIURL:    srv.URL + "/",
-		CheckMKAPIUser:   "automation",
-		CheckMKAPISecret: "secret",
-	}
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "automation", Secret: "secret"}
 	alert := shared.AlertPayload{
 		Fields: map[string]string{
 			"hostname":            "web01",
@@ -204,7 +176,7 @@ func TestGatherContext_NilHostInfo(t *testing.T) {
 		},
 	}
 
-	actx := GatherContext(context.Background(), cfg, alert, nil)
+	actx := GatherContext(context.Background(), apiClient, alert, nil)
 
 	if len(actx.Sections) != 2 {
 		t.Fatalf("expected 2 sections, got %d", len(actx.Sections))
@@ -221,11 +193,7 @@ func TestGatherContext_HostContextSanitized(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := Config{
-		CheckMKAPIURL:    srv.URL + "/",
-		CheckMKAPIUser:   "automation",
-		CheckMKAPISecret: "secret",
-	}
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "automation", Secret: "secret"}
 	alert := shared.AlertPayload{
 		Fields: map[string]string{
 			"hostname":            "web01",
@@ -240,7 +208,7 @@ func TestGatherContext_HostContextSanitized(t *testing.T) {
 
 	t.Run("strips control chars", func(t *testing.T) {
 		hostInfo := &HostInfo{AIContext: "Debian\x00 12\x07"}
-		actx := GatherContext(context.Background(), cfg, alert, hostInfo)
+		actx := GatherContext(context.Background(), apiClient, alert, hostInfo)
 		if actx.Sections[0].Content != "Debian 12" {
 			t.Errorf("expected control chars stripped, got %q", actx.Sections[0].Content)
 		}
@@ -248,7 +216,7 @@ func TestGatherContext_HostContextSanitized(t *testing.T) {
 
 	t.Run("trims whitespace", func(t *testing.T) {
 		hostInfo := &HostInfo{AIContext: "  Debian 12  "}
-		actx := GatherContext(context.Background(), cfg, alert, hostInfo)
+		actx := GatherContext(context.Background(), apiClient, alert, hostInfo)
 		if actx.Sections[0].Content != "Debian 12" {
 			t.Errorf("expected trimmed, got %q", actx.Sections[0].Content)
 		}
@@ -257,7 +225,7 @@ func TestGatherContext_HostContextSanitized(t *testing.T) {
 	t.Run("truncates over 2048 bytes", func(t *testing.T) {
 		long := strings.Repeat("A", 2100)
 		hostInfo := &HostInfo{AIContext: long}
-		actx := GatherContext(context.Background(), cfg, alert, hostInfo)
+		actx := GatherContext(context.Background(), apiClient, alert, hostInfo)
 		content := actx.Sections[0].Content
 		if len(content) > 2048+len(" [truncated]") {
 			t.Errorf("expected truncation, got length %d", len(content))
@@ -272,7 +240,7 @@ func TestGatherContext_HostContextSanitized(t *testing.T) {
 		emoji := "🚀" // 4 bytes
 		long := strings.Repeat("A", 2046) + emoji + strings.Repeat("B", 100)
 		hostInfo := &HostInfo{AIContext: long}
-		actx := GatherContext(context.Background(), cfg, alert, hostInfo)
+		actx := GatherContext(context.Background(), apiClient, alert, hostInfo)
 		content := actx.Sections[0].Content
 		if !utf8.ValidString(content) {
 			t.Fatal("truncation produced invalid UTF-8")
@@ -284,7 +252,7 @@ func TestGatherContext_HostContextSanitized(t *testing.T) {
 
 	t.Run("empty after sanitize skips section", func(t *testing.T) {
 		hostInfo := &HostInfo{AIContext: "  \x00\x07  "}
-		actx := GatherContext(context.Background(), cfg, alert, hostInfo)
+		actx := GatherContext(context.Background(), apiClient, alert, hostInfo)
 		if actx.Sections[0].Name == "Host Context (operator-provided)" {
 			t.Error("expected no host context section for empty-after-sanitize input")
 		}
@@ -292,11 +260,7 @@ func TestGatherContext_HostContextSanitized(t *testing.T) {
 }
 
 func TestValidateAndDescribeHost_RejectsInvalidHostname(t *testing.T) {
-	cfg := Config{
-		CheckMKAPIURL:    "http://localhost/api/",
-		CheckMKAPIUser:   "automation",
-		CheckMKAPISecret: "secret",
-	}
+	apiClient := &APIClient{HTTP: http.DefaultClient, URL: "http://localhost/api/", User: "automation", Secret: "secret"}
 
 	tests := []struct {
 		name     string
@@ -317,7 +281,7 @@ func TestValidateAndDescribeHost_RejectsInvalidHostname(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ValidateAndDescribeHost(context.Background(), cfg, tt.hostname, "1.2.3.4")
+			_, err := apiClient.ValidateAndDescribeHost(context.Background(), tt.hostname, "1.2.3.4")
 			if err == nil {
 				t.Errorf("expected error for hostname %q, got nil", tt.hostname)
 			}
@@ -337,11 +301,7 @@ func TestValidateAndDescribeHost_AcceptsValidHostname(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := Config{
-		CheckMKAPIURL:    srv.URL + "/",
-		CheckMKAPIUser:   "automation",
-		CheckMKAPISecret: "secret",
-	}
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "automation", Secret: "secret"}
 
 	tests := []struct {
 		name     string
@@ -360,7 +320,7 @@ func TestValidateAndDescribeHost_AcceptsValidHostname(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ValidateAndDescribeHost(context.Background(), cfg, tt.hostname, "1.2.3.4")
+			_, err := apiClient.ValidateAndDescribeHost(context.Background(), tt.hostname, "1.2.3.4")
 			if err != nil && strings.Contains(err.Error(), "invalid hostname") {
 				t.Errorf("hostname %q should be accepted, got: %v", tt.hostname, err)
 			}

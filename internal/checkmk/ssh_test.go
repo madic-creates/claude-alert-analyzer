@@ -14,13 +14,13 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-func TestDialSSH_MissingKeyFile(t *testing.T) {
+func TestNewSSHDialer_MissingKeyFile(t *testing.T) {
 	cfg := Config{
 		SSHKeyPath:        "/nonexistent/key",
 		SSHKnownHostsPath: "/nonexistent/known_hosts",
 		SSHUser:           "test",
 	}
-	_, err := dialSSH(cfg, "localhost")
+	_, err := NewSSHDialer(cfg)
 	if err == nil {
 		t.Error("expected error for missing key file")
 	}
