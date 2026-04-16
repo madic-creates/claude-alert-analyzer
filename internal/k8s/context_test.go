@@ -562,3 +562,38 @@ func TestGetMetrics_MaliciousNamespaceDroppedFromQuery(t *testing.T) {
 		}
 	}
 }
+
+// TestQuery_MetricLabelsAreSorted verifies that when a Prometheus result contains
+// multiple metric labels they are emitted in alphabetical order, making the Claude
+// analysis context deterministic across runs.
+func TestQuery_MetricLabelsAreSorted(t *testing.T) {
+	// Return a result whose label keys are deliberately out of alphabetical order
+	// so we can detect whether sorting is applied.
+	srv := makePromServer(t, []PromResult{
+		{
+			Metric: map[string]string{
+				"zoo":    "last",
+				"alpha":  "first",
+				"middle": "between",
+			},
+			Value: [2]interface{}{1700000000, "42"},
+		},
+	})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	alert := makeAlertWithLabels(map[string]string{})
+	result := prom.GetMetrics(context.Background(), alert)
+
+	alphaIdx := strings.Index(result, "alpha=")
+	middleIdx := strings.Index(result, "middle=")
+	zooIdx := strings.Index(result, "zoo=")
+
+	if alphaIdx == -1 || middleIdx == -1 || zooIdx == -1 {
+		t.Fatalf("expected all labels in result, got: %q", result)
+	}
+	if !(alphaIdx < middleIdx && middleIdx < zooIdx) {
+		t.Errorf("metric labels not in sorted order: alpha@%d middle@%d zoo@%d\nresult: %q",
+			alphaIdx, middleIdx, zooIdx, result)
+	}
+}

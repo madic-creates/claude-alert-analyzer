@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -93,6 +94,7 @@ func (p *PrometheusClient) query(ctx context.Context, queryStr string) string {
 		for k, v := range r.Metric {
 			labels = append(labels, fmt.Sprintf("%s=%s", k, v))
 		}
+		sort.Strings(labels)
 		val := fmt.Sprintf("%v", r.Value[1])
 		lines = append(lines, fmt.Sprintf("%s: %s", strings.Join(labels, ", "), val))
 	}
