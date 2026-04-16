@@ -42,7 +42,7 @@ func promqlQuery(ctx context.Context, prometheusURL, query string) string {
 		return fmt.Sprintf("(query failed: %v)", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, shared.MaxResponseBytes))
 	if err != nil {
 		return "(failed to read response)"
 	}
