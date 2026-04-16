@@ -99,6 +99,7 @@ func main() {
 	publishers := buildPublishers()
 	cooldownMgr := shared.NewCooldownManager()
 	workerCtx, workerCancel := context.WithCancel(context.Background())
+	metrics := new(shared.AlertMetrics)
 
 	type workItem struct{ alert shared.AlertPayload }
 	workQueue := make(chan workItem, 20)
@@ -109,24 +110,32 @@ func main() {
 		go func() {
 			defer wg.Done()
 			for item := range workQueue {
-				processAlert(workerCtx, cfg, publishers, cooldownMgr, item.alert)
+				processAlert(workerCtx, cfg, publishers, cooldownMgr, metrics, item.alert)
 			}
 		}()
 	}
+
+	webhookHandler := checkmk.HandleWebhook(cfg, cooldownMgr, func(ap shared.AlertPayload) bool {
+		select {
+		case workQueue <- workItem{alert: ap}:
+			metrics.AlertsQueued.Add(1)
+			return true
+		default:
+			metrics.AlertsQueueFull.Add(1)
+			return false
+		}
+	})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "ok")
 	})
-	mux.HandleFunc("POST /webhook", checkmk.HandleWebhook(cfg, cooldownMgr, func(ap shared.AlertPayload) bool {
-		select {
-		case workQueue <- workItem{alert: ap}:
-			return true
-		default:
-			return false
-		}
-	}))
+	mux.HandleFunc("GET /metrics", metrics.MetricsHandler())
+	mux.HandleFunc("POST /webhook", func(w http.ResponseWriter, r *http.Request) {
+		metrics.WebhooksReceived.Add(1)
+		webhookHandler(w, r)
+	})
 
 	server := &http.Server{
 		Addr:         ":" + cfg.Port,
@@ -168,7 +177,7 @@ func main() {
 	slog.Info("shutdown complete")
 }
 
-func processAlert(ctx context.Context, cfg checkmk.Config, publishers []shared.Publisher, cooldownMgr *shared.CooldownManager, alert shared.AlertPayload) {
+func processAlert(ctx context.Context, cfg checkmk.Config, publishers []shared.Publisher, cooldownMgr *shared.CooldownManager, metrics *shared.AlertMetrics, alert shared.AlertPayload) {
 	hostname := alert.Fields["hostname"]
 	hostAddress := alert.Fields["host_address"]
 
@@ -208,6 +217,7 @@ func processAlert(ctx context.Context, cfg checkmk.Config, publishers []shared.P
 				fmt.Sprintf("Analysis FAILED: %s", alert.Title), "5",
 				fmt.Sprintf("**Agentic diagnostics failed** for %s: %v\n\nManual investigation needed.", alert.Title, err))
 			cooldownMgr.Clear(alert.Fingerprint)
+			metrics.AlertsFailed.Add(1)
 			return
 		}
 	} else {
@@ -219,6 +229,7 @@ func processAlert(ctx context.Context, cfg checkmk.Config, publishers []shared.P
 				fmt.Sprintf("Analysis FAILED: %s", alert.Title), "5",
 				fmt.Sprintf("**Analysis failed** for %s: %v\n\nManual investigation needed.", alert.Title, err))
 			cooldownMgr.Clear(alert.Fingerprint)
+			metrics.AlertsFailed.Add(1)
 			return
 		}
 	}
@@ -232,8 +243,10 @@ func processAlert(ctx context.Context, cfg checkmk.Config, publishers []shared.P
 	title := fmt.Sprintf("Analysis: %s", alert.Title)
 	if err := shared.PublishAll(ctx, publishers, title, priority, analysis); err != nil {
 		cooldownMgr.Clear(alert.Fingerprint)
+		metrics.AlertsFailed.Add(1)
 		return
 	}
 
+	metrics.AlertsProcessed.Add(1)
 	slog.Info("analysis complete", "hostname", hostname, "model", cfg.ClaudeModel)
 }
