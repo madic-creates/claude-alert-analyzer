@@ -11,6 +11,11 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
+// Dialer opens SSH connections to remote hosts.
+type Dialer interface {
+	Dial(host string) (*ssh.Client, error)
+}
+
 // SSHDialer caches the parsed SSH key and known_hosts callback.
 type SSHDialer struct {
 	signer          ssh.Signer

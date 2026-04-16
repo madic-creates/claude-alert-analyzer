@@ -114,7 +114,7 @@ func RunAgenticDiagnostics(
 	ctx context.Context,
 	cfg Config,
 	client shared.ToolLoopRunner,
-	dialer *SSHDialer,
+	dialer Dialer,
 	hostname string,
 	alertContext string,
 	maxRounds int,

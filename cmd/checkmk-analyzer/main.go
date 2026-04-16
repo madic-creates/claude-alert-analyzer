@@ -114,7 +114,7 @@ func main() {
 		),
 	}
 
-	var sshDialer *checkmk.SSHDialer
+	var sshDialer checkmk.Dialer
 	if cfg.SSHEnabled {
 		var err error
 		sshDialer, err = checkmk.NewSSHDialer(cfg)

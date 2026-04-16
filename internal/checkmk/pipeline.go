@@ -17,7 +17,7 @@ type PipelineDeps struct {
 	Cooldown      *shared.CooldownManager
 	Metrics       *shared.AlertMetrics
 	SSHEnabled    bool
-	SSHDialer     *SSHDialer
+	SSHDialer     Dialer
 	SSHConfig     Config
 	GatherContext func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext
 	ValidateHost  func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error)
@@ -52,7 +52,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 
 	if sshOK {
 		var err error
-		analysis, err = RunAgenticDiagnostics(ctx, deps.SSHConfig, deps.ToolRunner, deps.SSHDialer, hostAddress, alertContext, deps.SSHConfig.MaxAgentRounds)
+		analysis, err = RunAgenticDiagnostics(ctx, deps.SSHConfig, deps.ToolRunner, deps.SSHDialer, hostname, alertContext, deps.SSHConfig.MaxAgentRounds)
 		if err != nil {
 			slog.Error("agentic diagnostics failed", "error", err)
 			_ = shared.PublishAll(ctx, deps.Publishers,
