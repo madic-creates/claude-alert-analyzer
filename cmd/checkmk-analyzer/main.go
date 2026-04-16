@@ -97,6 +97,18 @@ func main() {
 	publishers := buildPublishers()
 	cooldownMgr := shared.NewCooldownManager()
 	claudeClient := shared.NewClaudeClient(cfg.BaseConfig())
+	apiClient := checkmk.NewAPIClient(cfg)
+
+	var sshDialer *checkmk.SSHDialer
+	if cfg.SSHEnabled {
+		var err error
+		sshDialer, err = checkmk.NewSSHDialer(cfg)
+		if err != nil {
+			slog.Error("SSH dialer init failed", "error", err)
+			os.Exit(1)
+		}
+	}
+
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	defer workerCancel()
 	metrics := new(shared.AlertMetrics)
@@ -110,7 +122,7 @@ func main() {
 		go func() {
 			defer wg.Done()
 			for item := range workQueue {
-				processAlert(workerCtx, cfg, publishers, claudeClient, cooldownMgr, metrics, item.alert)
+				processAlert(workerCtx, cfg, publishers, claudeClient, apiClient, sshDialer, cooldownMgr, metrics, item.alert)
 			}
 		}()
 	}
@@ -178,7 +190,7 @@ func main() {
 	slog.Info("shutdown complete")
 }
 
-func processAlert(ctx context.Context, cfg checkmk.Config, publishers []shared.Publisher, claudeClient *shared.ClaudeClient, cooldownMgr *shared.CooldownManager, metrics *shared.AlertMetrics, alert shared.AlertPayload) {
+func processAlert(ctx context.Context, cfg checkmk.Config, publishers []shared.Publisher, claudeClient *shared.ClaudeClient, apiClient *checkmk.APIClient, sshDialer *checkmk.SSHDialer, cooldownMgr *shared.CooldownManager, metrics *shared.AlertMetrics, alert shared.AlertPayload) {
 	hostname := alert.Fields["hostname"]
 	hostAddress := alert.Fields["host_address"]
 
@@ -187,13 +199,13 @@ func processAlert(ctx context.Context, cfg checkmk.Config, publishers []shared.P
 		"service", alert.Fields["service_description"])
 
 	// Fetch host metadata (including ai_context) and validate host identity
-	hostInfo, validationErr := checkmk.ValidateAndDescribeHost(ctx, cfg, hostname, hostAddress)
+	hostInfo, validationErr := apiClient.ValidateAndDescribeHost(ctx, hostname, hostAddress)
 	if validationErr != nil {
 		slog.Warn("host validation failed", "error", validationErr, "hostname", hostname, "host_address", hostAddress)
 	}
 
 	// Gather CheckMK context (alert details + host services + optional host context)
-	actx := checkmk.GatherContext(ctx, cfg, alert, hostInfo)
+	actx := checkmk.GatherContext(ctx, apiClient, alert, hostInfo)
 	alertContext := actx.FormatForPrompt()
 
 	sshOK := cfg.SSHEnabled && validationErr == nil
@@ -205,7 +217,7 @@ func processAlert(ctx context.Context, cfg checkmk.Config, publishers []shared.P
 
 	if sshOK {
 		var err error
-		analysis, err = checkmk.RunAgenticDiagnostics(ctx, cfg, claudeClient, hostAddress, alertContext, cfg.MaxAgentRounds)
+		analysis, err = checkmk.RunAgenticDiagnostics(ctx, cfg, claudeClient, sshDialer, hostAddress, alertContext, cfg.MaxAgentRounds)
 		if err != nil {
 			slog.Error("agentic diagnostics failed", "error", err)
 			_ = shared.PublishAll(ctx, publishers,

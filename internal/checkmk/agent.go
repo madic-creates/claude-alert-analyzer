@@ -114,6 +114,7 @@ func RunAgenticDiagnostics(
 	ctx context.Context,
 	cfg Config,
 	client shared.ToolLoopRunner,
+	dialer *SSHDialer,
 	hostname string,
 	alertContext string,
 	maxRounds int,
@@ -125,7 +126,7 @@ func RunAgenticDiagnostics(
 
 	slog.Info("starting agentic SSH diagnostics", "hostname", hostname, "maxRounds", maxRounds, "deniedCommands", len(denied))
 
-	sshClient, err := dialSSH(cfg, hostname)
+	sshClient, err := dialer.Dial(hostname)
 	if err != nil {
 		return "", fmt.Errorf("SSH connection failed: %w", err)
 	}

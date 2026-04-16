@@ -14,7 +14,23 @@ import (
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 )
 
-var checkmkHTTPClient = &http.Client{Timeout: 10 * time.Second}
+// APIClient queries the CheckMK REST API.
+type APIClient struct {
+	HTTP   *http.Client
+	URL    string
+	User   string
+	Secret string
+}
+
+// NewAPIClient creates a client from config with default 10s timeout.
+func NewAPIClient(cfg Config) *APIClient {
+	return &APIClient{
+		HTTP:   &http.Client{Timeout: 10 * time.Second},
+		URL:    cfg.CheckMKAPIURL,
+		User:   cfg.CheckMKAPIUser,
+		Secret: cfg.CheckMKAPISecret,
+	}
+}
 
 // validHostnameRe matches DNS hostnames, FQDNs, and IPv4 addresses.
 // It rejects path separators, whitespace, null bytes, and URL-encoding.
@@ -76,19 +92,19 @@ func sanitizeHostContext(s string) string {
 	return s
 }
 
-func ValidateAndDescribeHost(ctx context.Context, cfg Config, hostname, hostAddress string) (*HostInfo, error) {
+func (c *APIClient) ValidateAndDescribeHost(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
 	if !isValidHostname(hostname) {
 		return nil, fmt.Errorf("invalid hostname %q", hostname)
 	}
-	url := fmt.Sprintf("%sobjects/host_config/%s", cfg.CheckMKAPIURL, hostname)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	u := fmt.Sprintf("%sobjects/host_config/%s", c.URL, hostname)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s %s", cfg.CheckMKAPIUser, cfg.CheckMKAPISecret))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s %s", c.User, c.Secret))
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := checkmkHTTPClient.Do(req)
+	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("CheckMK API request: %w", err)
 	}
@@ -126,19 +142,19 @@ func ValidateAndDescribeHost(ctx context.Context, cfg Config, hostname, hostAddr
 	return info, nil
 }
 
-func getHostServices(ctx context.Context, cfg Config, hostname string) string {
+func (c *APIClient) GetHostServices(ctx context.Context, hostname string) string {
 	if !isValidHostname(hostname) {
 		return fmt.Sprintf("(invalid hostname %q)", hostname)
 	}
-	url := fmt.Sprintf("%sobjects/host/%s/collections/services", cfg.CheckMKAPIURL, hostname)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	u := fmt.Sprintf("%sobjects/host/%s/collections/services", c.URL, hostname)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
 		return fmt.Sprintf("(request error: %v)", err)
 	}
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s %s", cfg.CheckMKAPIUser, cfg.CheckMKAPISecret))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s %s", c.User, c.Secret))
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := checkmkHTTPClient.Do(req)
+	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return fmt.Sprintf("(CheckMK API failed: %v)", err)
 	}
@@ -177,7 +193,7 @@ func getHostServices(ctx context.Context, cfg Config, hostname string) string {
 
 // GatherContext collects alert details and CheckMK host services.
 // SSH diagnostics are handled separately by RunAgenticDiagnostics.
-func GatherContext(ctx context.Context, cfg Config, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
+func GatherContext(ctx context.Context, apiClient *APIClient, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 	hostname := alert.Fields["hostname"]
 	hostAddress := alert.Fields["host_address"]
 
@@ -202,7 +218,7 @@ func GatherContext(ctx context.Context, cfg Config, alert shared.AlertPayload, h
 
 	sections = append(sections, shared.ContextSection{
 		Name:    "CheckMK Services on Host",
-		Content: getHostServices(ctx, cfg, hostname),
+		Content: apiClient.GetHostServices(ctx, hostname),
 	})
 
 	return shared.AnalysisContext{Sections: sections}
