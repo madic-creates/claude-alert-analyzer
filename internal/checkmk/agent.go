@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -82,7 +83,9 @@ func isDenied(denied map[string]bool, argv []string) bool {
 		return false
 	}
 
-	cmd := argv[0]
+	// Normalize to base name so absolute paths (/bin/rm) and relative paths
+	// (./rm) are checked the same as bare names (rm).
+	cmd := filepath.Base(argv[0])
 
 	// Special case: systemctl with read-only subcommands is allowed
 	if cmd == "systemctl" {

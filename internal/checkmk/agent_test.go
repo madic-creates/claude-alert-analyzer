@@ -197,3 +197,57 @@ func TestParseCommandInput_Invalid(t *testing.T) {
 		}
 	}
 }
+
+func TestIsDenied_AbsolutePathBypassBlocked(t *testing.T) {
+	// Absolute paths like /bin/rm must be treated the same as bare "rm".
+	denied := [][]string{
+		{"/bin/rm", "-rf", "/"},
+		{"/usr/bin/sudo", "cat", "/etc/shadow"},
+		{"/sbin/shutdown", "-h", "now"},
+		{"/usr/sbin/reboot"},
+		{"/bin/dd", "if=/dev/zero", "of=/dev/sda"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected denied (absolute path): %v", argv)
+		}
+	}
+}
+
+func TestIsDenied_RelativePathBypassBlocked(t *testing.T) {
+	// Relative paths like ./rm must also be caught.
+	denied := [][]string{
+		{"./rm", "-rf", "/"},
+		{"../bin/sudo", "bash"},
+		{"./shutdown", "now"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected denied (relative path): %v", argv)
+		}
+	}
+}
+
+func TestIsDenied_AbsolutePathSystemctl(t *testing.T) {
+	// /usr/bin/systemctl with destructive subcommands must be denied.
+	denied := [][]string{
+		{"/usr/bin/systemctl", "restart", "nginx"},
+		{"/bin/systemctl", "stop", "sshd"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected denied (absolute path systemctl): %v", argv)
+		}
+	}
+
+	// /usr/bin/systemctl with read-only subcommands must be allowed.
+	allowed := [][]string{
+		{"/usr/bin/systemctl", "status", "nginx"},
+		{"/bin/systemctl", "is-active", "docker"},
+	}
+	for _, argv := range allowed {
+		if isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected allowed (absolute path systemctl read-only): %v", argv)
+		}
+	}
+}
