@@ -3,6 +3,7 @@ package k8s
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,6 +12,10 @@ import (
 
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 )
+
+// maxWebhookBodyBytes is the upper limit for incoming webhook payloads.
+// Alertmanager batches multiple alerts per request; 1 MiB is generous.
+const maxWebhookBodyBytes = 1 << 20 // 1 MiB
 
 // HandleWebhook returns an HTTP handler that receives Alertmanager webhook payloads,
 // validates auth, applies cooldown, and enqueues alerts for processing.
@@ -25,8 +30,14 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 			return
 		}
 
+		r.Body = http.MaxBytesReader(w, r.Body, maxWebhookBodyBytes)
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}

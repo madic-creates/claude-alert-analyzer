@@ -18,14 +18,15 @@ This file is maintained by the autonomous improvement agent. Read it at the star
 - **feat: Prometheus-compatible /metrics endpoint** — Added `internal/shared/metrics.go` with `AlertMetrics` (5 `atomic.Int64` counters: webhooks received, alerts queued, queue full, processed, failed) and `MetricsHandler()` producing Prometheus text format (version 0.0.4). Both `main.go` entrypoints now register `GET /metrics`, wrap the webhook handler to count received requests, and thread `*AlertMetrics` through to `processAlert` for success/failure counting. No new dependencies — standard library only. 6 tests added in `metrics_test.go`.
 - **feat: cooldown counter in AlertMetrics** — Added `AlertsCooldown atomic.Int64` to `AlertMetrics` and exposed it as `alert_analyzer_alerts_cooldown_total` in `MetricsHandler()`. Both `HandleWebhook` functions now accept `*shared.AlertMetrics` (nil-safe) and increment `AlertsCooldown` when an alert is skipped due to deduplication cooldown. Both `main.go` entrypoints pass `metrics` to the handler. 2 new tests (`TestHandleWebhook_CooldownIncrementsMetric`, `TestCheckmkHandleWebhook_CooldownIncrementsMetric`) verify counter behavior; existing handler tests updated to pass `nil` metrics.
 - **fix: cooldown eviction cap removed** — Removed the `evicted < 100` guard from `CooldownManager.CheckAndSet`. The loop already iterates all entries O(n), so the cap provided no performance benefit while preventing full cleanup of expired entries when more than 100 expired at once. Regression test `TestCooldown_ExpiredEntriesFullyEvicted` added (150 entries, verifies map shrinks to 1 after eviction trigger).
+- **security: bound webhook request body size** — Both `HandleWebhook` functions now wrap `r.Body` with `http.MaxBytesReader` (1 MiB limit) before calling `io.ReadAll`. Oversized requests receive a 413 response immediately, preventing unbounded memory allocation from malicious or misconfigured senders. Added `TestHandleWebhook_BodyTooLarge_Returns413` and `TestCheckmkHandleWebhook_BodyTooLarge_Returns413` to confirm the 413 path.
 
 ## Test Coverage Status
 
 | Package | Source Files | Test Files | Coverage Notes |
 |---|---|---|---|
 | `internal/shared/` | claude.go, cooldown.go, metrics.go, ntfy.go, redact.go, types.go | claude_test.go, cooldown_test.go, metrics_test.go, ntfy_test.go, redact_test.go, types_test.go | All files covered; cooldown eviction now fully tested (including >100 entries) |
-| `internal/k8s/` | handler.go, context.go, types.go | handler_test.go, context_test.go | `context.go` fully covered: GatherContext, GetKubeContext, GetPrometheusMetrics all tested directly with fake k8s client and httptest |
-| `internal/checkmk/` | agent.go, context.go, handler.go, ssh.go, types.go | agent_test.go, context_test.go, handler_test.go, ssh_test.go | Good coverage; `ssh.go` now has success, command-error, and timeout tests via in-process server |
+| `internal/k8s/` | handler.go, context.go, types.go | handler_test.go, context_test.go | `context.go` fully covered; `handler.go` now includes 413 body-too-large path |
+| `internal/checkmk/` | agent.go, context.go, handler.go, ssh.go, types.go | agent_test.go, context_test.go, handler_test.go, ssh_test.go | Good coverage; `handler.go` now includes 413 body-too-large path |
 | `cmd/k8s-analyzer/` | main.go | none | Entrypoint, hard to unit test |
 | `cmd/checkmk-analyzer/` | main.go | none | Entrypoint, hard to unit test |
 

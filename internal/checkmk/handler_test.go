@@ -325,6 +325,26 @@ func TestCheckmkHandleWebhook_FingerprintNotEmpty(t *testing.T) {
 	}
 }
 
+func TestCheckmkHandleWebhook_BodyTooLarge_Returns413(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cd := shared.NewCooldownManager()
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil)
+
+	// Build a body slightly larger than the 1 MiB limit.
+	oversized := make([]byte, maxWebhookBodyBytes+1)
+	for i := range oversized {
+		oversized[i] = 'x'
+	}
+	req := httptest.NewRequest("POST", "/webhook", bytes.NewReader(oversized))
+	req.Header.Set("Authorization", "Bearer test-secret")
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("expected 413, got %d", rr.Code)
+	}
+}
+
 func TestFingerprint_DifferentInputsProduceDifferentHashes(t *testing.T) {
 	fp1 := fingerprint("host1", "CPU", "PROBLEM", "WARNING")
 	fp2 := fingerprint("host1", "Disk", "PROBLEM", "WARNING")
