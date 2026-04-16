@@ -187,11 +187,7 @@ func processAlert(ctx context.Context, cfg checkmk.Config, publishers []shared.P
 		"hostname", hostname,
 		"service", alert.Fields["service_description"])
 
-	baseCfg := shared.BaseConfig{
-		ClaudeModel: cfg.ClaudeModel,
-		APIBaseURL:  cfg.APIBaseURL,
-		APIKey:      cfg.APIKey,
-	}
+	baseCfg := cfg.BaseConfig()
 
 	// Fetch host metadata (including ai_context) and validate host identity
 	hostInfo, validationErr := checkmk.ValidateAndDescribeHost(ctx, cfg, hostname, hostAddress)

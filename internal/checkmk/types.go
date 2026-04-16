@@ -1,5 +1,7 @@
 package checkmk
 
+import "github.com/madic-creates/claude-alert-analyzer/internal/shared"
+
 type CheckMKNotification struct {
 	Hostname           string `json:"hostname"`
 	HostAddress        string `json:"host_address"`
@@ -29,4 +31,16 @@ type Config struct {
 	SSHKnownHostsPath  string
 	SSHDeniedCommands  map[string]bool // nil = use default, empty = no guardrails
 	MaxAgentRounds     int
+}
+
+// BaseConfig returns a shared.BaseConfig derived from this Config.
+func (c Config) BaseConfig() shared.BaseConfig {
+	return shared.BaseConfig{
+		ClaudeModel:     c.ClaudeModel,
+		CooldownSeconds: c.CooldownSeconds,
+		Port:            c.Port,
+		WebhookSecret:   c.WebhookSecret,
+		APIBaseURL:      c.APIBaseURL,
+		APIKey:          c.APIKey,
+	}
 }
