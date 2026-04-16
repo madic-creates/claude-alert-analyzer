@@ -85,7 +85,7 @@ func isDenied(denied map[string]bool, argv []string) bool {
 	cmd := argv[0]
 
 	// Special case: systemctl with read-only subcommands is allowed
-	if cmd == "systemctl" && denied["systemctl"] {
+	if cmd == "systemctl" {
 		if len(argv) < 2 {
 			return true
 		}

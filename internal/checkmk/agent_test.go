@@ -131,6 +131,48 @@ func TestIsDenied_CustomDenylist(t *testing.T) {
 	}
 }
 
+func TestIsDenied_SystemctlAlwaysChecked(t *testing.T) {
+	// Custom denylist that does NOT include "systemctl"
+	custom := map[string]bool{"rm": true, "dd": true}
+
+	// Destructive systemctl subcommands must be denied even without
+	// "systemctl" in the denylist.
+	denied := [][]string{
+		{"systemctl", "restart", "nginx"},
+		{"systemctl", "stop", "sshd"},
+		{"systemctl", "start", "docker"},
+		{"systemctl", "enable", "foo"},
+		{"systemctl", "disable", "bar"},
+		{"systemctl", "mask", "firewalld"},
+		{"systemctl", "daemon-reload"},
+	}
+	for _, argv := range denied {
+		if !isDenied(custom, argv) {
+			t.Errorf("expected denied with custom denylist: %v", argv)
+		}
+	}
+
+	// Bare systemctl (no subcommand) must also be denied.
+	if !isDenied(custom, []string{"systemctl"}) {
+		t.Error("expected bare systemctl denied with custom denylist")
+	}
+
+	// Read-only subcommands must still be allowed.
+	allowed := [][]string{
+		{"systemctl", "status", "nginx"},
+		{"systemctl", "show", "sshd"},
+		{"systemctl", "is-active", "docker"},
+		{"systemctl", "is-failed", "nginx"},
+		{"systemctl", "list-units", "--failed"},
+		{"systemctl", "list-timers"},
+	}
+	for _, argv := range allowed {
+		if isDenied(custom, argv) {
+			t.Errorf("expected allowed with custom denylist: %v", argv)
+		}
+	}
+}
+
 func TestParseCommandInput(t *testing.T) {
 	input := json.RawMessage(`{"command": ["df", "-h"]}`)
 	argv, err := parseCommandInput(input)
