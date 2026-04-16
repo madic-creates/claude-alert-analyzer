@@ -50,11 +50,9 @@ func (m *AlertMetrics) MetricsHandler() http.HandlerFunc {
 		fmt.Fprintf(w, "# HELP alert_analyzer_alerts_failed_total Alerts where analysis or publishing failed.\n")
 		fmt.Fprintf(w, "# TYPE alert_analyzer_alerts_failed_total counter\n")
 		fmt.Fprintf(w, "alert_analyzer_alerts_failed_total %d\n", m.AlertsFailed.Load())
-		fmt.Fprintf(w, "# HELP alert_analyzer_processing_duration_seconds_sum Total processing time.\n")
-		fmt.Fprintf(w, "# TYPE alert_analyzer_processing_duration_seconds_sum counter\n")
+		fmt.Fprintf(w, "# HELP alert_analyzer_processing_duration_seconds Processing time per alert.\n")
+		fmt.Fprintf(w, "# TYPE alert_analyzer_processing_duration_seconds summary\n")
 		fmt.Fprintf(w, "alert_analyzer_processing_duration_seconds_sum %f\n", float64(m.ProcessingDurationSum.Load())/1e6)
-		fmt.Fprintf(w, "# HELP alert_analyzer_processing_duration_seconds_count Total alerts processed (for avg calculation).\n")
-		fmt.Fprintf(w, "# TYPE alert_analyzer_processing_duration_seconds_count counter\n")
 		fmt.Fprintf(w, "alert_analyzer_processing_duration_seconds_count %d\n", m.ProcessingDurationCount.Load())
 	}
 }

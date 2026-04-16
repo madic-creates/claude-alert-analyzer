@@ -122,6 +122,36 @@ func TestMetricsHandler_CounterValuesReflected(t *testing.T) {
 	}
 }
 
+func TestMetricsHandler_ProcessingDurationIsSummary(t *testing.T) {
+	var m AlertMetrics
+	m.ProcessingDurationSum.Add(5_000_000) // 5 seconds in microseconds
+	m.ProcessingDurationCount.Add(3)
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rr := httptest.NewRecorder()
+	m.MetricsHandler()(rr, req)
+	body := rr.Body.String()
+
+	// Exactly one TYPE line for the base metric name, typed as summary.
+	if !strings.Contains(body, "# TYPE alert_analyzer_processing_duration_seconds summary") {
+		t.Errorf("expected summary type for duration metric, got:\n%s", body)
+	}
+	// Sub-samples must NOT have their own TYPE or HELP lines.
+	if strings.Contains(body, "# TYPE alert_analyzer_processing_duration_seconds_sum") {
+		t.Errorf("_sum sub-sample must not have its own TYPE line, got:\n%s", body)
+	}
+	if strings.Contains(body, "# TYPE alert_analyzer_processing_duration_seconds_count") {
+		t.Errorf("_count sub-sample must not have its own TYPE line, got:\n%s", body)
+	}
+	// Values must be present.
+	if !strings.Contains(body, "alert_analyzer_processing_duration_seconds_sum 5.") {
+		t.Errorf("expected _sum value in body, got:\n%s", body)
+	}
+	if !strings.Contains(body, "alert_analyzer_processing_duration_seconds_count 3") {
+		t.Errorf("expected _count value in body, got:\n%s", body)
+	}
+}
+
 func TestAlertMetrics_ConcurrentIncrements(t *testing.T) {
 	var m AlertMetrics
 	const n = 100
