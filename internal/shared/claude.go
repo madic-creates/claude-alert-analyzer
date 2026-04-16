@@ -182,6 +182,16 @@ func (c *ClaudeClient) RunToolLoop(
 			})
 		}
 
+		// No tool_use blocks in response — treat as final answer. This handles
+		// "max_tokens" and other non-"end_turn" stop reasons that carry text but
+		// no tool calls. Appending a nil tool_results slice would marshal to
+		// "content": null and cause the next API call to fail with 400.
+		if len(toolResults) == 0 {
+			slog.Warn("tool loop: no tool_use blocks found, returning text as final answer",
+				"stop_reason", resp.StopReason, "round", round+1)
+			return extractText(resp.Content), nil
+		}
+
 		messages = append(messages, ToolMessage{Role: "user", Content: toolResults})
 	}
 
