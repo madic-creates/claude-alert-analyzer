@@ -76,7 +76,6 @@ func TestProcessAlert_NoSSH(t *testing.T) {
 // mockDialer records the host passed to Dial so tests can assert it.
 type mockDialer struct {
 	dialedHost string
-	err        error
 }
 
 func (d *mockDialer) Dial(host string) (*ssh.Client, error) {
