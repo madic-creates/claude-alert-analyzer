@@ -383,3 +383,176 @@ func TestRunToolLoop_APIError(t *testing.T) {
 		t.Fatal("expected error for 500 response")
 	}
 }
+
+func TestRunToolLoop_APIErrorInBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"error": {"type": "overloaded_error", "message": "Service temporarily overloaded"},
+			"content": []
+		}`)
+	}))
+	defer srv.Close()
+
+	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "test"}
+	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+
+	_, err := RunToolLoop(context.Background(), cfg, "system", "user prompt", tools, 10,
+		func(name string, input json.RawMessage) (string, error) { return "", nil })
+
+	if err == nil {
+		t.Fatal("expected error for API error in body")
+	}
+	if !strings.Contains(err.Error(), "overloaded_error") {
+		t.Errorf("error should mention error type, got: %v", err)
+	}
+}
+
+func TestRunToolLoop_ToolHandlerError(t *testing.T) {
+	var callCount atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+
+		if call == 1 {
+			// Return a tool call
+			fmt.Fprint(w, `{
+				"content": [
+					{"type": "tool_use", "id": "toolu_err", "name": "execute_command", "input": {"command": ["bad"]}}
+				],
+				"stop_reason": "tool_use",
+				"usage": {"input_tokens": 20, "output_tokens": 10}
+			}`)
+		} else {
+			// Second call receives the tool_result with the error message
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("failed to decode request body: %v", err)
+			}
+			msgs, _ := body["messages"].([]any)
+			// Last message should be the user message with tool_result
+			lastMsg := msgs[len(msgs)-1].(map[string]any)
+			content := lastMsg["content"].([]any)
+			toolResult := content[0].(map[string]any)
+			gotContent, _ := toolResult["content"].(string)
+			if !strings.HasPrefix(gotContent, "error:") {
+				t.Errorf("tool result content should start with 'error:', got: %q", gotContent)
+			}
+
+			fmt.Fprint(w, `{
+				"content": [{"type": "text", "text": "Handled tool error gracefully."}],
+				"stop_reason": "end_turn",
+				"usage": {"input_tokens": 50, "output_tokens": 10}
+			}`)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "test"}
+	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+
+	result, err := RunToolLoop(context.Background(), cfg, "system", "user prompt", tools, 5,
+		func(name string, input json.RawMessage) (string, error) {
+			return "", fmt.Errorf("command not allowed")
+		})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "Handled tool error gracefully." {
+		t.Errorf("unexpected result: %q", result)
+	}
+}
+
+func TestRunToolLoop_MultipleToolsInOneRound(t *testing.T) {
+	var callCount atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+
+		if call == 1 {
+			// Return two tool calls in one response
+			fmt.Fprint(w, `{
+				"content": [
+					{"type": "tool_use", "id": "toolu_a", "name": "tool_a", "input": {}},
+					{"type": "tool_use", "id": "toolu_b", "name": "tool_b", "input": {}}
+				],
+				"stop_reason": "tool_use",
+				"usage": {"input_tokens": 30, "output_tokens": 20}
+			}`)
+		} else {
+			fmt.Fprint(w, `{
+				"content": [{"type": "text", "text": "Both tools executed."}],
+				"stop_reason": "end_turn",
+				"usage": {"input_tokens": 80, "output_tokens": 15}
+			}`)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "test"}
+	tools := []Tool{
+		{Name: "tool_a", Description: "first", InputSchema: InputSchema{Type: "object"}},
+		{Name: "tool_b", Description: "second", InputSchema: InputSchema{Type: "object"}},
+	}
+
+	var calledTools []string
+	result, err := RunToolLoop(context.Background(), cfg, "system", "user prompt", tools, 5,
+		func(name string, input json.RawMessage) (string, error) {
+			calledTools = append(calledTools, name)
+			return "ok", nil
+		})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(calledTools) != 2 {
+		t.Errorf("expected 2 tool calls, got %d: %v", len(calledTools), calledTools)
+	}
+	if calledTools[0] != "tool_a" || calledTools[1] != "tool_b" {
+		t.Errorf("unexpected tool call order: %v", calledTools)
+	}
+	if result != "Both tools executed." {
+		t.Errorf("unexpected result: %q", result)
+	}
+}
+
+func TestRunToolLoop_SummaryRequestFails(t *testing.T) {
+	var callCount atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+
+		if call <= 1 {
+			// Single tool round (maxRounds=1) exhausted
+			fmt.Fprint(w, `{
+				"content": [
+					{"type": "tool_use", "id": "toolu_1", "name": "execute_command", "input": {}}
+				],
+				"stop_reason": "tool_use",
+				"usage": {"input_tokens": 20, "output_tokens": 10}
+			}`)
+		} else {
+			// Forced summary request fails
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, "service unavailable")
+		}
+	}))
+	defer srv.Close()
+
+	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "test"}
+	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+
+	_, err := RunToolLoop(context.Background(), cfg, "system", "user prompt", tools, 1,
+		func(name string, input json.RawMessage) (string, error) { return "ok", nil })
+
+	if err == nil {
+		t.Fatal("expected error when summary request fails")
+	}
+	if !strings.Contains(err.Error(), "summary") {
+		t.Errorf("error should mention 'summary', got: %v", err)
+	}
+}
