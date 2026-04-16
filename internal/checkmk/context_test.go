@@ -327,3 +327,111 @@ func TestValidateAndDescribeHost_AcceptsValidHostname(t *testing.T) {
 		})
 	}
 }
+
+// ----- GetHostServices tests -----
+
+// TestGetHostServices_WithServices verifies that GetHostServices correctly formats
+// service entries returned by the CheckMK API, including state name translation.
+func TestGetHostServices_WithServices(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"value":[
+			{"extensions":{"description":"CPU Usage","state":1,"plugin_output":"CPU at 95%"}},
+			{"extensions":{"description":"Disk /","state":2,"plugin_output":"Disk 98% full"}},
+			{"extensions":{"description":"Ping","state":0,"plugin_output":"OK - rta=1ms"}},
+			{"extensions":{"description":"SMART","state":3,"plugin_output":"UNKNOWN status"}}
+		]}`)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "auto", Secret: "secret"}
+	result := apiClient.GetHostServices(context.Background(), "host1")
+
+	for _, want := range []string{"CPU Usage", "WARN", "Disk /", "CRIT", "Ping", "OK", "SMART", "UNKNOWN"} {
+		if !strings.Contains(result, want) {
+			t.Errorf("expected %q in result, got:\n%s", want, result)
+		}
+	}
+	// Each service should be on its own line.
+	lines := strings.Split(strings.TrimRight(result, "\n"), "\n")
+	if len(lines) != 4 {
+		t.Errorf("expected 4 lines, got %d:\n%s", len(lines), result)
+	}
+}
+
+// TestGetHostServices_UnknownState verifies that state values outside the known
+// map (0–3) are rendered as their numeric value rather than an empty string.
+func TestGetHostServices_UnknownState(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"value":[{"extensions":{"description":"SvcX","state":99,"plugin_output":"odd"}}]}`)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "auto", Secret: "secret"}
+	result := apiClient.GetHostServices(context.Background(), "host1")
+
+	if !strings.Contains(result, "99") {
+		t.Errorf("expected numeric state fallback '99' in result, got: %s", result)
+	}
+}
+
+// TestGetHostServices_EmptyList verifies the empty-list sentinel message.
+func TestGetHostServices_EmptyList(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"value":[]}`)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "auto", Secret: "secret"}
+	result := apiClient.GetHostServices(context.Background(), "host1")
+
+	if result != "(no services found)" {
+		t.Errorf("expected '(no services found)', got: %s", result)
+	}
+}
+
+// TestGetHostServices_NonOKStatus verifies that a non-200 HTTP status is
+// surfaced in the returned string.
+func TestGetHostServices_NonOKStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "auto", Secret: "secret"}
+	result := apiClient.GetHostServices(context.Background(), "host1")
+
+	if !strings.Contains(result, "403") {
+		t.Errorf("expected HTTP 403 in result, got: %s", result)
+	}
+}
+
+// TestGetHostServices_InvalidJSON verifies that a malformed response is reported.
+func TestGetHostServices_InvalidJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `not json at all`)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "auto", Secret: "secret"}
+	result := apiClient.GetHostServices(context.Background(), "host1")
+
+	if !strings.Contains(result, "failed to parse") {
+		t.Errorf("expected parse error in result, got: %s", result)
+	}
+}
+
+// TestGetHostServices_InvalidHostname verifies that the hostname guard fires
+// before any network call is made.
+func TestGetHostServices_InvalidHostname(t *testing.T) {
+	// Use a client that would never succeed — the guard must fire first.
+	apiClient := &APIClient{HTTP: http.DefaultClient, URL: "http://127.0.0.1:1/api/", User: "auto", Secret: "secret"}
+	result := apiClient.GetHostServices(context.Background(), "../../etc/passwd")
+
+	if !strings.Contains(result, "invalid hostname") {
+		t.Errorf("expected 'invalid hostname' in result, got: %s", result)
+	}
+}
