@@ -12,7 +12,7 @@ import (
 )
 
 func TestSendRequest_OversizedResponseIsBounded(t *testing.T) {
-	// Serve a response body larger than maxResponseBytes (2 MiB).
+	// Serve a response body larger than MaxResponseBytes (2 MiB).
 	oversized := 3 * 1024 * 1024 // 3 MiB
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
@@ -31,11 +31,11 @@ func TestSendRequest_OversizedResponseIsBounded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(body) > maxResponseBytes {
-		t.Errorf("response should be bounded to %d bytes, got %d", maxResponseBytes, len(body))
+	if len(body) > MaxResponseBytes {
+		t.Errorf("response should be bounded to %d bytes, got %d", MaxResponseBytes, len(body))
 	}
-	if len(body) != maxResponseBytes {
-		t.Errorf("expected exactly %d bytes (LimitReader cap), got %d", maxResponseBytes, len(body))
+	if len(body) != MaxResponseBytes {
+		t.Errorf("expected exactly %d bytes (LimitReader cap), got %d", MaxResponseBytes, len(body))
 	}
 }
 

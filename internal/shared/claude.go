@@ -14,9 +14,9 @@ import (
 
 const anthropicVersion = "2023-06-01"
 
-// maxResponseBytes bounds the amount of data read from an API response body
+// MaxResponseBytes bounds the amount of data read from an API response body
 // to prevent a malicious or buggy upstream from exhausting memory.
-const maxResponseBytes = 2 * 1024 * 1024 // 2 MiB
+const MaxResponseBytes = 2 * 1024 * 1024 // 2 MiB
 
 var claudeHTTPClient = &http.Client{Timeout: 120 * time.Second}
 
@@ -46,7 +46,7 @@ func sendRequest(ctx context.Context, cfg BaseConfig, body any) ([]byte, error) 
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBytes))
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}

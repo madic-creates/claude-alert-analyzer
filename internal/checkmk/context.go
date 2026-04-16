@@ -94,7 +94,7 @@ func ValidateAndDescribeHost(ctx context.Context, cfg Config, hostname, hostAddr
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, shared.MaxResponseBytes))
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
@@ -144,7 +144,7 @@ func getHostServices(ctx context.Context, cfg Config, hostname string) string {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, shared.MaxResponseBytes))
 	if err != nil {
 		return "(failed to read response)"
 	}
