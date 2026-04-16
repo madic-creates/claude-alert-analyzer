@@ -386,6 +386,41 @@ func TestParseCommandInput_Invalid(t *testing.T) {
 	}
 }
 
+func TestIsDenied_SystemctlFlagsBeforeSubcommand(t *testing.T) {
+	// Flags like --no-pager or --user before the subcommand are common in
+	// practice (Claude naturally adds --no-pager to suppress paging).
+	// They must not cause a valid read-only subcommand to be denied.
+	allowed := [][]string{
+		{"systemctl", "--no-pager", "status", "nginx"},
+		{"systemctl", "--no-pager", "show", "sshd"},
+		{"systemctl", "--user", "status"},
+		{"systemctl", "--no-pager", "list-units", "--failed"},
+		{"/usr/bin/systemctl", "--no-pager", "is-active", "docker"},
+	}
+	for _, argv := range allowed {
+		if isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected allowed (flags before subcommand): %v", argv)
+		}
+	}
+
+	// Flags before a destructive subcommand must still be denied.
+	denied := [][]string{
+		{"systemctl", "--no-pager", "restart", "nginx"},
+		{"systemctl", "--user", "stop", "sshd"},
+		{"systemctl", "--no-pager", "daemon-reload"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected denied (flags before destructive subcommand): %v", argv)
+		}
+	}
+
+	// Only flags with no subcommand must be denied.
+	if !isDenied(DefaultDeniedCommands, []string{"systemctl", "--no-pager"}) {
+		t.Error("expected denied: systemctl with only flags and no subcommand")
+	}
+}
+
 func TestIsDenied_AbsolutePathBypassBlocked(t *testing.T) {
 	// Absolute paths like /bin/rm must be treated the same as bare "rm".
 	denied := [][]string{

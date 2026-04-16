@@ -87,12 +87,21 @@ func isDenied(denied map[string]bool, argv []string) bool {
 	// (./rm) are checked the same as bare names (rm).
 	cmd := filepath.Base(argv[0])
 
-	// Special case: systemctl with read-only subcommands is allowed
+	// Special case: systemctl with read-only subcommands is allowed.
+	// Flags (e.g. --no-pager, --user) may appear before the subcommand,
+	// so skip leading dash-prefixed arguments to find the actual subcommand.
 	if cmd == "systemctl" {
-		if len(argv) < 2 {
-			return true
+		subcmd := ""
+		for _, arg := range argv[1:] {
+			if !strings.HasPrefix(arg, "-") {
+				subcmd = arg
+				break
+			}
 		}
-		return !systemctlReadOnly[argv[1]]
+		if subcmd == "" {
+			return true // no subcommand found — deny
+		}
+		return !systemctlReadOnly[subcmd]
 	}
 
 	return denied[cmd]
