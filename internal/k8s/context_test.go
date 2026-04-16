@@ -592,7 +592,7 @@ func TestQuery_MetricLabelsAreSorted(t *testing.T) {
 	if alphaIdx == -1 || middleIdx == -1 || zooIdx == -1 {
 		t.Fatalf("expected all labels in result, got: %q", result)
 	}
-	if !(alphaIdx < middleIdx && middleIdx < zooIdx) {
+	if alphaIdx >= middleIdx || middleIdx >= zooIdx {
 		t.Errorf("metric labels not in sorted order: alpha@%d middle@%d zoo@%d\nresult: %q",
 			alphaIdx, middleIdx, zooIdx, result)
 	}
