@@ -180,7 +180,7 @@ func TestGetKubeContext_WildcardAllowlistPermitsLogs(t *testing.T) {
 func TestGetKubeContext_PodLogsAPIError(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	// Inject an error for any pod List call so getPodLogs hits the error path.
-	cs.Fake.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("kube api unavailable")
 	})
 	alert := makeAlertWithLabels(map[string]string{"namespace": "prod"})
