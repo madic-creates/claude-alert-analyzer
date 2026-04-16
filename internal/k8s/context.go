@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,18 @@ func NewPrometheusClient(url string) *PrometheusClient {
 		HTTP: &http.Client{Timeout: 10 * time.Second},
 		URL:  url,
 	}
+}
+
+// validK8sName matches valid Kubernetes namespace names: lowercase alphanumeric and
+// hyphens, starting and ending with an alphanumeric character, max 63 characters.
+// Reference: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/
+var validK8sName = regexp.MustCompile(`^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?$`)
+
+// isValidNamespace returns true if s is a valid Kubernetes namespace name.
+// This guards against PromQL label-value injection when the namespace is
+// interpolated directly into query strings.
+func isValidNamespace(s string) bool {
+	return validK8sName.MatchString(s)
 }
 
 func isNamespaceAllowed(namespace string, allowed []string) bool {
@@ -94,6 +107,11 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 
 	sections = append(sections, "## Active Firing Alerts")
 	sections = append(sections, p.query(ctx, `ALERTS{alertstate="firing"}`))
+
+	if namespace != "" && !isValidNamespace(namespace) {
+		slog.Warn("dropping namespace-scoped Prometheus queries: invalid namespace label", "namespace", namespace)
+		namespace = ""
+	}
 
 	if namespace != "" {
 		sections = append(sections,

@@ -469,3 +469,68 @@ func TestGatherContext_CancelledContext(t *testing.T) {
 		t.Fatalf("expected 4 sections, got %d", len(actx.Sections))
 	}
 }
+
+// ----- isValidNamespace tests -----
+
+func TestIsValidNamespace(t *testing.T) {
+	valid := []string{
+		"default",
+		"kube-system",
+		"my-app",
+		"prod",
+		"a",
+		"a1",
+		"ns-with-hyphens",
+	}
+	for _, ns := range valid {
+		if !isValidNamespace(ns) {
+			t.Errorf("expected %q to be valid, but it was rejected", ns)
+		}
+	}
+
+	invalid := []string{
+		"",
+		"-invalid",
+		"invalid-",
+		"UPPER",
+		"has space",
+		`default"}[5m]) or up{namespace="kube-system`,
+		"has\"quote",
+		"has}brace",
+		strings.Repeat("a", 64), // exceeds 63-char limit
+	}
+	for _, ns := range invalid {
+		if isValidNamespace(ns) {
+			t.Errorf("expected %q to be invalid, but it was accepted", ns)
+		}
+	}
+}
+
+// TestGetMetrics_MaliciousNamespaceDroppedFromQuery verifies that an alert namespace
+// containing PromQL special characters does not get interpolated into queries.
+// A valid Prometheus server records the queries it receives; if the malicious string
+// appeared in any query the test would see its distinctive token ("evil") in the URL.
+func TestGetMetrics_MaliciousNamespaceDroppedFromQuery(t *testing.T) {
+	var receivedQueries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedQueries = append(receivedQueries, r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	}))
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	// Namespace that looks like PromQL injection; contains "evil" as a token.
+	maliciousNS := `default"} or up{instance="evil`
+	alert := makeAlertWithLabels(map[string]string{
+		"namespace": maliciousNS,
+		"alertname": "SomeAlert",
+	})
+	_ = prom.GetMetrics(context.Background(), alert)
+
+	for _, q := range receivedQueries {
+		if strings.Contains(q, "evil") {
+			t.Errorf("malicious namespace token appeared in a Prometheus query: %q", q)
+		}
+	}
+}
