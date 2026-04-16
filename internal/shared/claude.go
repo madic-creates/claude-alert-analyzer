@@ -63,7 +63,7 @@ func (c *ClaudeClient) sendRequest(ctx context.Context, body any) ([]byte, error
 	if err != nil {
 		return nil, fmt.Errorf("API request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBytes))
 	if err != nil {

@@ -1,3 +1,5 @@
+version: "2"
+
 run:
   timeout: 5m
 
@@ -8,8 +10,23 @@ linters:
     - staticcheck
     - unused
     - ineffassign
-    - gosimple
 
-issues:
-  exclude-dirs:
-    - docs
+  settings:
+    errcheck:
+      exclude-functions:
+        - (net/http.ResponseWriter).Write
+        - (*net/http.Response).Body.Close
+        - (*golang.org/x/crypto/ssh.Client).Close
+        - (*golang.org/x/crypto/ssh.Session).Close
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - io.Copy
+
+  exclusions:
+    paths:
+      - docs
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck

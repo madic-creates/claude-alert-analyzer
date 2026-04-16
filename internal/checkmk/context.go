@@ -108,7 +108,7 @@ func (c *APIClient) ValidateAndDescribeHost(ctx context.Context, hostname, hostA
 	if err != nil {
 		return nil, fmt.Errorf("CheckMK API request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, shared.MaxResponseBytes))
 	if err != nil {
@@ -158,7 +158,7 @@ func (c *APIClient) GetHostServices(ctx context.Context, hostname string) string
 	if err != nil {
 		return fmt.Sprintf("(CheckMK API failed: %v)", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, shared.MaxResponseBytes))
 	if err != nil {

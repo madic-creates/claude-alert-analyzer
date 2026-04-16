@@ -130,7 +130,7 @@ func RunAgenticDiagnostics(
 	if err != nil {
 		return "", fmt.Errorf("SSH connection failed: %w", err)
 	}
-	defer sshClient.Close()
+	defer func() { _ = sshClient.Close() }()
 	slog.Info("SSH connected for agentic diagnostics", "hostname", hostname)
 
 	handleTool := func(name string, input json.RawMessage) (string, error) {

@@ -54,7 +54,7 @@ func (p *PrometheusClient) query(ctx context.Context, queryStr string) string {
 	if err != nil {
 		return fmt.Sprintf("(query failed: %v)", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, shared.MaxResponseBytes))
 	if err != nil {
 		return "(failed to read response)"

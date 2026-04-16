@@ -79,7 +79,7 @@ func (n *NtfyPublisher) Publish(ctx context.Context, title, priority, body strin
 			continue
 		}
 		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if resp.StatusCode >= 500 {
 			// Server error — worth retrying.
