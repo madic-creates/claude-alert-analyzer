@@ -10,13 +10,28 @@ import (
 	"time"
 )
 
-var ntfyHTTPClient = &http.Client{Timeout: 10 * time.Second}
+// DefaultNtfyRetryDelays controls the wait between publish attempts. Three
+// attempts total: one initial try plus one retry after each delay.
+var DefaultNtfyRetryDelays = []time.Duration{2 * time.Second, 5 * time.Second}
 
 // NtfyPublisher sends notifications to an ntfy server.
 type NtfyPublisher struct {
-	URL   string
-	Topic string
-	Token string
+	HTTP        *http.Client
+	URL         string
+	Topic       string
+	Token       string
+	RetryDelays []time.Duration
+}
+
+// NewNtfyPublisher creates an NtfyPublisher with default HTTP client and retry delays.
+func NewNtfyPublisher(url, topic, token string) *NtfyPublisher {
+	return &NtfyPublisher{
+		HTTP:        &http.Client{Timeout: 10 * time.Second},
+		URL:         url,
+		Topic:       topic,
+		Token:       token,
+		RetryDelays: DefaultNtfyRetryDelays,
+	}
 }
 
 func (n *NtfyPublisher) Name() string { return "ntfy" }
@@ -25,18 +40,19 @@ func (n *NtfyPublisher) Name() string { return "ntfy" }
 // an attachment. We truncate to stay under this limit for inline display.
 const maxNtfyBodyBytes = 4096
 
-// ntfyRetryDelays controls the wait between publish attempts. Three attempts
-// total: one initial try plus one retry after each delay.
-var ntfyRetryDelays = []time.Duration{2 * time.Second, 5 * time.Second}
-
 func (n *NtfyPublisher) Publish(ctx context.Context, title, priority, body string) error {
 	body = Truncate(body, maxNtfyBodyBytes)
 	ntfyURL := fmt.Sprintf("%s/%s", n.URL, n.Topic)
 
+	retryDelays := n.RetryDelays
+	if retryDelays == nil {
+		retryDelays = DefaultNtfyRetryDelays
+	}
+
 	var lastErr error
-	for attempt := 0; attempt <= len(ntfyRetryDelays); attempt++ {
+	for attempt := 0; attempt <= len(retryDelays); attempt++ {
 		if attempt > 0 {
-			delay := ntfyRetryDelays[attempt-1]
+			delay := retryDelays[attempt-1]
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -57,7 +73,7 @@ func (n *NtfyPublisher) Publish(ctx context.Context, title, priority, body strin
 			req.Header.Set("Authorization", "Bearer "+n.Token)
 		}
 
-		resp, err := ntfyHTTPClient.Do(req)
+		resp, err := n.HTTP.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("publish: %w", err)
 			continue

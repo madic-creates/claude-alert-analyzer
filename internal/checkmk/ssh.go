@@ -11,29 +11,38 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
-func dialSSH(cfg Config, hostAddress string) (*ssh.Client, error) {
+// SSHDialer caches the parsed SSH key and known_hosts callback.
+type SSHDialer struct {
+	signer          ssh.Signer
+	hostKeyCallback ssh.HostKeyCallback
+	user            string
+}
+
+// NewSSHDialer parses the SSH key and known_hosts file once at startup.
+func NewSSHDialer(cfg Config) (*SSHDialer, error) {
 	keyBytes, err := os.ReadFile(cfg.SSHKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("read SSH key: %w", err)
 	}
-
 	signer, err := ssh.ParsePrivateKey(keyBytes)
 	if err != nil {
 		return nil, fmt.Errorf("parse SSH key: %w", err)
 	}
-
 	hostKeyCallback, err := knownhosts.New(cfg.SSHKnownHostsPath)
 	if err != nil {
 		return nil, fmt.Errorf("load known_hosts: %w", err)
 	}
+	return &SSHDialer{signer: signer, hostKeyCallback: hostKeyCallback, user: cfg.SSHUser}, nil
+}
 
+// Dial opens an SSH connection to the given host.
+func (d *SSHDialer) Dial(hostAddress string) (*ssh.Client, error) {
 	sshCfg := &ssh.ClientConfig{
-		User:            cfg.SSHUser,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: hostKeyCallback,
+		User:            d.user,
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(d.signer)},
+		HostKeyCallback: d.hostKeyCallback,
 		Timeout:         10 * time.Second,
 	}
-
 	addr := net.JoinHostPort(hostAddress, "22")
 	client, err := ssh.Dial("tcp", addr, sshCfg)
 	if err != nil {

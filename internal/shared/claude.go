@@ -18,29 +18,48 @@ const anthropicVersion = "2023-06-01"
 // to prevent a malicious or buggy upstream from exhausting memory.
 const MaxResponseBytes = 2 * 1024 * 1024 // 2 MiB
 
-var claudeHTTPClient = &http.Client{Timeout: 120 * time.Second}
+// ClaudeClient holds the HTTP client and configuration needed
+// to talk to the Claude Messages API. It implements both Analyzer
+// and ToolLoopRunner.
+type ClaudeClient struct {
+	HTTP    *http.Client
+	BaseURL string
+	APIKey  string
+	Model   string
+}
+
+// NewClaudeClient creates a ClaudeClient from a BaseConfig with a
+// default 120-second timeout HTTP client.
+func NewClaudeClient(cfg BaseConfig) *ClaudeClient {
+	return &ClaudeClient{
+		HTTP:    &http.Client{Timeout: 120 * time.Second},
+		BaseURL: cfg.APIBaseURL,
+		APIKey:  cfg.APIKey,
+		Model:   cfg.ClaudeModel,
+	}
+}
 
 // sendRequest sends a JSON body to the Claude API and returns the raw response bytes.
-func sendRequest(ctx context.Context, cfg BaseConfig, body any) ([]byte, error) {
+func (c *ClaudeClient) sendRequest(ctx context.Context, body any) ([]byte, error) {
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", cfg.APIBaseURL, bytes.NewReader(bodyBytes))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	if strings.Contains(cfg.APIBaseURL, "anthropic.com") {
-		req.Header.Set("x-api-key", cfg.APIKey)
+	if strings.Contains(c.BaseURL, "anthropic.com") {
+		req.Header.Set("x-api-key", c.APIKey)
 		req.Header.Set("anthropic-version", anthropicVersion)
 	} else {
-		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	}
 
-	resp, err := claudeHTTPClient.Do(req)
+	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("API request: %w", err)
 	}
@@ -58,21 +77,21 @@ func sendRequest(ctx context.Context, cfg BaseConfig, body any) ([]byte, error) 
 	return respBody, nil
 }
 
-// AnalyzeWithClaude sends a single-turn analysis request. Used by k8s-analyzer.
-func AnalyzeWithClaude(ctx context.Context, cfg BaseConfig, systemPrompt, userPrompt string) (string, error) {
-	reqBody := ClaudeRequest{
-		Model:     cfg.ClaudeModel,
+// Analyze sends a single-turn analysis request to the Claude API.
+func (c *ClaudeClient) Analyze(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	reqBody := ToolRequest{
+		Model:     c.Model,
 		MaxTokens: 2048,
 		System:    systemPrompt,
-		Messages:  []ClaudeMessage{{Role: "user", Content: userPrompt}},
+		Messages:  []ToolMessage{{Role: "user", Content: userPrompt}},
 	}
 
-	respBody, err := sendRequest(ctx, cfg, reqBody)
+	respBody, err := c.sendRequest(ctx, reqBody)
 	if err != nil {
 		return "", err
 	}
 
-	var result ClaudeResponse
+	var result ToolResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return "", fmt.Errorf("parse response: %w", err)
 	}
@@ -81,27 +100,19 @@ func AnalyzeWithClaude(ctx context.Context, cfg BaseConfig, systemPrompt, userPr
 		return "", fmt.Errorf("API error: %s: %s", result.Error.Type, result.Error.Message)
 	}
 
-	var parts []string
-	for _, c := range result.Content {
-		if c.Type == "text" && c.Text != "" {
-			parts = append(parts, c.Text)
-		}
-	}
-
 	slog.Info("Claude analysis complete",
-		"model", cfg.ClaudeModel,
+		"model", c.Model,
 		"inputTokens", result.Usage.InputTokens,
 		"outputTokens", result.Usage.OutputTokens)
 
-	return strings.Join(parts, "\n"), nil
+	return extractText(result.Content), nil
 }
 
 // RunToolLoop runs a multi-turn Claude conversation with tool use.
 // handleTool is called for each tool_use block. After maxRounds of tool calls,
 // a final request without tools forces Claude to produce a text response.
-func RunToolLoop(
+func (c *ClaudeClient) RunToolLoop(
 	ctx context.Context,
-	cfg BaseConfig,
 	systemPrompt string,
 	userPrompt string,
 	tools []Tool,
@@ -116,14 +127,14 @@ func RunToolLoop(
 		slog.Info("tool loop round", "round", round+1, "maxRounds", maxRounds)
 
 		reqBody := ToolRequest{
-			Model:     cfg.ClaudeModel,
+			Model:     c.Model,
 			MaxTokens: 4096,
 			System:    systemPrompt,
 			Tools:     tools,
 			Messages:  messages,
 		}
 
-		respBody, err := sendRequest(ctx, cfg, reqBody)
+		respBody, err := c.sendRequest(ctx, reqBody)
 		if err != nil {
 			return "", fmt.Errorf("round %d: %w", round+1, err)
 		}
@@ -171,6 +182,16 @@ func RunToolLoop(
 			})
 		}
 
+		// No tool_use blocks in response — treat as final answer. This handles
+		// "max_tokens" and other non-"end_turn" stop reasons that carry text but
+		// no tool calls. Appending a nil tool_results slice would marshal to
+		// "content": null and cause the next API call to fail with 400.
+		if len(toolResults) == 0 {
+			slog.Warn("tool loop: no tool_use blocks found, returning text as final answer",
+				"stop_reason", resp.StopReason, "round", round+1)
+			return extractText(resp.Content), nil
+		}
+
 		messages = append(messages, ToolMessage{Role: "user", Content: toolResults})
 	}
 
@@ -184,14 +205,14 @@ func RunToolLoop(
 	})
 
 	reqBody := ToolRequest{
-		Model:     cfg.ClaudeModel,
+		Model:     c.Model,
 		MaxTokens: 4096,
 		System:    systemPrompt,
 		Tools:     tools,
 		Messages:  messages,
 	}
 
-	respBody, err := sendRequest(ctx, cfg, reqBody)
+	respBody, err := c.sendRequest(ctx, reqBody)
 	if err != nil {
 		return "", fmt.Errorf("summary request: %w", err)
 	}

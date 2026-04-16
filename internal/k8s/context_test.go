@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -197,26 +199,28 @@ func TestGetKubeContext_Events_WarningEventListed(t *testing.T) {
 
 // ----- GetPrometheusMetrics tests -----
 
-func TestGetPrometheusMetrics_NoNamespaceNoAlertname(t *testing.T) {
+func TestGetMetrics_NoNamespaceNoAlertname(t *testing.T) {
 	srv := makePromServer(t, []PromResult{})
 	defer srv.Close()
 
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
 	alert := makeAlertWithLabels(map[string]string{})
-	result := GetPrometheusMetrics(context.Background(), srv.URL, alert)
+	result := prom.GetMetrics(context.Background(), alert)
 	if !strings.Contains(result, "Active Firing Alerts") {
 		t.Errorf("expected active alerts section, got %q", result)
 	}
 }
 
-func TestGetPrometheusMetrics_IncludesNamespaceSections(t *testing.T) {
+func TestGetMetrics_IncludesNamespaceSections(t *testing.T) {
 	srv := makePromServer(t, []PromResult{})
 	defer srv.Close()
 
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
 	alert := makeAlertWithLabels(map[string]string{
 		"namespace": "production",
 		"alertname": "SomeAlert",
 	})
-	result := GetPrometheusMetrics(context.Background(), srv.URL, alert)
+	result := prom.GetMetrics(context.Background(), alert)
 	if !strings.Contains(result, "CPU Usage (production)") {
 		t.Errorf("expected CPU section for namespace, got %q", result)
 	}
@@ -228,64 +232,69 @@ func TestGetPrometheusMetrics_IncludesNamespaceSections(t *testing.T) {
 	}
 }
 
-func TestGetPrometheusMetrics_CrashLoopAlertname(t *testing.T) {
+func TestGetMetrics_CrashLoopAlertname(t *testing.T) {
 	srv := makePromServer(t, []PromResult{})
 	defer srv.Close()
 
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
 	alert := makeAlertWithLabels(map[string]string{"alertname": "PodCrashLoopBackOff"})
-	result := GetPrometheusMetrics(context.Background(), srv.URL, alert)
+	result := prom.GetMetrics(context.Background(), alert)
 	if !strings.Contains(result, "CrashLoop Details") {
 		t.Errorf("expected CrashLoop Details section, got %q", result)
 	}
 }
 
-func TestGetPrometheusMetrics_MemoryAlertname(t *testing.T) {
+func TestGetMetrics_MemoryAlertname(t *testing.T) {
 	srv := makePromServer(t, []PromResult{})
 	defer srv.Close()
 
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
 	alert := makeAlertWithLabels(map[string]string{"alertname": "HighMemoryUsage"})
-	result := GetPrometheusMetrics(context.Background(), srv.URL, alert)
+	result := prom.GetMetrics(context.Background(), alert)
 	if !strings.Contains(result, "Top Memory Consumers") {
 		t.Errorf("expected Top Memory Consumers section, got %q", result)
 	}
 }
 
-func TestGetPrometheusMetrics_CPUAlertname(t *testing.T) {
+func TestGetMetrics_CPUAlertname(t *testing.T) {
 	srv := makePromServer(t, []PromResult{})
 	defer srv.Close()
 
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
 	alert := makeAlertWithLabels(map[string]string{"alertname": "HighCPUUsage"})
-	result := GetPrometheusMetrics(context.Background(), srv.URL, alert)
+	result := prom.GetMetrics(context.Background(), alert)
 	if !strings.Contains(result, "Top CPU Consumers") {
 		t.Errorf("expected Top CPU Consumers section, got %q", result)
 	}
 }
 
-func TestGetPrometheusMetrics_DiskAlertname(t *testing.T) {
+func TestGetMetrics_DiskAlertname(t *testing.T) {
 	srv := makePromServer(t, []PromResult{})
 	defer srv.Close()
 
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
 	for _, name := range []string{"DiskFull", "VolumeAlmostFull", "StoragePressure"} {
 		alert := makeAlertWithLabels(map[string]string{"alertname": name})
-		result := GetPrometheusMetrics(context.Background(), srv.URL, alert)
+		result := prom.GetMetrics(context.Background(), alert)
 		if !strings.Contains(result, "PVC Usage") {
 			t.Errorf("alert %q: expected PVC Usage section, got %q", name, result)
 		}
 	}
 }
 
-func TestGetPrometheusMetrics_NodeAlertname(t *testing.T) {
+func TestGetMetrics_NodeAlertname(t *testing.T) {
 	srv := makePromServer(t, []PromResult{})
 	defer srv.Close()
 
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
 	alert := makeAlertWithLabels(map[string]string{"alertname": "NodeNotReady"})
-	result := GetPrometheusMetrics(context.Background(), srv.URL, alert)
+	result := prom.GetMetrics(context.Background(), alert)
 	if !strings.Contains(result, "Node Conditions") {
 		t.Errorf("expected Node Conditions section, got %q", result)
 	}
 }
 
-func TestGetPrometheusMetrics_WithResultData(t *testing.T) {
+func TestGetMetrics_WithResultData(t *testing.T) {
 	srv := makePromServer(t, []PromResult{
 		{
 			Metric: map[string]string{"job": "prometheus", "instance": "localhost:9090"},
@@ -294,16 +303,18 @@ func TestGetPrometheusMetrics_WithResultData(t *testing.T) {
 	})
 	defer srv.Close()
 
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
 	alert := makeAlertWithLabels(map[string]string{})
-	result := GetPrometheusMetrics(context.Background(), srv.URL, alert)
+	result := prom.GetMetrics(context.Background(), alert)
 	if !strings.Contains(result, "job=prometheus") && !strings.Contains(result, "instance=localhost:9090") {
 		t.Errorf("expected metric labels in result, got %q", result)
 	}
 }
 
-func TestGetPrometheusMetrics_PrometheusUnreachable(t *testing.T) {
+func TestGetMetrics_PrometheusUnreachable(t *testing.T) {
+	prom := &PrometheusClient{HTTP: &http.Client{Timeout: time.Second}, URL: "http://127.0.0.1:1"}
 	alert := makeAlertWithLabels(map[string]string{"alertname": "SomeAlert"})
-	result := GetPrometheusMetrics(context.Background(), "http://127.0.0.1:1", alert)
+	result := prom.GetMetrics(context.Background(), alert)
 	// Should still return sections, with error messages inside them
 	if !strings.Contains(result, "Active Firing Alerts") {
 		t.Errorf("expected sections even on error, got %q", result)
@@ -313,7 +324,7 @@ func TestGetPrometheusMetrics_PrometheusUnreachable(t *testing.T) {
 	}
 }
 
-func TestGetPrometheusMetrics_ErrorStatus(t *testing.T) {
+func TestGetMetrics_ErrorStatus(t *testing.T) {
 	// Prometheus returns status="error" for a bad query; should surface the error, not "(no data)"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -321,8 +332,9 @@ func TestGetPrometheusMetrics_ErrorStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
 	alert := makeAlertWithLabels(map[string]string{})
-	result := GetPrometheusMetrics(context.Background(), srv.URL, alert)
+	result := prom.GetMetrics(context.Background(), alert)
 	if !strings.Contains(result, "query error") {
 		t.Errorf("expected query error in result, got %q", result)
 	}
@@ -331,6 +343,26 @@ func TestGetPrometheusMetrics_ErrorStatus(t *testing.T) {
 	}
 	if strings.Contains(result, "(no data)") {
 		t.Errorf("result should not say '(no data)' for an error response, got %q", result)
+	}
+}
+
+func TestGetPrometheusMetrics_OversizedResponse(t *testing.T) {
+	// A Prometheus server that returns more than MaxResponseBytes should not
+	// cause unbounded memory allocation; promqlQuery must cap reads via LimitReader.
+	// The truncated body will fail JSON parsing and return the parse-error sentinel.
+	huge := strings.Repeat("x", shared.MaxResponseBytes+1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, huge)
+	}))
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	alert := makeAlertWithLabels(map[string]string{})
+	result := prom.GetMetrics(context.Background(), alert)
+	// The oversized, truncated body cannot parse as JSON — expect the parse-failure sentinel.
+	if !strings.Contains(result, "failed to parse") {
+		t.Errorf("expected parse-failure sentinel for oversized response, got %q", result)
 	}
 }
 
@@ -351,7 +383,8 @@ func TestGatherContext_ReturnsFourSections(t *testing.T) {
 		MaxLogBytes:       4096,
 	}
 
-	actx := GatherContext(context.Background(), cs, srv.URL, alert, cfg)
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	actx := GatherContext(context.Background(), prom, cs, alert, cfg)
 	if len(actx.Sections) != 4 {
 		t.Fatalf("expected 4 sections, got %d", len(actx.Sections))
 	}
@@ -377,7 +410,8 @@ func TestGatherContext_SectionsNotEmpty(t *testing.T) {
 		MaxLogBytes:       4096,
 	}
 
-	actx := GatherContext(context.Background(), cs, srv.URL, alert, cfg)
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	actx := GatherContext(context.Background(), prom, cs, alert, cfg)
 	for _, s := range actx.Sections {
 		if s.Content == "" {
 			t.Errorf("section %q has empty content", s.Name)
@@ -401,7 +435,8 @@ func TestGatherContext_PrometheusUnreachable_StillReturnsKubeContext(t *testing.
 		MaxLogBytes:       4096,
 	}
 
-	actx := GatherContext(context.Background(), cs, "http://127.0.0.1:1", alert, cfg)
+	prom := &PrometheusClient{HTTP: &http.Client{Timeout: time.Second}, URL: "http://127.0.0.1:1"}
+	actx := GatherContext(context.Background(), prom, cs, alert, cfg)
 	if len(actx.Sections) != 4 {
 		t.Fatalf("expected 4 sections even when Prometheus unreachable, got %d", len(actx.Sections))
 	}
@@ -427,8 +462,9 @@ func TestGatherContext_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
+	prom := &PrometheusClient{HTTP: slow.Client(), URL: slow.URL}
 	// Should not block / panic
-	actx := GatherContext(ctx, cs, slow.URL, alert, cfg)
+	actx := GatherContext(ctx, prom, cs, alert, cfg)
 	if len(actx.Sections) != 4 {
 		t.Fatalf("expected 4 sections, got %d", len(actx.Sections))
 	}

@@ -101,6 +101,28 @@ func TestToolResponseParse_EndTurn(t *testing.T) {
 	}
 }
 
+func TestFormatForPrompt(t *testing.T) {
+	ac := AnalysisContext{
+		Sections: []ContextSection{
+			{Name: "Metrics", Content: "cpu=90%"},
+			{Name: "Events", Content: "pod restarted"},
+		},
+	}
+	got := ac.FormatForPrompt()
+	want := "## Metrics\ncpu=90%\n\n## Events\npod restarted\n\n"
+	if got != want {
+		t.Errorf("FormatForPrompt() =\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestFormatForPrompt_Empty(t *testing.T) {
+	ac := AnalysisContext{}
+	got := ac.FormatForPrompt()
+	if got != "" {
+		t.Errorf("FormatForPrompt() = %q, want empty", got)
+	}
+}
+
 func TestToolResponseParse_ToolUse(t *testing.T) {
 	raw := `{
 		"content": [

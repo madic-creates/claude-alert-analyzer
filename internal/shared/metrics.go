@@ -21,6 +21,10 @@ type AlertMetrics struct {
 	AlertsProcessed atomic.Int64
 	// AlertsFailed counts alerts where analysis or publishing failed.
 	AlertsFailed atomic.Int64
+	// ProcessingDurationSum tracks total processing time in microseconds.
+	ProcessingDurationSum atomic.Int64
+	// ProcessingDurationCount tracks total alerts processed (for avg calculation).
+	ProcessingDurationCount atomic.Int64
 }
 
 // MetricsHandler returns an HTTP handler that renders all counters in
@@ -46,5 +50,11 @@ func (m *AlertMetrics) MetricsHandler() http.HandlerFunc {
 		fmt.Fprintf(w, "# HELP alert_analyzer_alerts_failed_total Alerts where analysis or publishing failed.\n")
 		fmt.Fprintf(w, "# TYPE alert_analyzer_alerts_failed_total counter\n")
 		fmt.Fprintf(w, "alert_analyzer_alerts_failed_total %d\n", m.AlertsFailed.Load())
+		fmt.Fprintf(w, "# HELP alert_analyzer_processing_duration_seconds_sum Total processing time.\n")
+		fmt.Fprintf(w, "# TYPE alert_analyzer_processing_duration_seconds_sum counter\n")
+		fmt.Fprintf(w, "alert_analyzer_processing_duration_seconds_sum %f\n", float64(m.ProcessingDurationSum.Load())/1e6)
+		fmt.Fprintf(w, "# HELP alert_analyzer_processing_duration_seconds_count Total alerts processed (for avg calculation).\n")
+		fmt.Fprintf(w, "# TYPE alert_analyzer_processing_duration_seconds_count counter\n")
+		fmt.Fprintf(w, "alert_analyzer_processing_duration_seconds_count %d\n", m.ProcessingDurationCount.Load())
 	}
 }
