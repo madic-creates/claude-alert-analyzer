@@ -547,6 +547,52 @@ func TestRunToolLoop_MultipleToolsInOneRound(t *testing.T) {
 	}
 }
 
+// TestRunToolLoop_MaxTokensStopReason verifies that a "max_tokens" stop reason
+// (no tool_use blocks) is treated as a final answer rather than causing the loop
+// to append a nil content message and fail on the next API call.
+func TestRunToolLoop_MaxTokensStopReason(t *testing.T) {
+	var callCount atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+
+		if call == 1 {
+			// Model hits token limit mid-response — text only, no tool_use blocks.
+			fmt.Fprint(w, `{
+				"content": [{"type": "text", "text": "Partial analysis before token limit."}],
+				"stop_reason": "max_tokens",
+				"usage": {"input_tokens": 100, "output_tokens": 4096}
+			}`)
+		} else {
+			// A second call should never happen; return an error to make the test fail clearly.
+			t.Errorf("unexpected second API call (call %d); nil content message was sent", call)
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error": {"type": "invalid_request", "message": "content must not be null"}}`)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := BaseConfig{APIBaseURL: srv.URL, APIKey: "test-key", ClaudeModel: "test"}
+	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+
+	result, err := RunToolLoop(context.Background(), cfg, "system", "user prompt", tools, 10,
+		func(name string, input json.RawMessage) (string, error) {
+			t.Fatal("tool handler should not be called on max_tokens response")
+			return "", nil
+		})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "Partial analysis before token limit." {
+		t.Errorf("unexpected result: %q", result)
+	}
+	if callCount.Load() != 1 {
+		t.Errorf("expected exactly 1 API call, got %d", callCount.Load())
+	}
+}
+
 func TestRunToolLoop_SummaryRequestFails(t *testing.T) {
 	var callCount atomic.Int32
 
