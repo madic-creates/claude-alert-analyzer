@@ -83,13 +83,11 @@ func loadConfig() checkmk.Config {
 func buildPublishers() []shared.Publisher {
 	var publishers []shared.Publisher
 
-	ntfyURL := envOrDefault("NTFY_PUBLISH_URL", "https://ntfy.example.com")
-	ntfyTopic := envOrDefault("NTFY_PUBLISH_TOPIC", "checkmk-analysis")
-	publishers = append(publishers, &shared.NtfyPublisher{
-		URL:   ntfyURL,
-		Topic: ntfyTopic,
-		Token: os.Getenv("NTFY_PUBLISH_TOKEN"),
-	})
+	publishers = append(publishers, shared.NewNtfyPublisher(
+		envOrDefault("NTFY_PUBLISH_URL", "https://ntfy.example.com"),
+		envOrDefault("NTFY_PUBLISH_TOPIC", "checkmk-analysis"),
+		os.Getenv("NTFY_PUBLISH_TOKEN"),
+	))
 
 	return publishers
 }
