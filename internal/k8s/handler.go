@@ -52,7 +52,10 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 		dropped := 0
 		for _, alert := range payload.Alerts {
 			if cfg.SkipResolved && alert.Status == "resolved" {
-				slog.Info("skipping resolved", "alertname", alert.Labels["alertname"])
+				// Clear the cooldown so that if the same alert fires again within
+				// the TTL window it is not silently suppressed.
+				cooldown.Clear(alert.Fingerprint)
+				slog.Info("skipping resolved, cleared cooldown", "alertname", alert.Labels["alertname"])
 				continue
 			}
 

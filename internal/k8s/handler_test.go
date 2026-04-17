@@ -141,6 +141,41 @@ func TestHandleWebhook_SkipsResolvedAlerts(t *testing.T) {
 	}
 }
 
+func TestHandleWebhook_ResolvedClearsCooldown(t *testing.T) {
+	cfg := makeConfig()
+	cfg.SkipResolved = true
+	cfg.CooldownSeconds = 60
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	}, nil)
+
+	// Step 1: fire the alert → enqueued, cooldown set.
+	firingAlerts := []Alert{makeAlert("fp-resolved", "TestFlap", "firing")}
+	postWebhook(t, handler, "test-secret", makeWebhook(firingAlerts))
+	if enqueued.Load() != 1 {
+		t.Fatalf("expected 1 enqueued after firing, got %d", enqueued.Load())
+	}
+
+	// Step 2: resolve the alert → skipped, but cooldown must be cleared.
+	resolvedAlerts := []Alert{makeAlert("fp-resolved", "TestFlap", "resolved")}
+	rr := postWebhook(t, handler, "test-secret", makeWebhook(resolvedAlerts))
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 for resolved, got %d", rr.Code)
+	}
+	if enqueued.Load() != 1 {
+		t.Errorf("resolved alert should not be enqueued, got %d", enqueued.Load())
+	}
+
+	// Step 3: same alert fires again within TTL — must NOT be blocked by cooldown.
+	postWebhook(t, handler, "test-secret", makeWebhook(firingAlerts))
+	if enqueued.Load() != 2 {
+		t.Errorf("expected 2 enqueued after re-fire (cooldown should have been cleared by resolution), got %d", enqueued.Load())
+	}
+}
+
 func TestHandleWebhook_EnqueuesFiringAlert(t *testing.T) {
 	cfg := makeConfig()
 	cd := shared.NewCooldownManager()
