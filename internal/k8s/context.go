@@ -251,6 +251,10 @@ func GetKubeContext(ctx context.Context, clientset kubernetes.Interface, alert A
 	if namespace == "" {
 		return "(no namespace in alert)", "(no namespace)", "(no namespace)"
 	}
+	if !isValidNamespace(namespace) {
+		slog.Warn("dropping Kubernetes context queries: invalid namespace label", "namespace", namespace)
+		return "(invalid namespace label)", "(invalid namespace label)", "(invalid namespace label)"
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(3)

@@ -48,6 +48,32 @@ func makePromServer(t *testing.T, result []PromResult) *httptest.Server {
 
 // ----- GetKubeContext tests -----
 
+func TestGetKubeContext_InvalidNamespace(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+
+	invalidNamespaces := []string{
+		`default"}[5m]) or up{namespace="evil`,
+		"-badstart",
+		"bad start",
+		"bad\x00null",
+		strings.Repeat("a", 64), // exceeds 63-char limit
+	}
+	for _, ns := range invalidNamespaces {
+		alert := makeAlertWithLabels(map[string]string{"namespace": ns})
+		events, pods, logs := GetKubeContext(context.Background(), cs, alert, cfg)
+		if !strings.Contains(events, "invalid namespace label") {
+			t.Errorf("ns %q: expected invalid-namespace sentinel for events, got %q", ns, events)
+		}
+		if !strings.Contains(pods, "invalid namespace label") {
+			t.Errorf("ns %q: expected invalid-namespace sentinel for pods, got %q", ns, pods)
+		}
+		if !strings.Contains(logs, "invalid namespace label") {
+			t.Errorf("ns %q: expected invalid-namespace sentinel for logs, got %q", ns, logs)
+		}
+	}
+}
+
 func TestGetKubeContext_NoNamespace(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	alert := makeAlertWithLabels(map[string]string{})
