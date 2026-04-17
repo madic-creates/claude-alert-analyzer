@@ -654,3 +654,61 @@ func TestGetHostServices_TruncatesLargeServiceList(t *testing.T) {
 		t.Error("OkSvc089 should have been truncated (OK services fill the tail)")
 	}
 }
+
+// TestGetHostServices_CritNotMisclassifiedByDescription is a regression test for
+// a bug where the old two-pass sort used strings.Contains(line, ": OK —") to
+// detect OK services. A CRIT service whose *description* contained the literal
+// text ": OK —" would be placed in the OK bucket and potentially truncated off the
+// output, hiding a critical alert from Claude's analysis.
+func TestGetHostServices_CritNotMisclassifiedByDescription(t *testing.T) {
+	// Build a response with 101 services: 1 CRIT whose description contains
+	// ": OK —", and 100 OK services. With the old code the CRIT service would
+	// be sorted into the OK bucket and might be truncated; with the fix it must
+	// always appear first.
+	type svcEntry struct {
+		Extensions struct {
+			Description string `json:"description"`
+			State       int    `json:"state"`
+			Output      string `json:"plugin_output"`
+		} `json:"extensions"`
+	}
+	var entries []svcEntry
+
+	// CRIT service whose description contains the substring ": OK —".
+	e := svcEntry{}
+	e.Extensions.Description = "Status: OK — result probe"
+	e.Extensions.State = 2 // CRIT
+	e.Extensions.Output = "connection refused"
+	entries = append(entries, e)
+
+	// 100 plain OK services to force truncation.
+	for i := 0; i < 100; i++ {
+		ok := svcEntry{}
+		ok.Extensions.Description = fmt.Sprintf("OkSvc%03d", i)
+		ok.Extensions.State = 0
+		ok.Extensions.Output = "all good"
+		entries = append(entries, ok)
+	}
+
+	body, err := json.Marshal(map[string]any{"value": entries})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(body) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "auto", Secret: "secret"}
+	result := apiClient.GetHostServices(context.Background(), "host1")
+
+	// The CRIT service must be present even though its description contains ": OK —".
+	if !strings.Contains(result, "Status: OK — result probe") {
+		t.Errorf("CRIT service with ': OK —' in description was incorrectly truncated; result:\n%s", result)
+	}
+	if !strings.Contains(result, "CRIT") {
+		t.Errorf("CRIT state must appear in result; result:\n%s", result)
+	}
+}

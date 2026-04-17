@@ -174,7 +174,12 @@ func (c *APIClient) GetHostServices(ctx context.Context, hostname string) string
 		return fmt.Sprintf("(failed to parse: %v)", err)
 	}
 
-	var lines []string
+	// Build two slices during construction: non-OK services first so that if
+	// truncation is needed the least diagnostically relevant (OK) entries are
+	// dropped. Separating by state here avoids a post-hoc substring search on
+	// the formatted line, which would misclassify a service whose description
+	// itself contains the literal text ": OK —".
+	var nonOKLines, okLines []string
 	stateNames := map[int]string{0: "OK", 1: "WARN", 2: "CRIT", 3: "UNKNOWN"}
 	for _, svc := range svcResp.Value {
 		state := stateNames[svc.Extensions.State]
@@ -183,8 +188,14 @@ func (c *APIClient) GetHostServices(ctx context.Context, hostname string) string
 		}
 		output := shared.RedactSecrets(svc.Extensions.Output)
 		line := fmt.Sprintf("- %s: %s — %s", svc.Extensions.Description, state, output)
-		lines = append(lines, line)
+		if svc.Extensions.State == 0 {
+			okLines = append(okLines, line)
+		} else {
+			nonOKLines = append(nonOKLines, line)
+		}
 	}
+
+	lines := append(nonOKLines, okLines...)
 
 	if len(lines) == 0 {
 		return "(no services found)"
@@ -192,25 +203,12 @@ func (c *APIClient) GetHostServices(ctx context.Context, hostname string) string
 
 	// Cap the number of service lines injected into the Claude prompt.
 	// CheckMK hosts can have hundreds of monitored services; sending all of
-	// them consumes unnecessary tokens. Non-OK services are surfaced first
-	// so that truncation drops the least diagnostically relevant (OK) entries.
+	// them consumes unnecessary tokens. Because nonOKLines precede okLines,
+	// truncation always drops the least diagnostically relevant (OK) entries.
 	const maxServiceLines = 100
 	total := len(lines)
 	if total > maxServiceLines {
-		// Stable two-pass sort: non-OK states first, then OK.
-		// Line format is "- Description: STATE — output"; check for ": OK —".
-		prioritised := make([]string, 0, total)
-		for _, l := range lines {
-			if !strings.Contains(l, ": OK —") {
-				prioritised = append(prioritised, l)
-			}
-		}
-		for _, l := range lines {
-			if strings.Contains(l, ": OK —") {
-				prioritised = append(prioritised, l)
-			}
-		}
-		lines = append(prioritised[:maxServiceLines], fmt.Sprintf("... [%d more services truncated]", total-maxServiceLines))
+		lines = append(lines[:maxServiceLines], fmt.Sprintf("... [%d more services truncated]", total-maxServiceLines))
 	}
 
 	return strings.Join(lines, "\n")
