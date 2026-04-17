@@ -575,3 +575,82 @@ func TestGetHostServices_InvalidHostname(t *testing.T) {
 		t.Errorf("expected 'invalid hostname' in result, got: %s", result)
 	}
 }
+
+// TestGetHostServices_TruncatesLargeServiceList verifies that when a host has more
+// than 100 monitored services, the output is capped to prevent excessive Claude
+// token consumption. Non-OK services must appear before OK services so that the
+// most diagnostically relevant entries survive truncation.
+func TestGetHostServices_TruncatesLargeServiceList(t *testing.T) {
+	// Build a response with 110 services: 10 CRIT, 10 WARN, and 90 OK.
+	type svcEntry struct {
+		Extensions struct {
+			Description string `json:"description"`
+			State       int    `json:"state"`
+			Output      string `json:"plugin_output"`
+		} `json:"extensions"`
+	}
+	var entries []svcEntry
+	for i := 0; i < 10; i++ {
+		e := svcEntry{}
+		e.Extensions.Description = fmt.Sprintf("CritSvc%02d", i)
+		e.Extensions.State = 2 // CRIT
+		e.Extensions.Output = "critical failure"
+		entries = append(entries, e)
+	}
+	for i := 0; i < 10; i++ {
+		e := svcEntry{}
+		e.Extensions.Description = fmt.Sprintf("WarnSvc%02d", i)
+		e.Extensions.State = 1 // WARN
+		e.Extensions.Output = "elevated load"
+		entries = append(entries, e)
+	}
+	for i := 0; i < 90; i++ {
+		e := svcEntry{}
+		e.Extensions.Description = fmt.Sprintf("OkSvc%03d", i)
+		e.Extensions.State = 0 // OK
+		e.Extensions.Output = "all good"
+		entries = append(entries, e)
+	}
+
+	body, err := json.Marshal(map[string]any{"value": entries})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(body)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "auto", Secret: "secret"}
+	result := apiClient.GetHostServices(context.Background(), "host1")
+
+	lines := strings.Split(strings.TrimRight(result, "\n"), "\n")
+
+	// Total lines must be capped: 100 service lines + 1 truncation marker.
+	if len(lines) != 101 {
+		t.Errorf("expected 101 lines (100 services + truncation marker), got %d", len(lines))
+	}
+
+	// The truncation marker must report the correct remaining count.
+	lastLine := lines[len(lines)-1]
+	if !strings.Contains(lastLine, "10 more services truncated") {
+		t.Errorf("expected truncation marker with count 10, got: %q", lastLine)
+	}
+
+	// All 10 CRIT and all 10 WARN services must be present (non-OK first).
+	for i := 0; i < 10; i++ {
+		if !strings.Contains(result, fmt.Sprintf("CritSvc%02d", i)) {
+			t.Errorf("CritSvc%02d should survive truncation", i)
+		}
+		if !strings.Contains(result, fmt.Sprintf("WarnSvc%02d", i)) {
+			t.Errorf("WarnSvc%02d should survive truncation", i)
+		}
+	}
+
+	// The last OK service (OkSvc089) must NOT be present — it was truncated.
+	if strings.Contains(result, "OkSvc089") {
+		t.Error("OkSvc089 should have been truncated (OK services fill the tail)")
+	}
+}

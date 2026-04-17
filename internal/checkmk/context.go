@@ -189,6 +189,30 @@ func (c *APIClient) GetHostServices(ctx context.Context, hostname string) string
 	if len(lines) == 0 {
 		return "(no services found)"
 	}
+
+	// Cap the number of service lines injected into the Claude prompt.
+	// CheckMK hosts can have hundreds of monitored services; sending all of
+	// them consumes unnecessary tokens. Non-OK services are surfaced first
+	// so that truncation drops the least diagnostically relevant (OK) entries.
+	const maxServiceLines = 100
+	total := len(lines)
+	if total > maxServiceLines {
+		// Stable two-pass sort: non-OK states first, then OK.
+		// Line format is "- Description: STATE — output"; check for ": OK —".
+		prioritised := make([]string, 0, total)
+		for _, l := range lines {
+			if !strings.Contains(l, ": OK —") {
+				prioritised = append(prioritised, l)
+			}
+		}
+		for _, l := range lines {
+			if strings.Contains(l, ": OK —") {
+				prioritised = append(prioritised, l)
+			}
+		}
+		lines = append(prioritised[:maxServiceLines], fmt.Sprintf("... [%d more services truncated]", total-maxServiceLines))
+	}
+
 	return strings.Join(lines, "\n")
 }
 
