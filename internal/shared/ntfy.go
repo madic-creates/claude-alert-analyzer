@@ -78,7 +78,7 @@ func (n *NtfyPublisher) Publish(ctx context.Context, title, priority, body strin
 			lastErr = fmt.Errorf("publish: %w", err)
 			continue
 		}
-		io.Copy(io.Discard, resp.Body)
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096)) //nolint:errcheck
 		_ = resp.Body.Close()
 
 		if resp.StatusCode >= 500 {
