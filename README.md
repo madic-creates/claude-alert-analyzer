@@ -145,8 +145,11 @@ For Kubernetes deployments, the script can be deployed as a ConfigMap volume mou
 2. Notification method: **Custom script** `claude-analyzer-notify.sh`
 3. Parameter 1: Webhook URL (default: `http://claude-checkmk-analyzer.monitoring:8080/webhook`)
 4. Parameter 2: Webhook secret (must match `WEBHOOK_SECRET`)
+5. **Enable "Recovery" as a notification event** — this is required for cooldown deduplication to work correctly.
 
 The script sends host/service alert data as JSON to the webhook. Exit codes: `0` = success, `1` = 503/queue full (CheckMK will retry), `2` = error.
+
+> **Why Recovery notifications are required:** When a service fires, a cooldown is set to prevent duplicate analysis. If the service recovers and then fails again within the cooldown window, the second failure would be silently suppressed without a Recovery notification to clear the cooldown. Enabling Recovery ensures that any subsequent PROBLEM after a recovery is analyzed immediately.
 
 ### Host Context via Custom Attributes
 
