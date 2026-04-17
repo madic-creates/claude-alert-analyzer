@@ -44,6 +44,15 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 		deps.Metrics.AlertsFailed.Add(1)
 		return
 	}
+	if analysis == "" {
+		slog.Warn("analysis returned empty result, treating as failure", "alertname", alertname)
+		_ = shared.PublishAll(ctx, deps.Publishers,
+			fmt.Sprintf("Analysis FAILED: %s", alertname), "5",
+			fmt.Sprintf("**Analysis produced empty result** for %s.\n\nManual investigation needed.", alertname))
+		deps.Cooldown.Clear(alert.Fingerprint)
+		deps.Metrics.AlertsFailed.Add(1)
+		return
+	}
 
 	title := fmt.Sprintf("Analysis: %s", alertname)
 	if namespace != "" {

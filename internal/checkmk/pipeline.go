@@ -76,6 +76,16 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 		}
 	}
 
+	if analysis == "" {
+		slog.Warn("analysis returned empty result, treating as failure", "hostname", hostname)
+		_ = shared.PublishAll(ctx, deps.Publishers,
+			fmt.Sprintf("Analysis FAILED: %s", alert.Title), "5",
+			fmt.Sprintf("**Analysis produced empty result** for %s.\n\nManual investigation needed.", alert.Title))
+		deps.Cooldown.Clear(alert.Fingerprint)
+		deps.Metrics.AlertsFailed.Add(1)
+		return
+	}
+
 	priorityMap := map[string]string{"critical": "5", "warning": "4", "unknown": "3", "ok": "2"}
 	priority := priorityMap[alert.Severity]
 	if priority == "" {

@@ -205,6 +205,55 @@ func TestProcessAlert_PublishFails(t *testing.T) {
 	}
 }
 
+// TestProcessAlert_EmptyAnalysis verifies that when Analyze returns ("", nil) —
+// which can happen if Claude produces no text content blocks — the pipeline
+// treats it as a failure: cooldown is cleared and AlertsFailed is incremented.
+func TestProcessAlert_EmptyAnalysis(t *testing.T) {
+	pub := &mockPublisher{}
+	cooldown := shared.NewCooldownManager()
+	metrics := new(shared.AlertMetrics)
+
+	deps := PipelineDeps{
+		Analyzer:   &mockAnalyzer{result: "", err: nil},
+		Publishers: []shared.Publisher{pub},
+		Cooldown:   cooldown,
+		Metrics:    metrics,
+		SSHEnabled: false,
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		ValidateHost: func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
+			return &HostInfo{}, nil
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "fp-empty",
+		Title:       "EmptyAlert",
+		Severity:    "warning",
+		Fields:      map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+	}
+	ProcessAlert(context.Background(), deps, alert)
+
+	if metrics.AlertsFailed.Load() != 1 {
+		t.Errorf("AlertsFailed = %d, want 1", metrics.AlertsFailed.Load())
+	}
+	if metrics.AlertsProcessed.Load() != 0 {
+		t.Errorf("AlertsProcessed = %d, want 0", metrics.AlertsProcessed.Load())
+	}
+	// Cooldown must be cleared so the next webhook can re-trigger analysis.
+	if !cooldown.CheckAndSet("fp-empty", 300*1e9) {
+		t.Error("cooldown not cleared after empty-analysis failure")
+	}
+	// A failure notification must have been published.
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
+	}
+	if pub.calls[0].priority != "5" {
+		t.Errorf("failure notification priority = %q, want %q", pub.calls[0].priority, "5")
+	}
+}
+
 // TestProcessAlert_PriorityMapping verifies the checkmk severity → ntfy priority
 // table and that an unrecognised severity falls back to "3".
 func TestProcessAlert_PriorityMapping(t *testing.T) {
