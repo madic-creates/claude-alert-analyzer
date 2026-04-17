@@ -50,7 +50,15 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 		}
 
 		if notif.NotificationType == "RECOVERY" {
-			slog.Info("skipping recovery", "hostname", notif.Hostname, "service", notif.ServiceDescription)
+			// Clear cooldown entries for the corresponding PROBLEM notification so
+			// that a service which recovers and then fails again within the TTL window
+			// is not silently suppressed. A RECOVERY can follow a PROBLEM in any of
+			// the three non-OK states, so we clear all of them.
+			for _, state := range []string{"CRITICAL", "WARNING", "UNKNOWN"} {
+				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "PROBLEM", state))
+			}
+			slog.Info("skipping recovery, cleared problem cooldowns",
+				"hostname", notif.Hostname, "service", notif.ServiceDescription)
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, "skipped recovery")
 			return

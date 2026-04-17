@@ -113,6 +113,41 @@ func TestCheckmkHandleWebhook_SkipsRecovery(t *testing.T) {
 	}
 }
 
+// TestCheckmkHandleWebhook_RecoveryClearsCooldown verifies that when a RECOVERY
+// notification arrives it clears the cooldown for the corresponding PROBLEM so
+// that a service which fails again within the TTL window is not silently suppressed.
+func TestCheckmkHandleWebhook_RecoveryClearsCooldown(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cfg.CooldownSeconds = 60 // long TTL so the test is deterministic
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	}, nil)
+
+	// First PROBLEM: should be enqueued and set cooldown.
+	problem := makeNotification("host1", "CPU", "CRITICAL", "PROBLEM")
+	postCheckmkWebhook(t, handler, "test-secret", problem)
+	if enqueued.Load() != 1 {
+		t.Fatalf("expected 1 enqueued after first PROBLEM, got %d", enqueued.Load())
+	}
+
+	// RECOVERY: should be skipped but must clear the PROBLEM cooldown.
+	recovery := makeNotification("host1", "CPU", "OK", "RECOVERY")
+	postCheckmkWebhook(t, handler, "test-secret", recovery)
+	if enqueued.Load() != 1 {
+		t.Errorf("RECOVERY should not be enqueued, still expect 1, got %d", enqueued.Load())
+	}
+
+	// Second PROBLEM (same host+service) within original TTL window: should be
+	// enqueued because the RECOVERY cleared the cooldown.
+	postCheckmkWebhook(t, handler, "test-secret", problem)
+	if enqueued.Load() != 2 {
+		t.Errorf("expected 2 enqueued after second PROBLEM (cooldown cleared by RECOVERY), got %d", enqueued.Load())
+	}
+}
+
 func TestCheckmkHandleWebhook_EnqueuesProblem(t *testing.T) {
 	cfg := makeCheckmkConfig()
 	cd := shared.NewCooldownManager()
