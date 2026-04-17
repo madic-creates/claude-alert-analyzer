@@ -26,6 +26,15 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 		deps.Metrics.ProcessingDurationSum.Add(time.Since(start).Microseconds())
 		deps.Metrics.ProcessingDurationCount.Add(1)
 	}()
+	// If any step panics, clear the cooldown so the next webhook triggers a
+	// retry instead of silently skipping the alert for the entire TTL.
+	defer func() {
+		if r := recover(); r != nil {
+			deps.Cooldown.Clear(alert.Fingerprint)
+			deps.Metrics.AlertsFailed.Add(1)
+			panic(r) // re-panic so safeProcess can log the stack trace
+		}
+	}()
 	alertname := alert.Title
 	namespace := alert.Fields["label:namespace"]
 	slog.Info("processing alert", "alertname", alertname, "namespace", namespace)

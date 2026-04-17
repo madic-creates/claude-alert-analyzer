@@ -24,6 +24,12 @@ func (m *mockAnalyzer) RunToolLoop(ctx context.Context, systemPrompt, userPrompt
 	return m.result, m.err
 }
 
+type panicAnalyzer struct{}
+
+func (p *panicAnalyzer) Analyze(_ context.Context, _, _ string) (string, error) {
+	panic("simulated analysis panic")
+}
+
 type publishCall struct {
 	title    string
 	priority string
@@ -340,5 +346,49 @@ func TestProcessAlert_TitleFormatting(t *testing.T) {
 	wantTitle := "Analysis: High CPU Usage"
 	if pub.calls[0].title != wantTitle {
 		t.Errorf("title = %q, want %q", pub.calls[0].title, wantTitle)
+	}
+}
+
+// TestProcessAlert_PanicClearsCooldown verifies that a panic inside ProcessAlert
+// (e.g. a nil-pointer in context gathering or analysis) clears the cooldown so
+// the next webhook can trigger a retry rather than being silently dropped for the TTL.
+func TestProcessAlert_PanicClearsCooldown(t *testing.T) {
+	pub := &mockPublisher{}
+	cooldown := shared.NewCooldownManager()
+	metrics := new(shared.AlertMetrics)
+
+	deps := PipelineDeps{
+		Analyzer:   &panicAnalyzer{},
+		Publishers: []shared.Publisher{pub},
+		Cooldown:   cooldown,
+		Metrics:    metrics,
+		SSHEnabled: false,
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		ValidateHost: func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
+			return &HostInfo{}, nil
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "panic-fp",
+		Title:       "Test",
+		Severity:    "warning",
+		Fields:      map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+	}
+
+	// ProcessAlert re-panics after clearing cooldown; recover here so the test doesn't fail.
+	func() {
+		defer func() { recover() }()
+		ProcessAlert(context.Background(), deps, alert)
+	}()
+
+	// Cooldown must be cleared so the next webhook can re-trigger analysis.
+	if !cooldown.CheckAndSet("panic-fp", 300*1e9) {
+		t.Error("cooldown not cleared after panic")
+	}
+	if metrics.AlertsFailed.Load() != 1 {
+		t.Errorf("AlertsFailed = %d, want 1", metrics.AlertsFailed.Load())
 	}
 }

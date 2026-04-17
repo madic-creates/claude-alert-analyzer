@@ -17,6 +17,12 @@ func (m *mockAnalyzer) Analyze(ctx context.Context, systemPrompt, userPrompt str
 	return m.result, m.err
 }
 
+type panicAnalyzer struct{}
+
+func (p *panicAnalyzer) Analyze(_ context.Context, _, _ string) (string, error) {
+	panic("simulated analysis panic")
+}
+
 type publishCall struct {
 	title    string
 	priority string
@@ -184,6 +190,42 @@ func TestProcessAlert_EmptyAnalysis(t *testing.T) {
 	}
 	if pub.calls[0].priority != "5" {
 		t.Errorf("failure notification priority = %q, want %q", pub.calls[0].priority, "5")
+	}
+}
+
+// TestProcessAlert_PanicClearsCooldown verifies that a panic inside ProcessAlert
+// (e.g. a nil-pointer in context gathering) clears the cooldown so the next
+// webhook can trigger a retry rather than being silently dropped for the TTL.
+func TestProcessAlert_PanicClearsCooldown(t *testing.T) {
+	pub := &mockPublisher{}
+	cooldown := shared.NewCooldownManager()
+	metrics := new(shared.AlertMetrics)
+
+	deps := PipelineDeps{
+		Analyzer:     &panicAnalyzer{},
+		Publishers:   []shared.Publisher{pub},
+		Cooldown:     cooldown,
+		Metrics:      metrics,
+		SystemPrompt: "test",
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+	}
+
+	alert := shared.AlertPayload{Fingerprint: "panic-fp", Title: "Test", Severity: "warning", Fields: map[string]string{}}
+
+	// ProcessAlert re-panics after clearing cooldown; recover here so the test doesn't fail.
+	func() {
+		defer func() { recover() }()
+		ProcessAlert(context.Background(), deps, alert)
+	}()
+
+	// Cooldown must be cleared so the next webhook can re-trigger analysis.
+	if !cooldown.CheckAndSet("panic-fp", 300*1e9) {
+		t.Error("cooldown not cleared after panic")
+	}
+	if metrics.AlertsFailed.Load() != 1 {
+		t.Errorf("AlertsFailed = %d, want 1", metrics.AlertsFailed.Load())
 	}
 }
 
