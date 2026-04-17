@@ -1,6 +1,7 @@
 package checkmk
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/binary"
@@ -149,7 +150,7 @@ func TestRunSSHCommand_Success(t *testing.T) {
 		sendExitStatus(ch, 0)
 	})
 
-	out, err := runSSHCommand(client, []string{"echo", "hello"}, 5*time.Second)
+	out, err := runSSHCommand(context.Background(), client, []string{"echo", "hello"}, 5*time.Second)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -165,7 +166,7 @@ func TestRunSSHCommand_CommandError(t *testing.T) {
 	})
 
 	// CombinedOutput returns an *ssh.ExitError on non-zero exit status
-	_, err := runSSHCommand(client, []string{"nonexistent"}, 5*time.Second)
+	_, err := runSSHCommand(context.Background(), client, []string{"nonexistent"}, 5*time.Second)
 	if err == nil {
 		t.Fatal("expected error for non-zero exit status")
 	}
@@ -178,7 +179,7 @@ func TestRunSSHCommand_Timeout(t *testing.T) {
 		time.Sleep(10 * time.Second)
 	})
 
-	_, err := runSSHCommand(client, []string{"sleep", "100"}, 50*time.Millisecond)
+	_, err := runSSHCommand(context.Background(), client, []string{"sleep", "100"}, 50*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -239,6 +240,25 @@ func TestShellQuote(t *testing.T) {
 	}
 }
 
+func TestRunSSHCommand_ContextCancelled(t *testing.T) {
+	client := startTestSSHServer(t, func(_ string, _ ssh.Channel) {
+		// Simulate a slow command that blocks until the context is cancelled.
+		time.Sleep(10 * time.Second)
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel immediately so the select fires the ctx.Done() case.
+	cancel()
+
+	_, err := runSSHCommand(ctx, client, []string{"sleep", "100"}, 30*time.Second)
+	if err == nil {
+		t.Fatal("expected error when context is cancelled")
+	}
+	if !strings.Contains(err.Error(), "context cancelled") {
+		t.Errorf("expected 'context cancelled' error message, got: %v", err)
+	}
+}
+
 func TestRunSSHCommand_ShellMetacharsEscaped(t *testing.T) {
 	// The test SSH server captures the raw command string that the client
 	// sends. We verify that shell metacharacters in argv are properly
@@ -276,7 +296,7 @@ func TestRunSSHCommand_ShellMetacharsEscaped(t *testing.T) {
 				sendExitStatus(ch, 0)
 			})
 
-			_, _ = runSSHCommand(client, tc.argv, 5*time.Second)
+			_, _ = runSSHCommand(context.Background(), client, tc.argv, 5*time.Second)
 
 			expected := shellQuote(tc.argv)
 			if captured != expected {

@@ -46,18 +46,22 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	analysis, err := deps.Analyzer.Analyze(ctx, deps.SystemPrompt, userPrompt)
 	if err != nil {
 		slog.Error("analysis failed", "alertname", alertname, "error", err)
-		_ = shared.PublishAll(ctx, deps.Publishers,
+		if notifyErr := shared.PublishAll(ctx, deps.Publishers,
 			fmt.Sprintf("Analysis FAILED: %s", alertname), "5",
-			fmt.Sprintf("**Analysis failed** for %s: %v\n\nManual investigation needed.", alertname, err))
+			fmt.Sprintf("**Analysis failed** for %s: %v\n\nManual investigation needed.", alertname, err)); notifyErr != nil {
+			slog.Warn("failed to publish failure notification", "alertname", alertname, "error", notifyErr)
+		}
 		deps.Cooldown.Clear(alert.Fingerprint)
 		deps.Metrics.AlertsFailed.Add(1)
 		return
 	}
 	if analysis == "" {
 		slog.Warn("analysis returned empty result, treating as failure", "alertname", alertname)
-		_ = shared.PublishAll(ctx, deps.Publishers,
+		if notifyErr := shared.PublishAll(ctx, deps.Publishers,
 			fmt.Sprintf("Analysis FAILED: %s", alertname), "5",
-			fmt.Sprintf("**Analysis produced empty result** for %s.\n\nManual investigation needed.", alertname))
+			fmt.Sprintf("**Analysis produced empty result** for %s.\n\nManual investigation needed.", alertname)); notifyErr != nil {
+			slog.Warn("failed to publish failure notification", "alertname", alertname, "error", notifyErr)
+		}
 		deps.Cooldown.Clear(alert.Fingerprint)
 		deps.Metrics.AlertsFailed.Add(1)
 		return

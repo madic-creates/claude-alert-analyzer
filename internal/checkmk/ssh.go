@@ -1,6 +1,7 @@
 package checkmk
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -74,7 +75,7 @@ func shellQuote(argv []string) string {
 	return strings.Join(quoted, " ")
 }
 
-func runSSHCommand(client *ssh.Client, argv []string, timeout time.Duration) (string, error) {
+func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeout time.Duration) (string, error) {
 	session, err := client.NewSession()
 	if err != nil {
 		return "", fmt.Errorf("new session: %w", err)
@@ -84,7 +85,8 @@ func runSSHCommand(client *ssh.Client, argv []string, timeout time.Duration) (st
 	cmdStr := shellQuote(argv)
 
 	// Buffered channel so the goroutine can always send without blocking,
-	// even when the timeout case is selected and the caller has returned.
+	// even when the timeout or context-cancellation case is selected and
+	// the caller has returned.
 	done := make(chan sshResult, 1)
 
 	go func() {
@@ -98,5 +100,8 @@ func runSSHCommand(client *ssh.Client, argv []string, timeout time.Duration) (st
 	case <-time.After(timeout):
 		session.Close()
 		return "", fmt.Errorf("timeout after %v", timeout)
+	case <-ctx.Done():
+		session.Close()
+		return "", fmt.Errorf("context cancelled: %w", ctx.Err())
 	}
 }

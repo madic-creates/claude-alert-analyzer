@@ -164,7 +164,7 @@ func RunAgenticDiagnostics(
 		cmdStr := strings.Join(argv, " ")
 		slog.Info("agentic SSH command", "hostname", hostname, "command", cmdStr)
 
-		output, err := runSSHCommand(sshClient, argv, 10*time.Second)
+		output, err := runSSHCommand(ctx, sshClient, argv, 10*time.Second)
 		if err != nil {
 			slog.Warn("agentic SSH command failed", "hostname", hostname, "command", cmdStr, "error", err)
 			return fmt.Sprintf("Command failed: %v", err), nil
