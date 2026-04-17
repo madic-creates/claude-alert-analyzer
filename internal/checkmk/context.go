@@ -181,7 +181,8 @@ func (c *APIClient) GetHostServices(ctx context.Context, hostname string) string
 		if state == "" {
 			state = fmt.Sprintf("%d", svc.Extensions.State)
 		}
-		line := fmt.Sprintf("- %s: %s — %s", svc.Extensions.Description, state, svc.Extensions.Output)
+		output := shared.RedactSecrets(svc.Extensions.Output)
+		line := fmt.Sprintf("- %s: %s — %s", svc.Extensions.Description, state, output)
 		lines = append(lines, line)
 	}
 

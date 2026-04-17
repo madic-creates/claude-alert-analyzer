@@ -424,6 +424,38 @@ func TestGetHostServices_InvalidJSON(t *testing.T) {
 	}
 }
 
+// TestGetHostServices_SecretsRedactedInOutput verifies that service plugin_output
+// containing secrets is passed through RedactSecrets before being returned.
+// CheckMK check plugins sometimes emit credentials (DB connection strings, API keys)
+// in their output; this guards against forwarding them to the Claude API.
+func TestGetHostServices_SecretsRedactedInOutput(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"value":[
+			{"extensions":{"description":"DBCheck","state":2,"plugin_output":"CRITICAL - password=hunter2 connection refused"}},
+			{"extensions":{"description":"API","state":1,"plugin_output":"WARNING - token=sk-ant-api03-abc123xyz connection slow"}}
+		]}`)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "auto", Secret: "secret"}
+	result := apiClient.GetHostServices(context.Background(), "host1")
+
+	if strings.Contains(result, "hunter2") {
+		t.Errorf("password not redacted in plugin output, got:\n%s", result)
+	}
+	if strings.Contains(result, "sk-ant-api03-abc123xyz") {
+		t.Errorf("API token not redacted in plugin output, got:\n%s", result)
+	}
+	if !strings.Contains(result, "[REDACTED]") {
+		t.Errorf("expected [REDACTED] marker in result, got:\n%s", result)
+	}
+	// Service names and states must be preserved
+	if !strings.Contains(result, "DBCheck") || !strings.Contains(result, "CRIT") {
+		t.Errorf("service metadata should be preserved, got:\n%s", result)
+	}
+}
+
 // TestGetHostServices_InvalidHostname verifies that the hostname guard fires
 // before any network call is made.
 func TestGetHostServices_InvalidHostname(t *testing.T) {
