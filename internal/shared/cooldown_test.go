@@ -60,3 +60,27 @@ func TestCooldown_Clear(t *testing.T) {
 		t.Error("cleared fingerprint should be allowed again")
 	}
 }
+
+// TestCooldown_LongTTLEntryNotEvictedByShortTTLSweep is a regression test for
+// the bug where CheckAndSet used the current call's TTL to sweep ALL entries.
+// An entry stored with a 10-second TTL must not be evicted when a concurrent
+// call with a 1-millisecond TTL runs the sweep.
+func TestCooldown_LongTTLEntryNotEvictedByShortTTLSweep(t *testing.T) {
+	cd := NewCooldownManager()
+
+	// Store fp-long with a generous 10-second TTL — it should stay alive.
+	if !cd.CheckAndSet("fp-long", 10*time.Second) {
+		t.Fatal("first CheckAndSet for fp-long should return true")
+	}
+
+	// Now call CheckAndSet with a very short TTL (1ms) for a different key.
+	// With the old (buggy) code this sweep would delete fp-long because
+	// now.Sub(fp-long.setAt) > 1ms is true almost immediately.
+	time.Sleep(5 * time.Millisecond) // ensure 1ms TTL of fp-short would have expired
+	cd.CheckAndSet("fp-short", time.Millisecond)
+
+	// fp-long must still be in cooldown — it was stored with a 10-second TTL.
+	if cd.CheckAndSet("fp-long", 10*time.Second) {
+		t.Error("fp-long was incorrectly evicted by the short-TTL sweep; it should still be in cooldown")
+	}
+}
