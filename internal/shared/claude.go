@@ -217,11 +217,12 @@ func (c *ClaudeClient) RunToolLoop(
 	}
 
 	reqBody := ToolRequest{
-		Model:     c.Model,
-		MaxTokens: 4096,
-		System:    systemPrompt,
-		Tools:     tools,
-		Messages:  messages,
+		Model:      c.Model,
+		MaxTokens:  4096,
+		System:     systemPrompt,
+		Tools:      tools,
+		ToolChoice: &ToolChoice{Type: "none"}, // prevent tool calls in the forced-summary turn
+		Messages:   messages,
 	}
 
 	respBody, err := c.sendRequest(ctx, reqBody)

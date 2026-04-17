@@ -90,13 +90,20 @@ type ToolMessage struct {
 	Content any    `json:"content"` // string or []ContentBlock
 }
 
+// ToolChoice controls which tool (if any) Claude may call.
+// Use Type "none" to force a text-only response even when tools are present.
+type ToolChoice struct {
+	Type string `json:"type"`
+}
+
 // ToolRequest is the Claude Messages API request with tool support.
 type ToolRequest struct {
-	Model     string        `json:"model"`
-	MaxTokens int           `json:"max_tokens"`
-	System    string        `json:"system"`
-	Tools     []Tool        `json:"tools,omitempty"`
-	Messages  []ToolMessage `json:"messages"`
+	Model      string        `json:"model"`
+	MaxTokens  int           `json:"max_tokens"`
+	System     string        `json:"system"`
+	Tools      []Tool        `json:"tools,omitempty"`
+	ToolChoice *ToolChoice   `json:"tool_choice,omitempty"`
+	Messages   []ToolMessage `json:"messages"`
 }
 
 // ToolResponse is the Claude Messages API response with tool-use support.

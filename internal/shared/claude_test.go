@@ -717,3 +717,62 @@ func TestRunToolLoop_SummaryRequestFails(t *testing.T) {
 		t.Errorf("error should mention 'summary', got: %v", err)
 	}
 }
+
+// TestRunToolLoop_SummaryRequestHasToolChoiceNone verifies that when maxRounds is
+// exhausted the forced-summary request includes tool_choice={"type":"none"}.
+// Without this, Claude could still call tools in the summary turn; extractText()
+// would return "" and the empty-analysis guard would fire a failure notification.
+func TestRunToolLoop_SummaryRequestHasToolChoiceNone(t *testing.T) {
+	var callCount atomic.Int32
+	var summaryToolChoice map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+
+		if call == 1 {
+			// Round 1 (only round, maxRounds=1): request a tool call.
+			fmt.Fprint(w, `{
+				"content": [
+					{"type": "tool_use", "id": "toolu_1", "name": "execute_command", "input": {"command": ["uptime"]}}
+				],
+				"stop_reason": "tool_use",
+				"usage": {"input_tokens": 50, "output_tokens": 10}
+			}`)
+		} else {
+			// Call 2 = forced summary. Capture tool_choice from the request body.
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("failed to decode summary request body: %v", err)
+			}
+			if tc, ok := body["tool_choice"].(map[string]any); ok {
+				summaryToolChoice = tc
+			}
+			fmt.Fprint(w, `{
+				"content": [{"type": "text", "text": "Summary."}],
+				"stop_reason": "end_turn",
+				"usage": {"input_tokens": 200, "output_tokens": 20}
+			}`)
+		}
+	}))
+	defer srv.Close()
+
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
+	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+
+	result, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
+		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil })
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "Summary." {
+		t.Errorf("unexpected result: %q", result)
+	}
+	if summaryToolChoice == nil {
+		t.Fatal("summary request did not include tool_choice field")
+	}
+	if got := summaryToolChoice["type"]; got != "none" {
+		t.Errorf("summary request tool_choice.type = %q, want \"none\"", got)
+	}
+}
