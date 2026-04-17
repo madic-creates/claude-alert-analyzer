@@ -588,6 +588,98 @@ func TestRunToolLoop_MaxTokensStopReason(t *testing.T) {
 	}
 }
 
+// TestRunToolLoop_MaxRounds_NoConsecutiveUserMessages verifies that when maxRounds is
+// exhausted the forced-summary request does NOT contain two consecutive "user" messages.
+// Before the fix, the code appended a separate user turn after the last tool_result
+// user turn, causing the Anthropic API to reject the request with a 400
+// "roles must alternate" error on every real agentic run that reached max rounds.
+func TestRunToolLoop_MaxRounds_NoConsecutiveUserMessages(t *testing.T) {
+	var callCount atomic.Int32
+	var summaryMessages []map[string]any // decoded messages from the final request
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+
+		if call == 1 {
+			// Round 1 (only round, maxRounds=1): request a tool call.
+			fmt.Fprint(w, `{
+				"content": [
+					{"type": "tool_use", "id": "toolu_1", "name": "execute_command", "input": {"command": ["uptime"]}}
+				],
+				"stop_reason": "tool_use",
+				"usage": {"input_tokens": 50, "output_tokens": 10}
+			}`)
+		} else {
+			// Call 2 = forced summary. Capture the messages array.
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("failed to decode summary request body: %v", err)
+			}
+			if msgs, ok := body["messages"].([]any); ok {
+				for _, m := range msgs {
+					if msg, ok := m.(map[string]any); ok {
+						summaryMessages = append(summaryMessages, msg)
+					}
+				}
+			}
+			fmt.Fprint(w, `{
+				"content": [{"type": "text", "text": "Summary after max rounds."}],
+				"stop_reason": "end_turn",
+				"usage": {"input_tokens": 200, "output_tokens": 40}
+			}`)
+		}
+	}))
+	defer srv.Close()
+
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
+	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+
+	result, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
+		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil })
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "Summary after max rounds." {
+		t.Errorf("unexpected result: %q", result)
+	}
+
+	// Assert no consecutive user messages in the summary request.
+	for i := 1; i < len(summaryMessages); i++ {
+		prevRole, _ := summaryMessages[i-1]["role"].(string)
+		currRole, _ := summaryMessages[i]["role"].(string)
+		if prevRole == "user" && currRole == "user" {
+			t.Errorf("messages[%d] and messages[%d] are both 'user' — API will reject this: %+v",
+				i-1, i, summaryMessages)
+		}
+	}
+
+	// The last user message should contain both tool_result and text blocks.
+	lastMsg := summaryMessages[len(summaryMessages)-1]
+	lastRole, _ := lastMsg["role"].(string)
+	if lastRole != "user" {
+		t.Errorf("last message role should be 'user', got %q", lastRole)
+	}
+	content, _ := lastMsg["content"].([]any)
+	var hasToolResult, hasText bool
+	for _, block := range content {
+		b, _ := block.(map[string]any)
+		switch b["type"] {
+		case "tool_result":
+			hasToolResult = true
+		case "text":
+			hasText = true
+		}
+	}
+	if !hasToolResult {
+		t.Error("last user message should contain a tool_result block")
+	}
+	if !hasText {
+		t.Error("last user message should contain a text block with the summary prompt")
+	}
+}
+
 func TestRunToolLoop_SummaryRequestFails(t *testing.T) {
 	var callCount atomic.Int32
 

@@ -53,6 +53,8 @@ This file is maintained by the autonomous improvement agent. Read it at the star
 | `cmd/k8s-analyzer/` | main.go | none | Entrypoint, hard to unit test |
 | `cmd/checkmk-analyzer/` | main.go | none | Entrypoint, hard to unit test |
 
+- **fix: consecutive user messages in RunToolLoop forced-summary request** — When `maxRounds` is exhausted in `RunToolLoop`, the code previously appended a new `user` message containing the summary prompt immediately after the last `user(tool_results)` message from the final round. The Anthropic API rejects any request where two consecutive messages share the same role with a 400 "roles must alternate" error, so the forced-summary path **always** failed in production whenever the agentic SSH diagnostic session consumed all available rounds. Fixed by modifying the last user message in-place — appending the summary prompt as a `text` ContentBlock to the existing `[]ContentBlock` slice (which already contains `tool_result` blocks). The Anthropic API explicitly supports mixing `tool_result` and `text` blocks in the same user message. Added `TestRunToolLoop_MaxRounds_NoConsecutiveUserMessages` which captures the actual JSON request body sent in the summary call and asserts: (1) no two adjacent messages share the same role, and (2) the last user message contains both a `tool_result` block and a `text` block.
+
 ## Potential Next Improvements
 
 _(no items pending)_

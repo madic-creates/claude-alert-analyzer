@@ -195,14 +195,26 @@ func (c *ClaudeClient) RunToolLoop(
 		messages = append(messages, ToolMessage{Role: "user", Content: toolResults})
 	}
 
-	// Max rounds reached — add explicit prompt and send with tools (required by API
-	// when conversation contains tool_use blocks) to force a text summary.
+	// Max rounds reached — append the summary prompt to the last user message (which
+	// contains the final round's tool_result blocks) rather than starting a new user
+	// turn. Creating a second consecutive user message would be rejected by the
+	// Anthropic API with a 400 "roles must alternate" error. The API explicitly
+	// supports mixing tool_result and text blocks in the same user message.
 	slog.Info("tool loop max rounds reached, requesting summary", "maxRounds", maxRounds)
 
-	messages = append(messages, ToolMessage{
-		Role:    "user",
-		Content: "You have reached the maximum number of diagnostic rounds. Do NOT call any more tools. Provide your final analysis now based on all information gathered so far. Start directly with the analysis — no preamble or meta-commentary.",
-	})
+	const summaryPrompt = "You have reached the maximum number of diagnostic rounds. Do NOT call any more tools. Provide your final analysis now based on all information gathered so far. Start directly with the analysis — no preamble or meta-commentary."
+
+	lastIdx := len(messages) - 1
+	if toolResults, ok := messages[lastIdx].Content.([]ContentBlock); ok {
+		messages[lastIdx].Content = append(toolResults, ContentBlock{
+			Type: "text",
+			Text: summaryPrompt,
+		})
+	} else {
+		// Fallback: should not occur in normal operation because the loop always
+		// appends a []ContentBlock user message on every tool round.
+		messages = append(messages, ToolMessage{Role: "user", Content: summaryPrompt})
+	}
 
 	reqBody := ToolRequest{
 		Model:     c.Model,
