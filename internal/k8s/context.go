@@ -69,6 +69,9 @@ func (p *PrometheusClient) query(ctx context.Context, queryStr string) string {
 		return fmt.Sprintf("(query failed: %v)", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Sprintf("(Prometheus returned %d)", resp.StatusCode)
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, shared.MaxResponseBytes))
 	if err != nil {
 		return "(failed to read response)"

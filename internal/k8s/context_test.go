@@ -563,6 +563,28 @@ func TestGetMetrics_MaliciousNamespaceDroppedFromQuery(t *testing.T) {
 	}
 }
 
+// TestQuery_NonOKStatusCode verifies that a non-200 HTTP response from Prometheus is
+// reported with the actual status code rather than a misleading "(failed to parse
+// response)" message that was previously emitted when the body was not valid JSON.
+func TestQuery_NonOKStatusCode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, "<html>Service Unavailable</html>")
+	}))
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	alert := makeAlertWithLabels(map[string]string{})
+	result := prom.GetMetrics(context.Background(), alert)
+
+	if !strings.Contains(result, "503") {
+		t.Errorf("expected HTTP status 503 in result, got: %q", result)
+	}
+	if strings.Contains(result, "failed to parse") {
+		t.Errorf("result should not contain misleading parse-error message, got: %q", result)
+	}
+}
+
 // TestQuery_MetricLabelsAreSorted verifies that when a Prometheus result contains
 // multiple metric labels they are emitted in alphabetical order, making the Claude
 // analysis context deterministic across runs.
