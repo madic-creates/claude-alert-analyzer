@@ -147,6 +147,68 @@ func TestProcessAlert_SSH_UsesHostnameNotIP(t *testing.T) {
 	}
 }
 
+// TestProcessAlert_SSH_Success verifies the happy path when SSH is enabled,
+// host validation passes, and RunAgenticDiagnostics returns an analysis.
+// The analysis must be published with the correct title/priority and
+// AlertsProcessed must be incremented.
+func TestProcessAlert_SSH_Success(t *testing.T) {
+	// Start a real in-process SSH server so RunAgenticDiagnostics can connect.
+	sshClient := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		sendExitStatus(ch, 0)
+	})
+	dialer := &fixedDialer{client: sshClient}
+
+	runner := &capturingToolRunner{result: "ssh agentic analysis"}
+	pub := &mockPublisher{}
+	cooldown := shared.NewCooldownManager()
+	metrics := new(shared.AlertMetrics)
+
+	deps := PipelineDeps{
+		Analyzer:   &mockAnalyzer{result: "fallback"},
+		ToolRunner: runner,
+		Publishers: []shared.Publisher{pub},
+		Cooldown:   cooldown,
+		Metrics:    metrics,
+		SSHEnabled: true,
+		SSHDialer:  dialer,
+		SSHConfig:  Config{MaxAgentRounds: 3, SSHDeniedCommands: DefaultDeniedCommands},
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{Sections: []shared.ContextSection{{Name: "Test", Content: "data"}}}
+		},
+		ValidateHost: func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
+			return &HostInfo{}, nil
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "ssh-success-fp",
+		Title:       "host1 - High Load",
+		Severity:    "warning",
+		Fields:      map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+	}
+
+	ProcessAlert(context.Background(), deps, alert)
+
+	if metrics.AlertsProcessed.Load() != 1 {
+		t.Errorf("AlertsProcessed = %d, want 1", metrics.AlertsProcessed.Load())
+	}
+	if metrics.AlertsFailed.Load() != 0 {
+		t.Errorf("AlertsFailed = %d, want 0", metrics.AlertsFailed.Load())
+	}
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
+	}
+	if pub.calls[0].body != "ssh agentic analysis" {
+		t.Errorf("published body = %q, want %q", pub.calls[0].body, "ssh agentic analysis")
+	}
+	if pub.calls[0].title != "Analysis: host1 - High Load" {
+		t.Errorf("published title = %q, want %q", pub.calls[0].title, "Analysis: host1 - High Load")
+	}
+	if pub.calls[0].priority != "4" { // "warning" → "4"
+		t.Errorf("published priority = %q, want %q", pub.calls[0].priority, "4")
+	}
+}
+
 func TestProcessAlert_AnalysisFails_CooldownCleared(t *testing.T) {
 	pub := &mockPublisher{}
 	cooldown := shared.NewCooldownManager()
