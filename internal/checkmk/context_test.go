@@ -498,6 +498,72 @@ func TestGatherContext_ServiceOutputSecretsRedacted(t *testing.T) {
 	}
 }
 
+// TestGatherContext_LongPluginOutputIncluded verifies that long_plugin_output from
+// the webhook payload is included in the Alert Details section sent to Claude.
+// It must be redacted (like service_output and perf_data) and only appear when non-empty.
+func TestGatherContext_LongPluginOutputIncluded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"value":[]}`)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "auto", Secret: "secret"}
+
+	t.Run("included and redacted when non-empty", func(t *testing.T) {
+		alert := shared.AlertPayload{
+			Fields: map[string]string{
+				"hostname":            "web01",
+				"host_address":        "10.0.0.1",
+				"service_description": "Disk /",
+				"service_state":       "CRITICAL",
+				"service_output":      "CRITICAL - / 95% full",
+				"notification_type":   "PROBLEM",
+				"perf_data":           "",
+				"long_plugin_output":  "/: 95% (token=ghp_abc123 total=100G used=95G free=5G)\n/boot: 50% total=1G used=512M free=512M",
+			},
+		}
+		actx := GatherContext(context.Background(), apiClient, alert, nil)
+		prompt := actx.FormatForPrompt()
+
+		// long_plugin_output content must appear in prompt
+		if !strings.Contains(prompt, "Detailed Output") {
+			t.Errorf("expected 'Detailed Output' heading in prompt:\n%s", prompt)
+		}
+		if !strings.Contains(prompt, "/boot") {
+			t.Errorf("expected /boot partition line in prompt:\n%s", prompt)
+		}
+		// secret must be redacted
+		if strings.Contains(prompt, "ghp_abc123") {
+			t.Errorf("long_plugin_output token not redacted in prompt:\n%s", prompt)
+		}
+		if !strings.Contains(prompt, "[REDACTED]") {
+			t.Errorf("expected [REDACTED] marker in prompt:\n%s", prompt)
+		}
+	})
+
+	t.Run("omitted when empty", func(t *testing.T) {
+		alert := shared.AlertPayload{
+			Fields: map[string]string{
+				"hostname":            "web01",
+				"host_address":        "10.0.0.1",
+				"service_description": "Ping",
+				"service_state":       "OK",
+				"service_output":      "OK - 1.2ms",
+				"notification_type":   "RECOVERY",
+				"perf_data":           "",
+				"long_plugin_output":  "",
+			},
+		}
+		actx := GatherContext(context.Background(), apiClient, alert, nil)
+		prompt := actx.FormatForPrompt()
+
+		if strings.Contains(prompt, "Detailed Output") {
+			t.Errorf("'Detailed Output' should be absent when long_plugin_output is empty:\n%s", prompt)
+		}
+	})
+}
+
 // TestGetHostServices_InvalidHostname verifies that the hostname guard fires
 // before any network call is made.
 func TestGetHostServices_InvalidHostname(t *testing.T) {
