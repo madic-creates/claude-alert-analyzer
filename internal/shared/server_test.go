@@ -133,7 +133,10 @@ func TestServer_SafeProcess_PanicLogsStack(t *testing.T) {
 	})
 
 	// Replace the slog default handler with one that captures the "stack" attribute.
-	handler := &stackCaptureHandler{next: slog.Default().Handler(), capture: &loggedStack}
+	// We intentionally do NOT forward to the old handler: slog.SetDefault bridges
+	// log.Default()'s output back through the new slog handler, so forwarding to
+	// the old defaultHandler creates a cycle that deadlocks on log.Logger's mutex.
+	handler := &stackCaptureHandler{capture: &loggedStack}
 	old := slog.Default()
 	slog.SetDefault(slog.New(handler))
 	defer slog.SetDefault(old)
@@ -149,33 +152,28 @@ func TestServer_SafeProcess_PanicLogsStack(t *testing.T) {
 	}
 }
 
-// stackCaptureHandler wraps a slog.Handler and captures the "stack" attribute value.
+// stackCaptureHandler is a slog.Handler that captures the "stack" attribute value
+// and discards all other output. It must NOT forward to another handler: slog.SetDefault
+// bridges log.Default()'s writer back through the active slog handler, so forwarding to
+// the old defaultHandler creates a re-entrant cycle that deadlocks on log.Logger's mutex.
 type stackCaptureHandler struct {
-	next    slog.Handler
 	capture *string
 }
 
-func (h *stackCaptureHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	return h.next.Enabled(ctx, level)
-}
+func (h *stackCaptureHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
 
-func (h *stackCaptureHandler) Handle(ctx context.Context, r slog.Record) error {
+func (h *stackCaptureHandler) Handle(_ context.Context, r slog.Record) error {
 	r.Attrs(func(a slog.Attr) bool {
 		if a.Key == "stack" {
 			*h.capture = a.Value.String()
 		}
 		return true
 	})
-	return h.next.Handle(ctx, r)
+	return nil
 }
 
-func (h *stackCaptureHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &stackCaptureHandler{next: h.next.WithAttrs(attrs), capture: h.capture}
-}
-
-func (h *stackCaptureHandler) WithGroup(name string) slog.Handler {
-	return &stackCaptureHandler{next: h.next.WithGroup(name), capture: h.capture}
-}
+func (h *stackCaptureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *stackCaptureHandler) WithGroup(_ string) slog.Handler      { return h }
 
 func TestServer_BuildMux_Ready_NilReadyCheck(t *testing.T) {
 	metrics := new(AlertMetrics)
