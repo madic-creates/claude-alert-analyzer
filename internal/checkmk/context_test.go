@@ -456,6 +456,48 @@ func TestGetHostServices_SecretsRedactedInOutput(t *testing.T) {
 	}
 }
 
+// TestGatherContext_ServiceOutputSecretsRedacted verifies that service_output
+// from the webhook payload is passed through RedactSecrets before being
+// embedded in the Claude prompt. GetHostServices already redacts plugin_output;
+// this ensures GatherContext is consistent for the same kind of data.
+func TestGatherContext_ServiceOutputSecretsRedacted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"value":[]}`)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "auto", Secret: "secret"}
+	alert := shared.AlertPayload{
+		Fields: map[string]string{
+			"hostname":            "db01",
+			"host_address":        "10.0.0.5",
+			"service_description": "MySQL Connections",
+			"service_state":       "CRITICAL",
+			"service_output":      "CRITICAL - password=s3cr3t connection refused to db01",
+			"notification_type":   "PROBLEM",
+			"perf_data":           "token=ghp_abc123xyz connections=0",
+		},
+	}
+
+	actx := GatherContext(context.Background(), apiClient, alert, nil)
+
+	prompt := actx.FormatForPrompt()
+	if strings.Contains(prompt, "s3cr3t") {
+		t.Errorf("service_output password not redacted in prompt:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "ghp_abc123xyz") {
+		t.Errorf("perf_data token not redacted in prompt:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "[REDACTED]") {
+		t.Errorf("expected [REDACTED] marker in prompt:\n%s", prompt)
+	}
+	// Service name and state must be preserved.
+	if !strings.Contains(prompt, "MySQL Connections") || !strings.Contains(prompt, "CRITICAL") {
+		t.Errorf("service metadata should be preserved:\n%s", prompt)
+	}
+}
+
 // TestGetHostServices_InvalidHostname verifies that the hostname guard fires
 // before any network call is made.
 func TestGetHostServices_InvalidHostname(t *testing.T) {

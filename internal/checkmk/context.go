@@ -213,8 +213,8 @@ func GatherContext(ctx context.Context, apiClient *APIClient, alert shared.Alert
 		Name: "Alert Details",
 		Content: fmt.Sprintf("- Hostname: %s\n- Address: %s\n- Service: %s\n- State: %s\n- Output: %s\n- Type: %s\n- Perf Data: %s",
 			hostname, hostAddress, alert.Fields["service_description"],
-			alert.Fields["service_state"], alert.Fields["service_output"],
-			alert.Fields["notification_type"], alert.Fields["perf_data"]),
+			alert.Fields["service_state"], shared.RedactSecrets(alert.Fields["service_output"]),
+			alert.Fields["notification_type"], shared.RedactSecrets(alert.Fields["perf_data"])),
 	})
 
 	sections = append(sections, shared.ContextSection{
