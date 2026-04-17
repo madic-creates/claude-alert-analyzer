@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"sync"
 	"syscall"
 	"time"
@@ -86,7 +87,10 @@ func (s *Server) BuildMux(webhookHandler http.HandlerFunc) *http.ServeMux {
 func (s *Server) safeProcess(ctx context.Context, alert AlertPayload) {
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("worker panic recovered", "recover", r, "fingerprint", alert.Fingerprint)
+			slog.Error("worker panic recovered",
+				"recover", r,
+				"fingerprint", alert.Fingerprint,
+				"stack", string(debug.Stack()))
 		}
 	}()
 	s.process(ctx, alert)
