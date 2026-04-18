@@ -270,6 +270,98 @@ func TestGetPodLogs_LimitBytesPassedToAPI(t *testing.T) {
 	}
 }
 
+// TestGetPodLogs_MultiContainerPod verifies that getPodLogs passes an explicit container
+// name to GetLogs when a pod has multiple containers. Omitting the container name for
+// such pods causes the Kubernetes API to return "a container name must be specified",
+// resulting in silent "(no logs)" output for any pod with a sidecar (e.g. Istio).
+// The non-ready container is preferred over the first container so that the logs most
+// likely to explain the alert are fetched.
+func TestGetPodLogs_MultiContainerPod(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	// Inject a multi-container failing pod: app (not ready, 3 restarts) + sidecar (ready).
+	// The fix should pick "app" because it is not ready.
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.PodList{Items: []corev1.Pod{{
+			ObjectMeta: metav1.ObjectMeta{Name: "multi-pod", Namespace: "prod"},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{
+					{Name: "sidecar"},
+					{Name: "app"},
+				},
+			},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodFailed,
+				ContainerStatuses: []corev1.ContainerStatus{
+					{Name: "sidecar", Ready: true, RestartCount: 0},
+					{Name: "app", Ready: false, RestartCount: 3},
+				},
+			},
+		}}}, nil
+	})
+
+	var capturedOpts *corev1.PodLogOptions
+	cs.PrependReactor("get", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		ga, ok := action.(k8stesting.GenericAction)
+		if !ok || action.GetSubresource() != "log" {
+			return false, nil, nil
+		}
+		if opts, ok := ga.GetValue().(*corev1.PodLogOptions); ok {
+			capturedOpts = opts
+		}
+		return false, nil, nil
+	})
+
+	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	getPodLogs(context.Background(), cs, "prod", cfg)
+
+	if capturedOpts == nil {
+		t.Fatal("GetLogs was not called")
+	}
+	if capturedOpts.Container != "app" {
+		t.Errorf("Container = %q, want %q (first non-ready container)", capturedOpts.Container, "app")
+	}
+}
+
+// TestGetPodLogs_SingleContainerPod verifies that getPodLogs does NOT set a container
+// name for single-container pods, preserving the existing behaviour where the API
+// selects the only container automatically.
+func TestGetPodLogs_SingleContainerPod(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.PodList{Items: []corev1.Pod{{
+			ObjectMeta: metav1.ObjectMeta{Name: "single-pod", Namespace: "prod"},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{Name: "app"}},
+			},
+			Status: corev1.PodStatus{Phase: corev1.PodFailed},
+		}}}, nil
+	})
+
+	var capturedOpts *corev1.PodLogOptions
+	cs.PrependReactor("get", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		ga, ok := action.(k8stesting.GenericAction)
+		if !ok || action.GetSubresource() != "log" {
+			return false, nil, nil
+		}
+		if opts, ok := ga.GetValue().(*corev1.PodLogOptions); ok {
+			capturedOpts = opts
+		}
+		return false, nil, nil
+	})
+
+	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	getPodLogs(context.Background(), cs, "prod", cfg)
+
+	if capturedOpts == nil {
+		t.Fatal("GetLogs was not called")
+	}
+	if capturedOpts.Container != "" {
+		t.Errorf("Container = %q, want %q (empty — let API pick the single container)", capturedOpts.Container, "")
+	}
+}
+
 // TestGetPodLogs_FetchBoundedToMaxLogPods verifies that getPodLogs processes at most
 // maxLogPods pod entries even when more failing pods exist. The server-side Limit in
 // the pod List call prevents downloading all pod objects before the in-memory cap

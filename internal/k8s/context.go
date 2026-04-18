@@ -263,10 +263,25 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace s
 	for _, p := range podList.Items[:limit] {
 		tailLines := int64(30)
 		limitBytes := int64(cfg.MaxLogBytes)
-		logResp := clientset.CoreV1().Pods(namespace).GetLogs(p.Name, &corev1.PodLogOptions{
+		opts := &corev1.PodLogOptions{
 			TailLines:  &tailLines,
 			LimitBytes: &limitBytes,
-		})
+		}
+		// For multi-container pods the Kubernetes API requires an explicit container
+		// name; omitting it returns an error ("a container name must be specified").
+		// Pick the first non-ready container (most likely the one that failed); fall
+		// back to the first container if status is unavailable or all containers are
+		// erroneously marked ready.
+		if len(p.Spec.Containers) > 1 {
+			opts.Container = p.Spec.Containers[0].Name
+			for _, cs := range p.Status.ContainerStatuses {
+				if !cs.Ready {
+					opts.Container = cs.Name
+					break
+				}
+			}
+		}
+		logResp := clientset.CoreV1().Pods(namespace).GetLogs(p.Name, opts)
 		raw, err := logResp.DoRaw(ctx)
 		if err != nil {
 			logLines = append(logLines, fmt.Sprintf("--- %s --- (no logs)", p.Name))
