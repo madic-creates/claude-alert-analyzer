@@ -53,10 +53,17 @@ func (n *NtfyPublisher) Publish(ctx context.Context, title, priority, body strin
 	for attempt := 0; attempt <= len(retryDelays); attempt++ {
 		if attempt > 0 {
 			delay := retryDelays[attempt-1]
+			// Use time.NewTimer instead of time.After so we can Stop() it when
+			// the context is cancelled. time.After leaks the underlying timer
+			// until it fires; with retry delays up to several seconds this can
+			// accumulate during graceful shutdown where many in-flight publishes
+			// are cancelled simultaneously.
+			timer := time.NewTimer(delay)
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return ctx.Err()
-			case <-time.After(delay):
+			case <-timer.C:
 			}
 			slog.Warn("retrying ntfy publish", "attempt", attempt+1, "after", delay)
 		}
