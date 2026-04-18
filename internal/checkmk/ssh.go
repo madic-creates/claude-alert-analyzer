@@ -141,10 +141,17 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 		done <- sshResult{out, cmdErr}
 	}()
 
+	// Use time.NewTimer instead of time.After so we can call Stop() when the
+	// command completes normally. time.After leaks the underlying timer until
+	// it fires; in an agentic loop that runs many short commands with a 10s
+	// timeout, the leaked timers accumulate unnecessarily.
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
 	select {
 	case r := <-done:
 		return r.output, r.err
-	case <-time.After(timeout):
+	case <-timer.C:
 		session.Close()
 		return "", fmt.Errorf("timeout after %v", timeout)
 	case <-ctx.Done():
