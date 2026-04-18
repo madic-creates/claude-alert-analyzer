@@ -26,12 +26,19 @@ func RedactSecrets(input string) string {
 	return result
 }
 
+const truncationMarker = "\n... [truncated]"
+
 func Truncate(s string, maxBytes int) string {
 	if len(s) <= maxBytes {
 		return s
 	}
+	// Reserve space for the marker so the total output stays within maxBytes.
+	cutAt := maxBytes - len(truncationMarker)
+	if cutAt <= 0 {
+		return truncationMarker[:maxBytes]
+	}
 	// Trim to a valid UTF-8 boundary to avoid splitting multi-byte characters.
-	trimmed := strings.ToValidUTF8(s[:maxBytes], "")
-	return trimmed + "\n... [truncated]"
+	trimmed := strings.ToValidUTF8(s[:cutAt], "")
+	return trimmed + truncationMarker
 }
 

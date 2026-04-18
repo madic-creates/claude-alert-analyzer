@@ -102,8 +102,8 @@ func TestTruncate_Short(t *testing.T) {
 func TestTruncate_Long(t *testing.T) {
 	input := strings.Repeat("a", 200)
 	result := Truncate(input, 100)
-	if len(result) > 120 {
-		t.Errorf("not truncated: len=%d", len(result))
+	if len(result) > 100 {
+		t.Errorf("exceeds maxBytes: len=%d", len(result))
 	}
 	if !strings.Contains(result, "[truncated]") {
 		t.Errorf("missing truncation marker")
@@ -123,6 +123,18 @@ func TestTruncate_PreservesValidUTF8(t *testing.T) {
 	}
 	if !strings.Contains(result, "[truncated]") {
 		t.Errorf("missing truncation marker: %s", result)
+	}
+}
+
+func TestTruncate_NeverExceedsMaxBytes(t *testing.T) {
+	// Marker is 15 bytes; ensure the total output never exceeds maxBytes regardless
+	// of where the cut falls relative to multi-byte characters.
+	for _, maxBytes := range []int{15, 16, 50, 100, 4096} {
+		input := strings.Repeat("x", maxBytes*2)
+		result := Truncate(input, maxBytes)
+		if len(result) > maxBytes {
+			t.Errorf("maxBytes=%d: output len=%d exceeds limit", maxBytes, len(result))
+		}
 	}
 }
 
