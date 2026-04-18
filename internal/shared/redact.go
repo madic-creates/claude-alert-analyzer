@@ -35,29 +35,3 @@ func Truncate(s string, maxBytes int) string {
 	return trimmed + "\n... [truncated]"
 }
 
-func TruncateLines(s string, maxLines int) string {
-	lines := splitLines(s)
-	if len(lines) <= maxLines {
-		return s
-	}
-	result := ""
-	for i := 0; i < maxLines; i++ {
-		result += lines[i] + "\n"
-	}
-	return result + "... [truncated]"
-}
-
-func splitLines(s string) []string {
-	var lines []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			lines = append(lines, s[start:i])
-			start = i + 1
-		}
-	}
-	if start < len(s) {
-		lines = append(lines, s[start:])
-	}
-	return lines
-}

@@ -110,25 +110,6 @@ func TestTruncate_Long(t *testing.T) {
 	}
 }
 
-func TestTruncateLines_Short(t *testing.T) {
-	input := "line1\nline2\nline3"
-	result := TruncateLines(input, 5)
-	if result != input {
-		t.Errorf("unexpected truncation: %s", result)
-	}
-}
-
-func TestTruncateLines_Long(t *testing.T) {
-	input := "line1\nline2\nline3\nline4\nline5"
-	result := TruncateLines(input, 2)
-	if !strings.Contains(result, "line1") || !strings.Contains(result, "line2") {
-		t.Errorf("expected first 2 lines: %s", result)
-	}
-	if strings.Contains(result, "line3") {
-		t.Errorf("should not contain line3: %s", result)
-	}
-}
-
 func TestTruncate_PreservesValidUTF8(t *testing.T) {
 	// Place a 4-byte emoji right at the truncation boundary so a naive byte
 	// slice would split the sequence and produce invalid UTF-8.
