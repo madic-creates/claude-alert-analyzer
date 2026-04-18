@@ -297,6 +297,41 @@ func TestGetKubeContext_Events_WarningEventListed(t *testing.T) {
 	}
 }
 
+// TestGetPodStatus_LimitBoundedOutput verifies that getPodStatus returns at most
+// maxPods lines even when the API (or fake client) delivers more pods than the limit.
+// Without the server-side Limit in ListOptions, a namespace with hundreds of pods
+// would fetch all pod objects into memory before formatting, risking OOM. The
+// post-fetch backstop mirrors the pattern used in getEvents.
+func TestGetPodStatus_LimitBoundedOutput(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	// Return maxPods+10 pods to simulate a namespace exceeding the limit.
+	items := make([]corev1.Pod, maxPods+10)
+	for i := range items {
+		items[i] = corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("pod-%03d", i),
+				Namespace: "busy",
+			},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		}
+	}
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.PodList{Items: items}, nil
+	})
+
+	pods := getPodStatus(context.Background(), cs, "busy")
+
+	lines := strings.Split(strings.TrimRight(pods, "\n"), "\n")
+	if len(lines) > maxPods {
+		t.Errorf("getPodStatus returned %d lines, want at most %d (maxPods); unbounded List risks OOM on large namespaces",
+			len(lines), maxPods)
+	}
+	if pods == "(no pods)" {
+		t.Error("expected pod entries in output, got no-pods sentinel")
+	}
+}
+
 // TestGetEvents_LimitSetInListOptions verifies that getEvents passes Limit:20 to
 // the Kubernetes Events List call. Without the limit, a busy namespace (e.g. a
 // CrashLoopBackOff pod emitting thousands of warning events) would have all of

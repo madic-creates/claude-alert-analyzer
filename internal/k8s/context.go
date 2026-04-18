@@ -188,13 +188,26 @@ func getEvents(ctx context.Context, clientset kubernetes.Interface, namespace st
 	return strings.Join(lines, "\n")
 }
 
+// maxPods is the maximum number of pods fetched per namespace for status reporting.
+// Mirrors the server-side Limit applied to Events and pod log fetches to prevent
+// OOM on namespaces with large deployments.
+const maxPods = 50
+
 func getPodStatus(ctx context.Context, clientset kubernetes.Interface, namespace string) string {
-	podList, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+	podList, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		Limit: maxPods,
+	})
 	if err != nil {
 		return fmt.Sprintf("(failed: %v)", err)
 	}
+	// Post-fetch backstop: cap at maxPods in case the API returned more
+	// than requested (e.g. the fake client in tests ignores Limit).
+	items := podList.Items
+	if len(items) > maxPods {
+		items = items[len(items)-maxPods:]
+	}
 	var lines []string
-	for _, p := range podList.Items {
+	for _, p := range items {
 		phase := string(p.Status.Phase)
 		restarts := 0
 		ready := 0
