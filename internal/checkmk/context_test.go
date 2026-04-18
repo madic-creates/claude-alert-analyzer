@@ -257,6 +257,38 @@ func TestGatherContext_HostContextSanitized(t *testing.T) {
 			t.Error("expected no host context section for empty-after-sanitize input")
 		}
 	})
+
+	t.Run("preserves newlines in multi-line context", func(t *testing.T) {
+		// Operators commonly write multi-line AI context, e.g.:
+		//   "Debian 12, Nginx.\nConfig: /etc/nginx/sites-enabled/."
+		// Stripping \n would collapse the text and make it harder for Claude
+		// to parse distinct fields, so newlines must survive sanitization.
+		multiLine := "Debian 12, Nginx.\nConfig: /etc/nginx/sites-enabled/.\nDeployed via Ansible."
+		hostInfo := &HostInfo{AIContext: multiLine}
+		actx := GatherContext(context.Background(), apiClient, alert, hostInfo)
+		if actx.Sections[0].Name != "Host Context (operator-provided)" {
+			t.Fatalf("expected host context section, got %q", actx.Sections[0].Name)
+		}
+		if actx.Sections[0].Content != multiLine {
+			t.Errorf("newlines stripped from multi-line context:\n  got:  %q\n  want: %q",
+				actx.Sections[0].Content, multiLine)
+		}
+	})
+
+	t.Run("strips carriage returns but preserves newlines", func(t *testing.T) {
+		// Windows-style CRLF line endings: \r should be stripped, \n kept.
+		crlf := "Line one.\r\nLine two.\r\nLine three."
+		want := "Line one.\nLine two.\nLine three."
+		hostInfo := &HostInfo{AIContext: crlf}
+		actx := GatherContext(context.Background(), apiClient, alert, hostInfo)
+		if actx.Sections[0].Name != "Host Context (operator-provided)" {
+			t.Fatalf("expected host context section, got %q", actx.Sections[0].Name)
+		}
+		if actx.Sections[0].Content != want {
+			t.Errorf("CRLF not normalised correctly:\n  got:  %q\n  want: %q",
+				actx.Sections[0].Content, want)
+		}
+	})
 }
 
 func TestValidateAndDescribeHost_RejectsInvalidHostname(t *testing.T) {

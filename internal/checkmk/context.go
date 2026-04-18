@@ -79,10 +79,13 @@ type checkmkServicesResponse struct {
 const maxAIContextBytes = 2048
 
 // sanitizeHostContext trims, strips control characters, and truncates.
+// Tabs and newlines are preserved because they carry formatting intent in
+// operator-provided multi-line host context. Carriage returns (\r) are
+// dropped, so Windows-style CRLF line endings are normalised to bare \n.
 func sanitizeHostContext(s string) string {
 	var b strings.Builder
 	for _, r := range s {
-		if r == '\t' || !unicode.IsControl(r) {
+		if r == '\t' || r == '\n' || !unicode.IsControl(r) {
 			b.WriteRune(r)
 		}
 	}
