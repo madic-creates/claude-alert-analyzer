@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -466,12 +467,15 @@ func TestPromqlQuery_ServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// The function reads the body regardless of status code and tries to parse JSON.
-	// An unparseable body results in a parse error message.
+	// The query function returns early for non-200 status codes, reporting the
+	// HTTP status without attempting to parse the body.
 	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
 	result := prom.query(context.Background(), `up`)
 	if result == "" {
 		t.Error("expected non-empty error result")
+	}
+	if !strings.Contains(result, "500") {
+		t.Errorf("expected HTTP status code 500 in result, got %q", result)
 	}
 }
 
