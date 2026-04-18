@@ -34,7 +34,9 @@ func NewAPIClient(cfg Config) *APIClient {
 
 // validHostnameRe matches DNS hostnames, FQDNs, and IPv4 addresses.
 // It rejects path separators, whitespace, null bytes, and URL-encoding.
-var validHostnameRe = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,253}[a-zA-Z0-9])?$`)
+// The middle group uses {0,251} so the total length is at most 1+251+1 = 253
+// characters, matching the RFC 1035 limit for a fully-qualified domain name.
+var validHostnameRe = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,251}[a-zA-Z0-9])?$`)
 
 func isValidHostname(hostname string) bool {
 	return validHostnameRe.MatchString(hostname)

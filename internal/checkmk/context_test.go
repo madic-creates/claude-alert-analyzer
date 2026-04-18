@@ -277,6 +277,11 @@ func TestValidateAndDescribeHost_RejectsInvalidHostname(t *testing.T) {
 		{"trailing dash", "badhost-"},
 		{"leading dot", ".hidden"},
 		{"trailing dot", "hidden."},
+		// RFC 1035 limits a fully-qualified domain name to 253 characters.
+		// The regex previously used {0,253} in the middle group, which allowed
+		// 1 + 253 + 1 = 255 characters — two over the limit.
+		{"254 chars (over limit)", strings.Repeat("a", 254)},
+		{"255 chars (over limit)", strings.Repeat("a", 255)},
 	}
 
 	for _, tt := range tests {
@@ -316,6 +321,8 @@ func TestValidateAndDescribeHost_AcceptsValidHostname(t *testing.T) {
 		{"two chars", "ab"},
 		{"uppercase", "MYHOST"},
 		{"mixed case FQDN", "Web01.Example.COM"},
+		// 253-char hostname is exactly at the RFC 1035 FQDN limit and must be accepted.
+		{"253 chars (at limit)", strings.Repeat("a", 253)},
 	}
 
 	for _, tt := range tests {
