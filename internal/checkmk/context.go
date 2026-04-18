@@ -235,7 +235,10 @@ func GatherContext(ctx context.Context, apiClient *APIClient, alert shared.Alert
 		hostname, hostAddress, alert.Fields["service_description"],
 		alert.Fields["service_state"], shared.RedactSecrets(alert.Fields["service_output"]),
 		alert.Fields["notification_type"], shared.RedactSecrets(alert.Fields["perf_data"]))
-	if lpo := shared.RedactSecrets(alert.Fields["long_plugin_output"]); lpo != "" {
+	// long_plugin_output can be very large (multi-line check details up to the 1 MiB
+	// webhook body limit). Truncate to 4 KiB so a single verbose plugin does not
+	// exhaust the Claude context window or inflate analysis costs unnecessarily.
+	if lpo := shared.Truncate(shared.RedactSecrets(alert.Fields["long_plugin_output"]), 4096); lpo != "" {
 		alertDetails += "\n- Detailed Output:\n" + lpo
 	}
 

@@ -562,6 +562,42 @@ func TestGatherContext_LongPluginOutputIncluded(t *testing.T) {
 			t.Errorf("'Detailed Output' should be absent when long_plugin_output is empty:\n%s", prompt)
 		}
 	})
+
+	// TestGatherContext_LongPluginOutputTruncated verifies that a very large
+	// long_plugin_output is truncated before being embedded in the Claude prompt.
+	// Without truncation a verbose plugin (e.g. one that dumps a full directory
+	// listing or a lengthy core dump trace) could exhaust the model's context
+	// window or significantly inflate analysis costs. The limit (4 KiB) mirrors
+	// the truncation applied to SSH command output in agent.go.
+	t.Run("truncated when oversized", func(t *testing.T) {
+		// Build an output larger than the 4 KiB truncation threshold.
+		oversized := strings.Repeat("A", 5000)
+		alert := shared.AlertPayload{
+			Fields: map[string]string{
+				"hostname":            "web01",
+				"host_address":        "10.0.0.1",
+				"service_description": "LogCheck",
+				"service_state":       "CRITICAL",
+				"service_output":      "CRITICAL - log errors found",
+				"notification_type":   "PROBLEM",
+				"perf_data":           "",
+				"long_plugin_output":  oversized,
+			},
+		}
+		actx := GatherContext(context.Background(), apiClient, alert, nil)
+		prompt := actx.FormatForPrompt()
+
+		if !strings.Contains(prompt, "Detailed Output") {
+			t.Errorf("expected 'Detailed Output' heading even for oversized input:\n%s", prompt[:200])
+		}
+		if !strings.Contains(prompt, "[truncated]") {
+			t.Errorf("expected truncation marker for oversized long_plugin_output:\n%s", prompt[:200])
+		}
+		// The prompt must not contain the full 5000-byte output.
+		if strings.Count(prompt, "A") >= 5000 {
+			t.Errorf("prompt contains the full oversized long_plugin_output — truncation did not fire")
+		}
+	})
 }
 
 // TestGetHostServices_InvalidHostname verifies that the hostname guard fires
