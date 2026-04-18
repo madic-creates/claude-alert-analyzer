@@ -3,6 +3,7 @@ package shared
 import (
 	"context"
 	"encoding/json"
+	"strings"
 )
 
 // AnalysisContext holds named text sections injected into the Claude user prompt.
@@ -17,11 +18,15 @@ type ContextSection struct {
 
 // FormatForPrompt renders all sections as a single string for Claude.
 func (ac AnalysisContext) FormatForPrompt() string {
-	var s string
+	var b strings.Builder
 	for _, sec := range ac.Sections {
-		s += "## " + sec.Name + "\n" + sec.Content + "\n\n"
+		b.WriteString("## ")
+		b.WriteString(sec.Name)
+		b.WriteByte('\n')
+		b.WriteString(sec.Content)
+		b.WriteString("\n\n")
 	}
-	return s
+	return b.String()
 }
 
 // Publisher sends analysis results to a notification target.
