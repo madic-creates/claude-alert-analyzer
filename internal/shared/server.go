@@ -144,10 +144,16 @@ func (s *Server) Run(webhookHandler http.HandlerFunc) {
 
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
+	// Use time.NewTimer instead of time.After so we can Stop() it when
+	// workers finish before the timeout. time.After leaks the underlying
+	// timer until it fires; with a 25-second DrainTimeout the leaked timer
+	// would remain alive after a clean shutdown where workers drain quickly.
+	drainTimer := time.NewTimer(s.cfg.DrainTimeout)
+	defer drainTimer.Stop()
 	select {
 	case <-done:
 		slog.Info("all workers finished")
-	case <-time.After(s.cfg.DrainTimeout):
+	case <-drainTimer.C:
 		slog.Warn("worker drain timeout, cancelling")
 		workerCancel()
 		wg.Wait()
