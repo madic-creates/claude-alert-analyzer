@@ -193,6 +193,48 @@ func TestRunAgenticDiagnostics_OutputRedacted(t *testing.T) {
 	}
 }
 
+// TestRunAgenticDiagnostics_NonZeroExitIncludesOutput verifies that when a diagnostic
+// command exits with a non-zero status but produced output (e.g. "systemctl status"
+// on a stopped service exits 3 with useful status text), the output is preserved in
+// the tool result rather than being silently discarded. Without this, Claude only sees
+// "Command failed: exit status 3" instead of the actual service status output.
+func TestRunAgenticDiagnostics_NonZeroExitIncludesOutput(t *testing.T) {
+	const systemctlOutput = "● nginx.service - A high performance web server\n   Loaded: loaded\n   Active: failed (Result: exit-code)\n"
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		_, _ = io.WriteString(ch, systemctlOutput)
+		sendExitStatus(ch, 3) // systemctl status exits 3 when unit is stopped/failed
+	})
+
+	runner := &capturingToolRunner{
+		calls:  []agentToolCall{{name: "execute_command", input: `{"command": ["systemctl", "status", "nginx"]}`}},
+		result: "nginx analysis",
+	}
+	dialer := &fixedDialer{client: client}
+
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, dialer, "host1", "ctx", 3,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(runner.toolOutputs) != 1 {
+		t.Fatalf("expected 1 tool output, got %d", len(runner.toolOutputs))
+	}
+	// The output must contain the systemctl status text, not just an error message.
+	if !strings.Contains(runner.toolOutputs[0], "nginx.service") {
+		t.Errorf("expected systemctl output in tool result for non-zero exit, got: %q", runner.toolOutputs[0])
+	}
+	// The exit status should also be noted so Claude knows the command failed.
+	if !strings.Contains(runner.toolOutputs[0], "exited") {
+		t.Errorf("expected exit status annotation in tool result, got: %q", runner.toolOutputs[0])
+	}
+	// Must not be a bare "Command failed" message — the output must be included.
+	if strings.HasPrefix(runner.toolOutputs[0], "Command failed:") && !strings.Contains(runner.toolOutputs[0], "nginx") {
+		t.Errorf("tool output discards command output for non-zero exit, got: %q", runner.toolOutputs[0])
+	}
+}
+
 func TestIsDenied_BlocksDestructiveCommands(t *testing.T) {
 	denied := [][]string{
 		{"rm", "-rf", "/"},

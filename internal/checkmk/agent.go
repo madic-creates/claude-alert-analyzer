@@ -167,6 +167,16 @@ func RunAgenticDiagnostics(
 		output, err := runSSHCommand(ctx, sshClient, argv, 10*time.Second)
 		if err != nil {
 			slog.Warn("agentic SSH command failed", "hostname", hostname, "command", cmdStr, "error", err)
+			// If the command produced output before failing (e.g. non-zero exit
+			// code from systemctl status, grep with no match, etc.), include it so
+			// Claude can use the diagnostic information. Without this, "systemctl
+			// status nginx" on a stopped service exits 3 and its full status output
+			// is discarded, leaving Claude with only "Command failed: exit status 3".
+			if output != "" {
+				output = shared.RedactSecrets(output)
+				output = shared.Truncate(output, 4096)
+				return fmt.Sprintf("$ %s\n%s\n[exited: %v]", cmdStr, output, err), nil
+			}
 			return fmt.Sprintf("Command failed: %v", err), nil
 		}
 
