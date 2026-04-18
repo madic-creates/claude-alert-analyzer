@@ -155,8 +155,15 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 }
 
 func getEvents(ctx context.Context, clientset kubernetes.Interface, namespace string) string {
+	// Limit the API response to 20 events to prevent fetching thousands of
+	// warning events into memory for busy namespaces (e.g. a CrashLoopBackOff
+	// pod generating rapid-fire events). The API applies the limit server-side,
+	// so we never download more than we need — matching the approach taken for
+	// pod log fetches (LimitBytes).
+	const maxEvents = 20
 	eventList, err := clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
 		FieldSelector: "type!=Normal",
+		Limit:         maxEvents,
 	})
 	if err != nil {
 		return fmt.Sprintf("(failed: %v)", err)
@@ -164,8 +171,8 @@ func getEvents(ctx context.Context, clientset kubernetes.Interface, namespace st
 	var lines []string
 	items := eventList.Items
 	start := 0
-	if len(items) > 20 {
-		start = len(items) - 20
+	if len(items) > maxEvents {
+		start = len(items) - maxEvents
 	}
 	for _, e := range items[start:] {
 		ts := ""

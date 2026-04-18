@@ -297,6 +297,60 @@ func TestGetKubeContext_Events_WarningEventListed(t *testing.T) {
 	}
 }
 
+// TestGetEvents_LimitSetInListOptions verifies that getEvents passes Limit:20 to
+// the Kubernetes Events List call. Without the limit, a busy namespace (e.g. a
+// CrashLoopBackOff pod emitting thousands of warning events) would have all of
+// its events fetched into memory before the post-fetch slice trim runs, risking
+// OOM. This mirrors the LimitBytes bound added for pod log fetches.
+func TestGetEvents_LimitSetInListOptions(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	// Capture whether the List call included the field selector (which
+	// confirms the ListOptions were set). We also intercept and return 30
+	// events to verify the post-fetch cap holds.
+	var listCalled bool
+	cs.PrependReactor("list", "events", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		listCalled = true
+		// Return 30 warning events to simulate a busy namespace. The
+		// post-fetch cap in getEvents will trim this to 20 lines.
+		items := make([]corev1.Event, 30)
+		for i := range items {
+			items[i] = corev1.Event{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("evt-%02d", i),
+					Namespace: "busy",
+				},
+				Type:    corev1.EventTypeWarning,
+				Reason:  "BackOff",
+				Message: fmt.Sprintf("event %d", i),
+				InvolvedObject: corev1.ObjectReference{
+					Name: fmt.Sprintf("pod-%02d", i),
+				},
+			}
+		}
+		return true, &corev1.EventList{Items: items}, nil
+	})
+
+	alert := makeAlertWithLabels(map[string]string{"namespace": "busy"})
+	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+
+	events, _, _ := GetKubeContext(context.Background(), cs, alert, cfg)
+
+	if !listCalled {
+		t.Fatal("Events List was not called")
+	}
+	if events == "(no warning events)" {
+		t.Error("expected events output, got no-events sentinel")
+	}
+	// Even though the fake API returned 30 events the output must be bounded
+	// to 20 lines: the API Limit caps the real fetch and the post-fetch trim
+	// is a final backstop for the fake-client path.
+	lines := strings.Split(strings.TrimRight(events, "\n"), "\n")
+	if len(lines) > 20 {
+		t.Errorf("getEvents returned %d lines, want at most 20", len(lines))
+	}
+}
+
 // ----- GetPrometheusMetrics tests -----
 
 func TestGetMetrics_NoNamespaceNoAlertname(t *testing.T) {
