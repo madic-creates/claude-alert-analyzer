@@ -459,8 +459,8 @@ func TestProcessAlert_PanicClearsCooldown(t *testing.T) {
 }
 
 // TestProcessAlert_NoSSH_UsesStaticPrompt verifies that when SSH is disabled the
-// pipeline calls Analyze with StaticAnalysisSystemPrompt, not AgentSystemPrompt.
-// AgentSystemPrompt instructs Claude to use SSH tool-use; sending it without tools
+// pipeline calls Analyze with StaticAnalysisSystemPrompt. The agentic prompt
+// instructs Claude to use SSH tool-use; sending it without tools
 // produces misleading output ("I would run ssh...").
 func TestProcessAlert_NoSSH_UsesStaticPrompt(t *testing.T) {
 	analyzer := &mockAnalyzer{result: "analysis"}
@@ -493,8 +493,5 @@ func TestProcessAlert_NoSSH_UsesStaticPrompt(t *testing.T) {
 
 	if analyzer.capturedPrompt != StaticAnalysisSystemPrompt {
 		t.Errorf("no-SSH path used wrong system prompt; got %q, want StaticAnalysisSystemPrompt", analyzer.capturedPrompt)
-	}
-	if analyzer.capturedPrompt == AgentSystemPrompt {
-		t.Error("no-SSH path must not use AgentSystemPrompt (contains SSH tool instructions)")
 	}
 }

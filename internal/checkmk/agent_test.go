@@ -16,11 +16,13 @@ import (
 // records the results, then returns a fixed final response. This exercises
 // the handleTool closure inside RunAgenticDiagnostics without a Claude API.
 type capturingToolRunner struct {
-	calls       []agentToolCall
-	toolOutputs []string
-	toolErrors  []error
-	result      string
-	err         error
+	calls                []agentToolCall
+	toolOutputs          []string
+	toolErrors           []error
+	result               string
+	err                  error
+	capturedSystemPrompt string
+	capturedMaxRounds    int
 }
 
 type agentToolCall struct {
@@ -29,10 +31,12 @@ type agentToolCall struct {
 }
 
 func (r *capturingToolRunner) RunToolLoop(
-	_ context.Context, _, _ string,
-	_ []shared.Tool, _ int,
+	_ context.Context, systemPrompt, _ string,
+	_ []shared.Tool, maxRounds int,
 	handleTool func(string, json.RawMessage) (string, error),
 ) (string, error) {
+	r.capturedSystemPrompt = systemPrompt
+	r.capturedMaxRounds = maxRounds
 	for _, call := range r.calls {
 		out, err := handleTool(call.name, json.RawMessage(call.input))
 		r.toolOutputs = append(r.toolOutputs, out)
@@ -514,5 +518,61 @@ func TestIsDenied_AbsolutePathSystemctl(t *testing.T) {
 		if isDenied(DefaultDeniedCommands, argv) {
 			t.Errorf("expected allowed (absolute path systemctl read-only): %v", argv)
 		}
+	}
+}
+
+// TestAgentSystemPromptForRounds verifies that agentSystemPromptForRounds injects
+// the actual maxRounds value into the prompt text. If MAX_AGENT_ROUNDS is changed
+// from the default of 10, Claude must see the correct number so it can plan its
+// diagnostic rounds accurately.
+func TestAgentSystemPromptForRounds(t *testing.T) {
+	cases := []struct {
+		maxRounds int
+	}{
+		{1},
+		{5},
+		{10},
+		{15},
+		{50},
+	}
+	for _, tc := range cases {
+		prompt := agentSystemPromptForRounds(tc.maxRounds)
+		wantSubstring := fmt.Sprintf("maximum of %d command rounds", tc.maxRounds)
+		if !strings.Contains(prompt, wantSubstring) {
+			t.Errorf("agentSystemPromptForRounds(%d): expected %q in prompt, got:\n%s",
+				tc.maxRounds, wantSubstring, prompt)
+		}
+	}
+}
+
+// TestRunAgenticDiagnostics_SystemPromptContainsMaxRounds verifies that
+// RunAgenticDiagnostics passes a system prompt reflecting the actual maxRounds
+// to the tool runner. When an operator sets MAX_AGENT_ROUNDS to a non-default
+// value, the prompt must mention that value so Claude plans accordingly.
+func TestRunAgenticDiagnostics_SystemPromptContainsMaxRounds(t *testing.T) {
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		sendExitStatus(ch, 0)
+	})
+	dialer := &fixedDialer{client: client}
+
+	const customRounds = 5
+	runner := &capturingToolRunner{result: "analysis"}
+
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, dialer, "host1", "ctx", customRounds,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	wantSubstring := fmt.Sprintf("maximum of %d command rounds", customRounds)
+	if !strings.Contains(runner.capturedSystemPrompt, wantSubstring) {
+		t.Errorf("system prompt does not reflect maxRounds=%d;\nwant substring: %q\ngot prompt:\n%s",
+			customRounds, wantSubstring, runner.capturedSystemPrompt)
+	}
+	if runner.capturedMaxRounds != customRounds {
+		t.Errorf("RunToolLoop received maxRounds=%d, want %d",
+			runner.capturedMaxRounds, customRounds)
 	}
 }

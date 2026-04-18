@@ -12,7 +12,10 @@ import (
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 )
 
-const AgentSystemPrompt = `You are an infrastructure SRE analyst investigating a monitoring alert via SSH.
+// agentSystemPromptTemplate is the base template for the agentic SSH prompt.
+// %d is replaced with the actual maxRounds value at call time so Claude's
+// self-reported round budget always matches the real limit passed to RunToolLoop.
+const agentSystemPromptTemplate = `You are an infrastructure SRE analyst investigating a monitoring alert via SSH.
 
 Your task:
 1. Use the execute_command tool to run diagnostic commands on the affected host
@@ -23,7 +26,7 @@ Guidelines:
 - Only run read-only diagnostic commands (no modifications, no writes, no restarts)
 - You have NO root/sudo access — never attempt privilege escalation
 - Start broad (check logs, resource usage) then narrow down based on findings
-- You have a maximum of 10 command rounds — use them wisely
+- You have a maximum of %d command rounds — use them wisely
 - Common useful commands: journalctl, df, free, top, ps, ss, ip, lsblk, cat/tail/head on log files, systemctl status/show, du, lsof, netstat, find
 
 Output your final analysis in markdown (headings, bold, lists, code blocks — no tables):
@@ -35,8 +38,17 @@ Output your final analysis in markdown (headings, bold, lists, code blocks — n
 Reference actual values from command outputs. Keep response under 500 words.
 Start directly with the analysis — no preamble, meta-commentary, or introductory sentences like "I have enough data" or "Let me analyze this".`
 
+// agentSystemPromptForRounds returns the agent system prompt with the actual
+// maxRounds value substituted so Claude's self-reported budget always matches
+// the real limit enforced by RunToolLoop. When the operator changes
+// MAX_AGENT_ROUNDS (e.g. to 5 or 15), the prompt reflects the actual value
+// rather than a hardcoded "10".
+func agentSystemPromptForRounds(maxRounds int) string {
+	return fmt.Sprintf(agentSystemPromptTemplate, maxRounds)
+}
+
 // StaticAnalysisSystemPrompt is used when SSH is disabled or unavailable.
-// Unlike AgentSystemPrompt it does not mention tools or SSH — it instructs
+// Unlike the agentic prompt it does not mention tools or SSH — it instructs
 // Claude to reason purely from the CheckMK service state and alert details.
 const StaticAnalysisSystemPrompt = `You are an infrastructure SRE analyst investigating a monitoring alert.
 
@@ -204,7 +216,7 @@ func RunAgenticDiagnostics(
 	}
 
 	analysis, err := client.RunToolLoop(
-		ctx, AgentSystemPrompt, alertContext,
+		ctx, agentSystemPromptForRounds(maxRounds), alertContext,
 		[]shared.Tool{sshTool}, maxRounds, handleTool,
 	)
 	if err != nil {
