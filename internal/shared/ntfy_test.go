@@ -75,6 +75,51 @@ func TestNtfyPublisher_Publish_NonOKStatus(t *testing.T) {
 	}
 }
 
+// TestNtfyPublisher_Publish_TruncatesLongTitle verifies that titles exceeding
+// maxNtfyTitleBytes are trimmed before sending. ntfy rejects over-length titles
+// with 400 Bad Request, causing repeated publish failures for alerts whose
+// title is derived from long hostnames or service descriptions.
+func TestNtfyPublisher_Publish_TruncatesLongTitle(t *testing.T) {
+	var gotTitle string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTitle = r.Header.Get("Title")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	p := &NtfyPublisher{HTTP: srv.Client(), URL: srv.URL, Topic: "alerts"}
+	longTitle := strings.Repeat("A", maxNtfyTitleBytes*2)
+	if err := p.Publish(context.Background(), longTitle, "default", "body"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(gotTitle) > maxNtfyTitleBytes {
+		t.Errorf("title not truncated: sent %d bytes, want <= %d", len(gotTitle), maxNtfyTitleBytes)
+	}
+	if !strings.HasSuffix(gotTitle, "...") {
+		t.Errorf("expected truncated title to end with '...', got: %q", gotTitle[max(0, len(gotTitle)-10):])
+	}
+}
+
+// TestNtfyPublisher_Publish_ShortTitleUnchanged verifies that titles within
+// the limit are not modified.
+func TestNtfyPublisher_Publish_ShortTitleUnchanged(t *testing.T) {
+	var gotTitle string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTitle = r.Header.Get("Title")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	const shortTitle = "Analysis: web01 - CPU Usage"
+	p := &NtfyPublisher{HTTP: srv.Client(), URL: srv.URL, Topic: "alerts"}
+	if err := p.Publish(context.Background(), shortTitle, "default", "body"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotTitle != shortTitle {
+		t.Errorf("short title modified: got %q, want %q", gotTitle, shortTitle)
+	}
+}
+
 func TestNtfyPublisher_Publish_TruncatesLargeBody(t *testing.T) {
 	var receivedLen int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

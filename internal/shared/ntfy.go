@@ -40,8 +40,21 @@ func (n *NtfyPublisher) Name() string { return "ntfy" }
 // an attachment. We truncate to stay under this limit for inline display.
 const maxNtfyBodyBytes = 4096
 
+// maxNtfyTitleBytes is the maximum title length accepted by the ntfy server.
+// ntfy enforces this limit server-side and returns 400 Bad Request if exceeded.
+// Without client-side truncation, alerts with long hostnames or service names
+// would fail every publish attempt and never deliver a notification.
+const maxNtfyTitleBytes = 250
+
 func (n *NtfyPublisher) Publish(ctx context.Context, title, priority, body string) error {
 	body = Truncate(body, maxNtfyBodyBytes)
+	if len(title) > maxNtfyTitleBytes {
+		// Trim to a valid UTF-8 boundary and append "..." to signal truncation.
+		// We use a plain ellipsis rather than truncationMarker because titles
+		// are single-line HTTP headers and must not contain newlines.
+		cutAt := maxNtfyTitleBytes - 3 // reserve 3 bytes for "..."
+		title = strings.ToValidUTF8(title[:cutAt], "") + "..."
+	}
 	ntfyURL := fmt.Sprintf("%s/%s", n.URL, n.Topic)
 
 	retryDelays := n.RetryDelays
