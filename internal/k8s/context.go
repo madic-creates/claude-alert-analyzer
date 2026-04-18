@@ -230,8 +230,10 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace s
 	}
 	for _, p := range podList.Items[:limit] {
 		tailLines := int64(30)
+		limitBytes := int64(cfg.MaxLogBytes)
 		logResp := clientset.CoreV1().Pods(namespace).GetLogs(p.Name, &corev1.PodLogOptions{
-			TailLines: &tailLines,
+			TailLines:  &tailLines,
+			LimitBytes: &limitBytes,
 		})
 		raw, err := logResp.DoRaw(ctx)
 		if err != nil {

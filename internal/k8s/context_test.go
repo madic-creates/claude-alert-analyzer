@@ -224,6 +224,52 @@ func TestGetKubeContext_PodLogsAPIError(t *testing.T) {
 	}
 }
 
+// TestGetPodLogs_LimitBytesPassedToAPI verifies that getPodLogs sets LimitBytes on
+// the Kubernetes GetLogs request equal to cfg.MaxLogBytes. This bounds the data
+// fetched from the API before the post-fetch Truncate runs, preventing OOM when pods
+// emit very long individual log lines (e.g. large JSON debug blobs). The fix mirrors
+// the SSH output bound added in "fix: bound SSH command output at collection time".
+// The fake client invokes reactors when GetLogs is called; the action carries the
+// PodLogOptions as its value via GenericAction.GetValue().
+func TestGetPodLogs_LimitBytesPassedToAPI(t *testing.T) {
+	cs := fake.NewSimpleClientset(
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "failing-pod", Namespace: "testns"},
+			Status:     corev1.PodStatus{Phase: corev1.PodFailed},
+		},
+	)
+
+	const wantMaxLogBytes = 4096
+	var capturedOpts *corev1.PodLogOptions
+
+	cs.PrependReactor("get", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		ga, ok := action.(k8stesting.GenericAction)
+		if !ok || action.GetSubresource() != "log" {
+			return false, nil, nil // not a log request — pass through
+		}
+		if opts, ok := ga.GetValue().(*corev1.PodLogOptions); ok {
+			capturedOpts = opts
+		}
+		return false, nil, nil // let default handler proceed (returns empty body)
+	})
+
+	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: wantMaxLogBytes}
+	getPodLogs(context.Background(), cs, "testns", cfg)
+
+	if capturedOpts == nil {
+		t.Fatal("GetLogs was not called — cannot verify LimitBytes")
+	}
+	if capturedOpts.LimitBytes == nil {
+		t.Fatal("LimitBytes not set in GetLogs call — unbounded fetch risks OOM on verbose pods")
+	}
+	if *capturedOpts.LimitBytes != int64(wantMaxLogBytes) {
+		t.Errorf("LimitBytes = %d, want %d (MaxLogBytes)", *capturedOpts.LimitBytes, wantMaxLogBytes)
+	}
+	if capturedOpts.TailLines == nil || *capturedOpts.TailLines != 30 {
+		t.Errorf("TailLines must still be 30, got %v", capturedOpts.TailLines)
+	}
+}
+
 func TestGetKubeContext_Events_WarningEventListed(t *testing.T) {
 	cs := fake.NewSimpleClientset(
 		&corev1.Event{
