@@ -11,16 +11,19 @@ import (
 )
 
 type mockAnalyzer struct {
-	result string
-	err    error
+	result           string
+	err              error
+	capturedPrompt   string
 }
 
 func (m *mockAnalyzer) Analyze(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	m.capturedPrompt = systemPrompt
 	return m.result, m.err
 }
 
 func (m *mockAnalyzer) RunToolLoop(ctx context.Context, systemPrompt, userPrompt string,
 	tools []shared.Tool, maxRounds int, handleTool func(string, json.RawMessage) (string, error)) (string, error) {
+	m.capturedPrompt = systemPrompt
 	return m.result, m.err
 }
 
@@ -452,5 +455,46 @@ func TestProcessAlert_PanicClearsCooldown(t *testing.T) {
 	}
 	if metrics.AlertsFailed.Load() != 1 {
 		t.Errorf("AlertsFailed = %d, want 1", metrics.AlertsFailed.Load())
+	}
+}
+
+// TestProcessAlert_NoSSH_UsesStaticPrompt verifies that when SSH is disabled the
+// pipeline calls Analyze with StaticAnalysisSystemPrompt, not AgentSystemPrompt.
+// AgentSystemPrompt instructs Claude to use SSH tool-use; sending it without tools
+// produces misleading output ("I would run ssh...").
+func TestProcessAlert_NoSSH_UsesStaticPrompt(t *testing.T) {
+	analyzer := &mockAnalyzer{result: "analysis"}
+	pub := &mockPublisher{}
+	cooldown := shared.NewCooldownManager()
+	metrics := new(shared.AlertMetrics)
+
+	deps := PipelineDeps{
+		Analyzer:   analyzer,
+		Publishers: []shared.Publisher{pub},
+		Cooldown:   cooldown,
+		Metrics:    metrics,
+		SSHEnabled: false,
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{Sections: []shared.ContextSection{{Name: "Test", Content: "data"}}}
+		},
+		ValidateHost: func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
+			return &HostInfo{}, nil
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "prompt-check",
+		Title:       "DiskUsage",
+		Severity:    "warning",
+		Fields:      map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+	}
+
+	ProcessAlert(context.Background(), deps, alert)
+
+	if analyzer.capturedPrompt != StaticAnalysisSystemPrompt {
+		t.Errorf("no-SSH path used wrong system prompt; got %q, want StaticAnalysisSystemPrompt", analyzer.capturedPrompt)
+	}
+	if analyzer.capturedPrompt == AgentSystemPrompt {
+		t.Error("no-SSH path must not use AgentSystemPrompt (contains SSH tool instructions)")
 	}
 }

@@ -75,7 +75,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 		}
 	} else {
 		var err error
-		analysis, err = deps.Analyzer.Analyze(ctx, AgentSystemPrompt, alertContext)
+		analysis, err = deps.Analyzer.Analyze(ctx, StaticAnalysisSystemPrompt, alertContext)
 		if err != nil {
 			slog.Error("analysis failed", "error", err)
 			if notifyErr := shared.PublishAll(ctx, deps.Publishers,

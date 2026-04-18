@@ -35,6 +35,23 @@ Output your final analysis in markdown (headings, bold, lists, code blocks — n
 Reference actual values from command outputs. Keep response under 500 words.
 Start directly with the analysis — no preamble, meta-commentary, or introductory sentences like "I have enough data" or "Let me analyze this".`
 
+// StaticAnalysisSystemPrompt is used when SSH is disabled or unavailable.
+// Unlike AgentSystemPrompt it does not mention tools or SSH — it instructs
+// Claude to reason purely from the CheckMK service state and alert details.
+const StaticAnalysisSystemPrompt = `You are an infrastructure SRE analyst investigating a monitoring alert.
+
+You have been given CheckMK alert details and service state for the affected host.
+SSH access is not available, so base your analysis entirely on the provided context.
+
+Output your analysis in markdown (headings, bold, lists, code blocks — no tables):
+1. Root cause (most likely explanation based on the alert and service data)
+2. Severity and blast radius (other affected services/hosts)
+3. Remediation steps (concrete actions an operator should take)
+4. Correlations between services if applicable
+
+Reference actual values from the provided context. Keep response under 500 words.
+Start directly with the analysis — no preamble, meta-commentary, or introductory sentences.`
+
 var sshTool = shared.Tool{
 	Name:        "execute_command",
 	Description: "Execute a diagnostic command on the remote host via SSH. The command is passed as an argv array (not interpreted by a shell). Only read-only commands are allowed.",
