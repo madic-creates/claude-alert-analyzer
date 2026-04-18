@@ -165,10 +165,33 @@ func TestRunSSHCommand_CommandError(t *testing.T) {
 		sendExitStatus(ch, 127)
 	})
 
-	// CombinedOutput returns an *ssh.ExitError on non-zero exit status
+	// session.Run returns an *ssh.ExitError on non-zero exit status
 	_, err := runSSHCommand(context.Background(), client, []string{"nonexistent"}, 5*time.Second)
 	if err == nil {
 		t.Fatal("expected error for non-zero exit status")
+	}
+}
+
+// TestRunSSHCommand_OutputTruncatedAtLimit verifies that when a remote command
+// produces more than maxSSHOutputBytes of output, the collected output is
+// capped at the limit rather than allowing unbounded memory growth.
+func TestRunSSHCommand_OutputTruncatedAtLimit(t *testing.T) {
+	// Write 2x the limit so we can be sure the cap fires.
+	oversized := strings.Repeat("A", maxSSHOutputBytes*2)
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		_, _ = io.WriteString(ch, oversized)
+		sendExitStatus(ch, 0)
+	})
+
+	out, err := runSSHCommand(context.Background(), client, []string{"cat", "/large/file"}, 5*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(out) > maxSSHOutputBytes {
+		t.Errorf("output not bounded: got %d bytes, want <= %d", len(out), maxSSHOutputBytes)
+	}
+	if len(out) == 0 {
+		t.Error("expected some output to be collected before the limit")
 	}
 }
 

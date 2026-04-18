@@ -1,11 +1,14 @@
 package checkmk
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -57,6 +60,38 @@ func (d *SSHDialer) Dial(hostAddress string) (*ssh.Client, error) {
 	return client, nil
 }
 
+// maxSSHOutputBytes is the maximum number of bytes collected from combined
+// stdout+stderr before the read is truncated. This prevents a command that
+// streams large amounts of data from exhausting memory before the per-command
+// truncation in agent.go (4 KiB) has a chance to run.
+const maxSSHOutputBytes = 512 * 1024 // 512 KiB
+
+// limitedWriter writes to w until remaining reaches zero, then silently
+// discards further writes. It is safe for concurrent use (stdout and stderr
+// may be written from different goroutines by the SSH package).
+type limitedWriter struct {
+	mu        sync.Mutex
+	w         *bytes.Buffer
+	remaining int
+}
+
+func (lw *limitedWriter) Write(p []byte) (int, error) {
+	lw.mu.Lock()
+	defer lw.mu.Unlock()
+	if lw.remaining <= 0 {
+		return len(p), nil // discard, but pretend success so the session doesn't error
+	}
+	n := len(p)
+	if n > lw.remaining {
+		p = p[:lw.remaining]
+	}
+	written, err := lw.w.Write(p)
+	lw.remaining -= written
+	// Return the original length so callers (the SSH package) don't treat a
+	// partial write as an error.
+	return n, err
+}
+
 type sshResult struct {
 	output string
 	err    error
@@ -84,14 +119,26 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 
 	cmdStr := shellQuote(argv)
 
+	// Collect stdout and stderr into a shared buffer capped at maxSSHOutputBytes.
+	// Using a limitedWriter prevents a command that streams large amounts of data
+	// (e.g. "cat /large/file") from exhausting memory before the 4 KiB truncation
+	// in agent.go runs. Both pipes share the same buffer and limit so the cap
+	// applies to the combined output, matching the behaviour of CombinedOutput.
+	lw := &limitedWriter{w: new(bytes.Buffer), remaining: maxSSHOutputBytes}
+	session.Stdout = lw
+	session.Stderr = lw
+
 	// Buffered channel so the goroutine can always send without blocking,
 	// even when the timeout or context-cancellation case is selected and
 	// the caller has returned.
 	done := make(chan sshResult, 1)
 
 	go func() {
-		out, cmdErr := session.CombinedOutput(cmdStr)
-		done <- sshResult{string(out), cmdErr}
+		cmdErr := session.Run(cmdStr)
+		lw.mu.Lock()
+		out := lw.w.String()
+		lw.mu.Unlock()
+		done <- sshResult{out, cmdErr}
 	}()
 
 	select {
@@ -105,3 +152,6 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 		return "", fmt.Errorf("context cancelled: %w", ctx.Err())
 	}
 }
+
+// Ensure limitedWriter implements io.Writer (compile-time check).
+var _ io.Writer = (*limitedWriter)(nil)
