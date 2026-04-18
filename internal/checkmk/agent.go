@@ -95,6 +95,15 @@ var DefaultDeniedCommands = map[string]bool{
 	"mkswap": true, "swapon": true, "swapoff": true,
 	"insmod": true, "rmmod": true, "modprobe": true,
 	"systemctl": true, // handled specially below
+	// Shells and interpreters: deny to prevent denylist bypass via
+	// "bash -c 'rm -rf /'", "python3 -c 'import os; os.system(...)'", etc.
+	// Claude's system prompt already restricts it to read-only commands;
+	// blocking these closes the gap for a hallucinatory or adversarial model.
+	"bash": true, "sh": true, "dash": true, "zsh": true, "fish": true,
+	"python": true, "python2": true, "python3": true,
+	"perl": true, "ruby": true, "node": true, "nodejs": true,
+	// env and xargs can be used to invoke denied commands as a sub-process.
+	"env": true, "xargs": true,
 }
 
 var systemctlReadOnly = map[string]bool{

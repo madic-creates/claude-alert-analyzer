@@ -267,6 +267,34 @@ func TestIsDenied_BlocksDestructiveCommands(t *testing.T) {
 	}
 }
 
+// TestIsDenied_BlocksShellInterpreterBypass verifies that shells and interpreters
+// are denied so that Claude cannot bypass the denylist by wrapping a destructive
+// command in "bash -c 'rm -rf /'" or "python3 -c 'import os; os.system(...)'"
+// or routing it through "env rm -rf /" / "xargs rm".
+func TestIsDenied_BlocksShellInterpreterBypass(t *testing.T) {
+	denied := [][]string{
+		{"bash", "-c", "rm -rf /"},
+		{"sh", "-c", "shutdown now"},
+		{"dash", "-c", "reboot"},
+		{"zsh", "-c", "kill -9 1"},
+		{"fish", "-c", "dd if=/dev/zero of=/dev/sda"},
+		{"python", "-c", "import os; os.system('rm -rf /')"},
+		{"python2", "-c", "import os; os.system('rm -rf /')"},
+		{"python3", "-c", "import os; os.system('rm -rf /')"},
+		{"perl", "-e", "system('reboot')"},
+		{"ruby", "-e", "system('shutdown now')"},
+		{"node", "-e", "require('child_process').exec('rm -rf /')"},
+		{"nodejs", "-e", "require('child_process').exec('rm -rf /')"},
+		{"env", "rm", "-rf", "/"},
+		{"xargs", "rm", "-rf"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("shell/interpreter bypass not blocked: %v", argv)
+		}
+	}
+}
+
 func TestIsDenied_AllowsReadOnlyCommands(t *testing.T) {
 	allowed := [][]string{
 		{"df", "-h"},
