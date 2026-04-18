@@ -193,6 +193,12 @@ func getEvents(ctx context.Context, clientset kubernetes.Interface, namespace st
 // OOM on namespaces with large deployments.
 const maxPods = 50
 
+// maxLogPods is the maximum number of failing pods whose logs are fetched.
+// The same value is applied as a server-side Limit in the pod List call so that
+// a CrashLoop storm with many failing pods does not download hundreds of pod
+// objects before the in-memory cap runs.
+const maxLogPods = 3
+
 func getPodStatus(ctx context.Context, clientset kubernetes.Interface, namespace string) string {
 	podList, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		Limit: maxPods,
@@ -232,8 +238,14 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace s
 		return fmt.Sprintf("(namespace %q not in log allowlist)", namespace)
 	}
 
+	// Limit the API response to maxLogPods so that a namespace with many
+	// failing pods (e.g. a rolling restart gone wrong) does not download
+	// hundreds of pod objects before the in-memory cap below runs. The API
+	// applies the limit server-side, matching the approach in getEvents
+	// and getPodStatus.
 	podList, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		FieldSelector: "status.phase!=Running,status.phase!=Succeeded",
+		Limit:         maxLogPods,
 	})
 	if err != nil {
 		slog.Warn("failed to list failing pods", "namespace", namespace, "error", err)
@@ -244,7 +256,7 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace s
 	}
 
 	var logLines []string
-	limit := 3
+	limit := maxLogPods
 	if len(podList.Items) < limit {
 		limit = len(podList.Items)
 	}

@@ -270,6 +270,42 @@ func TestGetPodLogs_LimitBytesPassedToAPI(t *testing.T) {
 	}
 }
 
+// TestGetPodLogs_FetchBoundedToMaxLogPods verifies that getPodLogs processes at most
+// maxLogPods pod entries even when more failing pods exist. The server-side Limit in
+// the pod List call prevents downloading all pod objects before the in-memory cap
+// runs — mirroring the Limit already applied by getEvents and getPodStatus.
+func TestGetPodLogs_FetchBoundedToMaxLogPods(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	// Return more failing pods than maxLogPods to verify the cap applies.
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		items := make([]corev1.Pod, maxLogPods+2)
+		for i := range items {
+			items[i] = corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("fail-pod-%d", i),
+					Namespace: "prod",
+				},
+				Status: corev1.PodStatus{Phase: corev1.PodFailed},
+			}
+		}
+		return true, &corev1.PodList{Items: items}, nil
+	})
+
+	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	result := getPodLogs(context.Background(), cs, "prod", cfg)
+
+	// Count pod entries in the output. Each pod appears as "--- fail-pod-N ---".
+	count := strings.Count(result, "--- fail-pod-")
+	if count > maxLogPods {
+		t.Errorf("getPodLogs processed %d pods, want at most %d (maxLogPods); server-side Limit must cap the pod list to avoid OOM on failing-pod storms",
+			count, maxLogPods)
+	}
+	if count == 0 {
+		t.Error("expected at least one pod log entry in output")
+	}
+}
+
 func TestGetKubeContext_Events_WarningEventListed(t *testing.T) {
 	cs := fake.NewSimpleClientset(
 		&corev1.Event{
