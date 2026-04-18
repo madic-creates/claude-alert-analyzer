@@ -148,6 +148,43 @@ func TestCheckmkHandleWebhook_RecoveryClearsCooldown(t *testing.T) {
 	}
 }
 
+// TestCheckmkHandleWebhook_RecoveryClearsFlapCooldown verifies that a RECOVERY
+// notification also clears cooldown entries for FLAPPING START and FLAPPING STOP
+// notification types. Without this fix, a service that starts flapping (generating
+// a FLAPPING START alert) and then recovers would remain in cooldown for the full
+// TTL, causing the next flap event to be silently suppressed.
+func TestCheckmkHandleWebhook_RecoveryClearsFlapCooldown(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cfg.CooldownSeconds = 60 // long TTL so cooldown is still active on second attempt
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	}, nil)
+
+	// FLAPPING START: should be enqueued and set a cooldown keyed on "FLAPPING START".
+	flap := makeNotification("host1", "Disk", "WARNING", "FLAPPING START")
+	postCheckmkWebhook(t, handler, "test-secret", flap)
+	if enqueued.Load() != 1 {
+		t.Fatalf("expected 1 enqueued after FLAPPING START, got %d", enqueued.Load())
+	}
+
+	// RECOVERY: must clear the FLAPPING START cooldown in addition to PROBLEM cooldowns.
+	recovery := makeNotification("host1", "Disk", "OK", "RECOVERY")
+	postCheckmkWebhook(t, handler, "test-secret", recovery)
+	if enqueued.Load() != 1 {
+		t.Errorf("RECOVERY should not be enqueued, still expect 1, got %d", enqueued.Load())
+	}
+
+	// Second FLAPPING START within original TTL window: must be enqueued because the
+	// RECOVERY cleared the FLAPPING START cooldown.
+	postCheckmkWebhook(t, handler, "test-secret", flap)
+	if enqueued.Load() != 2 {
+		t.Errorf("expected 2 enqueued after second FLAPPING START (cooldown cleared by RECOVERY), got %d", enqueued.Load())
+	}
+}
+
 func TestCheckmkHandleWebhook_EnqueuesProblem(t *testing.T) {
 	cfg := makeCheckmkConfig()
 	cd := shared.NewCooldownManager()
