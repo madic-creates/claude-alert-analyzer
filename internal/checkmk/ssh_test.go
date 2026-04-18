@@ -102,6 +102,7 @@ func startTestSSHServer(t *testing.T, handleExec func(cmd string, ch ssh.Channel
 		User:            "test",
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(clientSigner)},
 		HostKeyCallback: ssh.FixedHostKey(hostSigner.PublicKey()),
+		Timeout:         5 * time.Second,
 	}
 	client, err := ssh.Dial("tcp", ln.Addr().String(), clientCfg)
 	if err != nil {

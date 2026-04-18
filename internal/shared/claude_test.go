@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestSendRequest_OversizedResponseIsBounded(t *testing.T) {
@@ -182,7 +183,7 @@ func TestAnalyze_AnthropicAuthHeader(t *testing.T) {
 	// Use a custom transport that redirects to the test server while keeping
 	// the Anthropic URL for header detection.
 	client := &ClaudeClient{
-		HTTP:    &http.Client{Transport: rewriteHostTransport{target: srvAnthropic.URL}},
+		HTTP:    &http.Client{Transport: rewriteHostTransport{target: srvAnthropic.URL}, Timeout: 5 * time.Second},
 		BaseURL: "https://api.anthropic.com/v1/messages",
 		APIKey:  "anthropic-secret",
 		Model:   "claude-3",
