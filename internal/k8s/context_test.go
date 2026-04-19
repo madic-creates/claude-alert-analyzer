@@ -683,6 +683,52 @@ func TestGetPrometheusMetrics_OversizedResponse(t *testing.T) {
 	}
 }
 
+// TestGetMetrics_InvalidNamespaceDropsNamespacedQueries verifies that when the
+// namespace label in an alert contains characters that would allow PromQL label-value
+// injection (e.g. closing braces, quotes), the namespace-scoped queries are silently
+// dropped. Only the always-present "Active Firing Alerts" query must still run.
+// This is the Prometheus analogue of TestGetKubeContext_InvalidNamespace which tests
+// the same guard for Kubernetes API calls.
+func TestGetMetrics_InvalidNamespaceDropsNamespacedQueries(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+
+	invalidNamespaces := []string{
+		`default"}[5m]) or up{namespace="evil`, // PromQL injection attempt
+		"-badstart",
+		"bad start",
+		"bad\x00null",
+		strings.Repeat("a", 64), // exceeds 63-char limit
+	}
+
+	for _, ns := range invalidNamespaces {
+		alert := makeAlertWithLabels(map[string]string{
+			"namespace": ns,
+			"alertname": "SomeAlert",
+		})
+		result := prom.GetMetrics(context.Background(), alert)
+
+		// The unconditional active-alerts query must always be present.
+		if !strings.Contains(result, "Active Firing Alerts") {
+			t.Errorf("ns %q: expected 'Active Firing Alerts' section even for invalid namespace, got:\n%s", ns, result)
+		}
+
+		// Namespace-scoped sections must be absent — the invalid namespace
+		// must not be interpolated into PromQL queries.
+		if strings.Contains(result, "CPU Usage") {
+			t.Errorf("ns %q: namespace-scoped CPU query must be dropped for invalid namespace, got:\n%s", ns, result)
+		}
+		if strings.Contains(result, "Memory Usage") {
+			t.Errorf("ns %q: namespace-scoped memory query must be dropped for invalid namespace, got:\n%s", ns, result)
+		}
+		if strings.Contains(result, "Pod Restarts") {
+			t.Errorf("ns %q: namespace-scoped pod restarts query must be dropped for invalid namespace, got:\n%s", ns, result)
+		}
+	}
+}
+
 // ----- GatherContext integration tests -----
 
 func TestGatherContext_ReturnsFourSections(t *testing.T) {
