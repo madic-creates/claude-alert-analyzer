@@ -97,25 +97,32 @@ func TestProcessAlert_NoSSH(t *testing.T) {
 	}
 }
 
-// mockDialer records the host passed to Dial so tests can assert it.
+// mockDialer records the hostname and ip passed to Dial so tests can assert them.
 type mockDialer struct {
-	dialedHost string
+	dialedHostname string
+	dialedIP       string
 }
 
-func (d *mockDialer) Dial(host string) (*ssh.Client, error) {
-	d.dialedHost = host
+func (d *mockDialer) Dial(hostname, ip string) (*ssh.Client, error) {
+	d.dialedHostname = hostname
+	d.dialedIP = ip
 	return nil, fmt.Errorf("mock dial error")
 }
 
-// TestProcessAlert_SSH_UsesHostnameNotIP is a regression test for the bug where
-// RunAgenticDiagnostics was called with hostAddress (IP) instead of hostname.
-// When SSH_ENABLED=true, the dialer must receive the hostname so that known_hosts
-// verification (which typically uses hostnames, not IPs) succeeds.
-func TestProcessAlert_SSH_UsesHostnameNotIP(t *testing.T) {
+// TestProcessAlert_SSH_DialUsesVerifiedIP is a security regression test that
+// ensures SSH connections go to the CheckMK-verified IP address rather than
+// resolving the hostname via DNS. DNS hijacking could otherwise bypass the
+// IP validation performed by ValidateAndDescribeHost.
+// The hostname is still passed alongside the IP so that known_hosts verification
+// (which typically uses hostnames) continues to work correctly.
+func TestProcessAlert_SSH_DialUsesVerifiedIP(t *testing.T) {
 	dialer := &mockDialer{}
 	pub := &mockPublisher{}
 	cooldown := shared.NewCooldownManager()
 	metrics := new(shared.AlertMetrics)
+
+	const verifiedIP = "192.168.1.50"
+	const hostName = "web-01.example.com"
 
 	deps := PipelineDeps{
 		Analyzer:   &mockAnalyzer{result: "fallback"},
@@ -130,7 +137,7 @@ func TestProcessAlert_SSH_UsesHostnameNotIP(t *testing.T) {
 			return shared.AnalysisContext{}
 		},
 		ValidateHost: func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
-			return &HostInfo{}, nil
+			return &HostInfo{VerifiedIP: verifiedIP}, nil
 		},
 	}
 
@@ -138,15 +145,19 @@ func TestProcessAlert_SSH_UsesHostnameNotIP(t *testing.T) {
 		Fingerprint: "reg001",
 		Title:       "High CPU",
 		Severity:    "warning",
-		Fields:      map[string]string{"hostname": "web-01.example.com", "host_address": "192.168.1.50"},
+		Fields:      map[string]string{"hostname": hostName, "host_address": verifiedIP},
 	}
 
 	ProcessAlert(context.Background(), deps, alert)
 
-	// The dialer must receive the hostname, not the IP address.
-	if dialer.dialedHost != "web-01.example.com" {
-		t.Errorf("dialer called with %q, want hostname %q (not IP %q)",
-			dialer.dialedHost, "web-01.example.com", "192.168.1.50")
+	// The dialer must receive the verified IP as the dial target (not a DNS-resolved
+	// hostname) to enforce the CheckMK IP validation.
+	if dialer.dialedIP != verifiedIP {
+		t.Errorf("dialer IP = %q, want verified IP %q", dialer.dialedIP, verifiedIP)
+	}
+	// The hostname must still be passed for known_hosts verification.
+	if dialer.dialedHostname != hostName {
+		t.Errorf("dialer hostname = %q, want %q", dialer.dialedHostname, hostName)
 	}
 }
 

@@ -16,8 +16,11 @@ import (
 )
 
 // Dialer opens SSH connections to remote hosts.
+// Dial connects to the host by dialing ip directly (preventing DNS hijacking)
+// while presenting hostname to the known_hosts callback so that hostname-keyed
+// entries in the known_hosts file continue to match.
 type Dialer interface {
-	Dial(host string) (*ssh.Client, error)
+	Dial(hostname, ip string) (*ssh.Client, error)
 }
 
 // SSHDialer caches the parsed SSH key and known_hosts callback.
@@ -44,20 +47,35 @@ func NewSSHDialer(cfg Config) (*SSHDialer, error) {
 	return &SSHDialer{signer: signer, hostKeyCallback: hostKeyCallback, user: cfg.SSHUser}, nil
 }
 
-// Dial opens an SSH connection to the given host.
-func (d *SSHDialer) Dial(hostAddress string) (*ssh.Client, error) {
+// Dial opens an SSH connection to ip:22 while presenting hostname to the
+// known_hosts callback. This ensures the TCP connection goes to the
+// CheckMK-verified IP address (preventing DNS hijacking) while still
+// allowing known_hosts entries that are keyed by hostname to match.
+func (d *SSHDialer) Dial(hostname, ip string) (*ssh.Client, error) {
 	sshCfg := &ssh.ClientConfig{
 		User:            d.user,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(d.signer)},
 		HostKeyCallback: d.hostKeyCallback,
 		Timeout:         10 * time.Second,
 	}
-	addr := net.JoinHostPort(hostAddress, "22")
-	client, err := ssh.Dial("tcp", addr, sshCfg)
+	// Establish the TCP connection directly to the verified IP so that no
+	// DNS resolution can redirect us to a different host.
+	ipAddr := net.JoinHostPort(ip, "22")
+	conn, err := net.DialTimeout("tcp", ipAddr, sshCfg.Timeout)
 	if err != nil {
-		return nil, fmt.Errorf("SSH dial %s: %w", addr, err)
+		return nil, fmt.Errorf("TCP dial %s: %w", ipAddr, err)
 	}
-	return client, nil
+	// Pass hostname (not ipAddr) as the addr argument to NewClientConn so
+	// that the known_hosts callback receives the hostname as the key.
+	// known_hosts entries are typically recorded by hostname; using the IP
+	// here would cause verification to fail for hostname-keyed entries.
+	hostnameAddr := net.JoinHostPort(hostname, "22")
+	c, chans, reqs, err := ssh.NewClientConn(conn, hostnameAddr, sshCfg)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("SSH handshake with %s (ip %s): %w", hostname, ip, err)
+	}
+	return ssh.NewClient(c, chans, reqs), nil
 }
 
 // maxSSHOutputBytes is the maximum number of bytes collected from combined

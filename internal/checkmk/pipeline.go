@@ -61,7 +61,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 
 	if sshOK {
 		var err error
-		analysis, err = RunAgenticDiagnostics(ctx, deps.SSHConfig, deps.ToolRunner, deps.SSHDialer, hostname, alertContext, deps.SSHConfig.MaxAgentRounds)
+		analysis, err = RunAgenticDiagnostics(ctx, deps.SSHConfig, deps.ToolRunner, deps.SSHDialer, hostname, hostInfo.VerifiedIP, alertContext, deps.SSHConfig.MaxAgentRounds)
 		if err != nil {
 			slog.Error("agentic diagnostics failed", "error", err)
 			if notifyErr := shared.PublishAll(ctx, deps.Publishers,

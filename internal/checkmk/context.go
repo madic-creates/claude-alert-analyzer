@@ -59,7 +59,8 @@ type checkmkHostAttributes struct {
 
 // HostInfo holds host metadata extracted from the CheckMK API.
 type HostInfo struct {
-	AIContext string
+	AIContext  string
+	VerifiedIP string // IP address confirmed by CheckMK; use this as the SSH dial target
 }
 
 type checkmkServiceEntry struct {
@@ -144,6 +145,7 @@ func (c *APIClient) ValidateAndDescribeHost(ctx context.Context, hostname, hostA
 		return info, fmt.Errorf("host_address %q does not match CheckMK-known address %q for host %q", hostAddress, knownAddress, hostname)
 	}
 
+	info.VerifiedIP = knownAddress
 	return info, nil
 }
 

@@ -160,12 +160,16 @@ func parseCommandInput(input json.RawMessage) ([]string, error) {
 
 // RunAgenticDiagnostics opens an SSH connection to the host and runs a Claude tool-use
 // loop where Claude freely chooses diagnostic commands. Returns the final analysis text.
+// verifiedIP is the IP address confirmed by CheckMK; the TCP connection is made directly
+// to this IP to prevent DNS hijacking while hostname is still presented to the
+// known_hosts callback for key verification.
 func RunAgenticDiagnostics(
 	ctx context.Context,
 	cfg Config,
 	client shared.ToolLoopRunner,
 	dialer Dialer,
 	hostname string,
+	verifiedIP string,
 	alertContext string,
 	maxRounds int,
 ) (string, error) {
@@ -174,9 +178,9 @@ func RunAgenticDiagnostics(
 		denied = DefaultDeniedCommands
 	}
 
-	slog.Info("starting agentic SSH diagnostics", "hostname", hostname, "maxRounds", maxRounds, "deniedCommands", len(denied))
+	slog.Info("starting agentic SSH diagnostics", "hostname", hostname, "verifiedIP", verifiedIP, "maxRounds", maxRounds, "deniedCommands", len(denied))
 
-	sshClient, err := dialer.Dial(hostname)
+	sshClient, err := dialer.Dial(hostname, verifiedIP)
 	if err != nil {
 		return "", fmt.Errorf("SSH connection failed: %w", err)
 	}
