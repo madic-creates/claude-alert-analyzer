@@ -72,7 +72,7 @@ func (d *SSHDialer) Dial(hostname, ip string) (*ssh.Client, error) {
 	hostnameAddr := net.JoinHostPort(hostname, "22")
 	c, chans, reqs, err := ssh.NewClientConn(conn, hostnameAddr, sshCfg)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("SSH handshake with %s (ip %s): %w", hostname, ip, err)
 	}
 	return ssh.NewClient(c, chans, reqs), nil
