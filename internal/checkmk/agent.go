@@ -220,6 +220,17 @@ func isDenied(denied map[string]bool, argv []string) bool {
 	return denied[cmd]
 }
 
+// maxArgvElements is the maximum number of elements accepted in the command
+// array from a Claude tool call. A legitimate diagnostic command rarely needs
+// more than a handful of arguments; an unbounded array could cause OOM in
+// shellQuote and flood structured logs with multi-megabyte "command" fields.
+const maxArgvElements = 64
+
+// maxArgLen is the maximum byte length of a single argument in the command
+// array. Arguments longer than this are almost certainly not a real command
+// option; capping them prevents shellQuote from allocating huge strings.
+const maxArgLen = 4096
+
 func parseCommandInput(input json.RawMessage) ([]string, error) {
 	var parsed struct {
 		Command []string `json:"command"`
@@ -229,6 +240,14 @@ func parseCommandInput(input json.RawMessage) ([]string, error) {
 	}
 	if len(parsed.Command) == 0 {
 		return nil, fmt.Errorf("empty command")
+	}
+	if len(parsed.Command) > maxArgvElements {
+		return nil, fmt.Errorf("command has %d elements, maximum is %d", len(parsed.Command), maxArgvElements)
+	}
+	for i, arg := range parsed.Command {
+		if len(arg) > maxArgLen {
+			return nil, fmt.Errorf("argument %d exceeds maximum length of %d bytes", i, maxArgLen)
+		}
 	}
 	return parsed.Command, nil
 }

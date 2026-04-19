@@ -478,6 +478,60 @@ func TestParseCommandInput_Invalid(t *testing.T) {
 	}
 }
 
+// TestParseCommandInput_TooManyElements verifies that an oversized argv is
+// rejected before any work is done. An adversary (or hallucinating model)
+// returning thousands of array elements could cause OOM in shellQuote and
+// flood structured logs with multi-megabyte "command" fields.
+func TestParseCommandInput_TooManyElements(t *testing.T) {
+	// Build a command array with one more element than the limit.
+	args := make([]string, maxArgvElements+1)
+	for i := range args {
+		args[i] = "ls"
+	}
+	data, _ := json.Marshal(map[string]any{"command": args})
+	_, err := parseCommandInput(json.RawMessage(data))
+	if err == nil {
+		t.Fatalf("expected error for command with %d elements (limit %d)", len(args), maxArgvElements)
+	}
+	if !strings.Contains(err.Error(), "maximum") {
+		t.Errorf("error should mention the maximum, got: %v", err)
+	}
+}
+
+// TestParseCommandInput_ArgTooLong verifies that a single argument exceeding
+// maxArgLen is rejected. An oversized argument would cause shellQuote to
+// allocate a huge string and could flood log lines.
+func TestParseCommandInput_ArgTooLong(t *testing.T) {
+	oversized := strings.Repeat("A", maxArgLen+1)
+	data, _ := json.Marshal(map[string]any{"command": []string{"cat", oversized}})
+	_, err := parseCommandInput(json.RawMessage(data))
+	if err == nil {
+		t.Fatalf("expected error for argument of length %d (limit %d)", maxArgLen+1, maxArgLen)
+	}
+	if !strings.Contains(err.Error(), "maximum length") {
+		t.Errorf("error should mention maximum length, got: %v", err)
+	}
+}
+
+// TestParseCommandInput_ExactLimitsAccepted verifies that inputs right at the
+// limits (not over) are accepted without error.
+func TestParseCommandInput_ExactLimitsAccepted(t *testing.T) {
+	// Exactly maxArgvElements elements, each exactly maxArgLen bytes.
+	args := make([]string, maxArgvElements)
+	for i := range args {
+		if i == 0 {
+			args[i] = "cat" // first element is the command name
+		} else {
+			args[i] = strings.Repeat("A", maxArgLen)
+		}
+	}
+	data, _ := json.Marshal(map[string]any{"command": args})
+	_, err := parseCommandInput(json.RawMessage(data))
+	if err != nil {
+		t.Fatalf("unexpected error for input at exact limits: %v", err)
+	}
+}
+
 func TestIsDenied_SystemctlFlagsBeforeSubcommand(t *testing.T) {
 	// Flags like --no-pager or --user before the subcommand are common in
 	// practice (Claude naturally adds --no-pager to suppress paging).
