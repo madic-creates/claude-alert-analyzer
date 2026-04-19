@@ -790,3 +790,56 @@ func TestIsDenied_SedInPlaceAlwaysChecked(t *testing.T) {
 		}
 	}
 }
+
+// TestIsDenied_FindDeleteBlocked verifies that find with -delete, -fprint, or
+// -fprint0 is denied even when "find" is not in the denylist. Unlike -exec,
+// these flags act directly without spawning a sub-process:
+//   - -delete removes each matched file/directory
+//   - -fprint writes output to a named file (truncating first)
+//   - -fprint0 same as -fprint with NUL separators
+func TestIsDenied_FindDeleteBlocked(t *testing.T) {
+	denied := [][]string{
+		{"find", "/tmp", "-name", "*.tmp", "-delete"},
+		{"find", "/var/log", "-mtime", "+30", "-delete"},
+		{"/usr/bin/find", "/", "-name", "core", "-delete"},
+		{"find", "/var/log", "-name", "*.log", "-fprint", "/tmp/logs.txt"},
+		{"find", "/etc", "-type", "f", "-fprint0", "/tmp/files.txt"},
+		// Flag appearing before the path expression should still be caught.
+		{"find", "/", "-delete"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected find destructive flag denied: %v", argv)
+		}
+	}
+}
+
+// TestIsDenied_FindDeleteAlwaysChecked verifies that find -delete is denied even
+// when a custom denylist does not include "find". This is the same defence-in-
+// depth guarantee that applies to -exec and sed -i.
+func TestIsDenied_FindDeleteAlwaysChecked(t *testing.T) {
+	// Custom denylist that does NOT include "find".
+	custom := map[string]bool{"rm": true, "dd": true}
+
+	denied := [][]string{
+		{"find", "/tmp", "-name", "*.tmp", "-delete"},
+		{"find", "/var/log", "-name", "*.log", "-fprint", "/tmp/out.txt"},
+		{"find", "/etc", "-type", "f", "-fprint0", "/tmp/out.txt"},
+	}
+	for _, argv := range denied {
+		if !isDenied(custom, argv) {
+			t.Errorf("find destructive flag not blocked with custom denylist: %v", argv)
+		}
+	}
+
+	// Read-only find must still be allowed with the custom denylist.
+	allowed := [][]string{
+		{"find", "/var/log", "-name", "*.log"},
+		{"find", "/etc", "-type", "f"},
+	}
+	for _, argv := range allowed {
+		if isDenied(custom, argv) {
+			t.Errorf("read-only find should be allowed with custom denylist: %v", argv)
+		}
+	}
+}

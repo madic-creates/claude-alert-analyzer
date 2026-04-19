@@ -117,6 +117,23 @@ var systemctlReadOnly = map[string]bool{
 	"list-timers": true, "list-sockets": true, "list-dependencies": true,
 }
 
+// findDestructiveFlags are find(1) primary expressions that perform
+// destructive or write operations without executing a sub-process.
+// They must be blocked alongside the exec flags even when "find" itself
+// is not in the denylist:
+//
+//   - -delete   removes each matched file/directory from the filesystem
+//   - -fprint   writes output to a named file (truncating it first)
+//   - -fprint0  same as -fprint but with NUL separators
+//
+// These differ from -exec/-execdir in that they act directly rather than
+// spawning a child process, so they require their own block list entry.
+var findDestructiveFlags = map[string]bool{
+	"-delete": true,
+	"-fprint": true,
+	"-fprint0": true,
+}
+
 // findExecFlags are find(1) primary expressions that execute a sub-process.
 // They allow running arbitrary commands for each matched file and must be
 // blocked even when "find" itself is not in the denylist — just as
@@ -160,11 +177,13 @@ func isDenied(denied map[string]bool, argv []string) bool {
 
 	// Special case: find with -exec/-execdir/-ok/-okdir can run arbitrary
 	// sub-processes for each matched file — effectively bypassing the denylist.
+	// Additionally, -delete removes matched files and -fprint/-fprint0 write
+	// output to arbitrary files — both are destructive without spawning a child.
 	// Deny whenever any of those flags appear in the argument list, regardless
 	// of whether "find" itself is in the denylist.
 	if cmd == "find" {
 		for _, arg := range argv[1:] {
-			if findExecFlags[arg] {
+			if findExecFlags[arg] || findDestructiveFlags[arg] {
 				return true
 			}
 		}
