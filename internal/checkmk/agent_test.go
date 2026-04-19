@@ -814,6 +814,38 @@ func TestIsDenied_FindDeleteBlocked(t *testing.T) {
 	}
 }
 
+// TestIsDenied_FindFprintfAndFlsBlocked verifies that find with -fprintf or -fls
+// is denied even when "find" is not in the denylist. Both flags write output to
+// an arbitrary file on the filesystem:
+//   - -fprintf FILE FORMAT: writes printf-formatted output to FILE
+//   - -fls FILE: writes long-format (-ls style) listing to FILE
+//
+// Like -fprint and -fprint0, these act directly without spawning a sub-process.
+func TestIsDenied_FindFprintfAndFlsBlocked(t *testing.T) {
+	// Both flags must be denied with the default denylist.
+	denied := [][]string{
+		{"find", "/var/log", "-name", "*.log", "-fprintf", "/tmp/out.txt", "%f\n"},
+		{"find", "/etc", "-type", "f", "-fprintf", "/etc/cron.d/backdoor", "* * * * * id\n"},
+		{"/usr/bin/find", "/", "-name", "core", "-fprintf", "/tmp/cores.txt", "%p\n"},
+		{"find", "/var/log", "-name", "*.log", "-fls", "/tmp/listing.txt"},
+		{"find", "/etc", "-type", "f", "-fls", "/tmp/etc.txt"},
+		{"/usr/bin/find", "/", "-name", "*.conf", "-fls", "/tmp/conf.txt"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected find file-writing flag denied: %v", argv)
+		}
+	}
+
+	// Same flags must be denied with a custom denylist that does NOT include "find".
+	custom := map[string]bool{"rm": true, "dd": true}
+	for _, argv := range denied {
+		if !isDenied(custom, argv) {
+			t.Errorf("find file-writing flag not blocked with custom denylist: %v", argv)
+		}
+	}
+}
+
 // TestIsDenied_FindDeleteAlwaysChecked verifies that find -delete is denied even
 // when a custom denylist does not include "find". This is the same defence-in-
 // depth guarantee that applies to -exec and sed -i.

@@ -125,13 +125,17 @@ var systemctlReadOnly = map[string]bool{
 //   - -delete   removes each matched file/directory from the filesystem
 //   - -fprint   writes output to a named file (truncating it first)
 //   - -fprint0  same as -fprint but with NUL separators
+//   - -fprintf  writes formatted output to a named file (like -fprint with printf format)
+//   - -fls      writes long-format listing to a named file (like -fprint with -ls format)
 //
 // These differ from -exec/-execdir in that they act directly rather than
 // spawning a child process, so they require their own block list entry.
 var findDestructiveFlags = map[string]bool{
-	"-delete": true,
-	"-fprint": true,
+	"-delete":  true,
+	"-fprint":  true,
 	"-fprint0": true,
+	"-fprintf": true,
+	"-fls":     true,
 }
 
 // findExecFlags are find(1) primary expressions that execute a sub-process.
