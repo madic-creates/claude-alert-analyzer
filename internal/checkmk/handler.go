@@ -55,7 +55,8 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 			// not silently suppressed. PROBLEM alerts can be in any of the three
 			// non-OK states; FLAPPING START/STOP alerts use their own notification
 			// type in the fingerprint key, so we must clear those separately.
-			for _, state := range []string{"CRITICAL", "WARNING", "UNKNOWN"} {
+			// The empty string covers host-level notifications where ServiceState is "".
+			for _, state := range []string{"CRITICAL", "WARNING", "UNKNOWN", ""} {
 				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "PROBLEM", state))
 				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "FLAPPING START", state))
 				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "FLAPPING STOP", state))
@@ -89,6 +90,14 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 			severity = "unknown"
 		case "OK":
 			severity = "ok"
+		case "":
+			// Host-level notification: ServiceState is empty, fall back to HostState.
+			switch notif.HostState {
+			case "DOWN", "UNREACHABLE":
+				severity = "critical"
+			case "UP":
+				severity = "ok"
+			}
 		}
 
 		ap := shared.AlertPayload{

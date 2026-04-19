@@ -417,6 +417,103 @@ func TestCheckmkHandleWebhook_BodyTooLarge_Returns413(t *testing.T) {
 	}
 }
 
+func TestCheckmkHandleWebhook_HostDown_SeverityCritical(t *testing.T) {
+	// Host-level notification: ServiceState is empty, HostState is "DOWN".
+	// Must produce severity "critical", not the default "warning".
+	cfg := makeCheckmkConfig()
+	cd := shared.NewCooldownManager()
+	var got shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		got = ap
+		return true
+	}, nil)
+
+	notif := CheckMKNotification{
+		Hostname:         "myhost",
+		HostAddress:      "10.0.0.2",
+		HostState:        "DOWN",
+		ServiceState:     "",
+		NotificationType: "PROBLEM",
+		Timestamp:        "2024-01-15T12:00:00Z",
+	}
+	rr := postCheckmkWebhook(t, handler, "test-secret", notif)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if got.Severity != "critical" {
+		t.Errorf("expected severity 'critical' for host DOWN, got %q", got.Severity)
+	}
+}
+
+func TestCheckmkHandleWebhook_HostUnreachable_SeverityCritical(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cd := shared.NewCooldownManager()
+	var got shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		got = ap
+		return true
+	}, nil)
+
+	notif := CheckMKNotification{
+		Hostname:         "myhost",
+		HostAddress:      "10.0.0.2",
+		HostState:        "UNREACHABLE",
+		ServiceState:     "",
+		NotificationType: "PROBLEM",
+		Timestamp:        "2024-01-15T12:00:00Z",
+	}
+	rr := postCheckmkWebhook(t, handler, "test-secret", notif)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if got.Severity != "critical" {
+		t.Errorf("expected severity 'critical' for host UNREACHABLE, got %q", got.Severity)
+	}
+}
+
+func TestCheckmkHandleWebhook_HostRecovery_ClearsCooldown(t *testing.T) {
+	// Host-down PROBLEM sets a cooldown with empty ServiceState.
+	// A subsequent RECOVERY must clear that cooldown so the next PROBLEM is analyzed.
+	cfg := makeCheckmkConfig()
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	}, nil)
+
+	hostDownNotif := CheckMKNotification{
+		Hostname: "myhost", HostAddress: "10.0.0.2",
+		HostState: "DOWN", ServiceState: "", NotificationType: "PROBLEM",
+		Timestamp: "2024-01-15T12:00:00Z",
+	}
+	recoveryNotif := CheckMKNotification{
+		Hostname: "myhost", HostAddress: "10.0.0.2",
+		HostState: "UP", ServiceState: "", NotificationType: "RECOVERY",
+		Timestamp: "2024-01-15T12:01:00Z",
+	}
+
+	// First PROBLEM — enqueued.
+	postCheckmkWebhook(t, handler, "test-secret", hostDownNotif)
+	if enqueued.Load() != 1 {
+		t.Fatalf("expected 1 enqueued after first PROBLEM, got %d", enqueued.Load())
+	}
+
+	// RECOVERY — clears cooldown, not enqueued.
+	postCheckmkWebhook(t, handler, "test-secret", recoveryNotif)
+	if enqueued.Load() != 1 {
+		t.Fatalf("expected still 1 enqueued after RECOVERY, got %d", enqueued.Load())
+	}
+
+	// Second PROBLEM — cooldown cleared, must be enqueued.
+	postCheckmkWebhook(t, handler, "test-secret", hostDownNotif)
+	if enqueued.Load() != 2 {
+		t.Errorf("expected 2 enqueued after second PROBLEM (cooldown cleared by RECOVERY), got %d", enqueued.Load())
+	}
+}
+
 func TestFingerprint_DifferentInputsProduceDifferentHashes(t *testing.T) {
 	fp1 := fingerprint("host1", "CPU", "PROBLEM", "WARNING")
 	fp2 := fingerprint("host1", "Disk", "PROBLEM", "WARNING")
