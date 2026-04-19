@@ -115,6 +115,7 @@ var systemctlReadOnly = map[string]bool{
 	"status": true, "show": true, "is-active": true, "is-failed": true,
 	"is-enabled": true, "list-units": true, "list-unit-files": true,
 	"list-timers": true, "list-sockets": true, "list-dependencies": true,
+	"cat": true, // shows installed unit file content; read-only and useful for config inspection
 }
 
 // findDestructiveFlags are find(1) primary expressions that perform

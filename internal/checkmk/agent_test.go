@@ -349,6 +349,7 @@ func TestIsDenied_SystemctlSpecialCases(t *testing.T) {
 		{"systemctl", "is-active", "docker"},
 		{"systemctl", "is-failed", "nginx"},
 		{"systemctl", "list-timers"},
+		{"systemctl", "cat", "nginx.service"},
 	}
 	for _, argv := range allowed {
 		if isDenied(DefaultDeniedCommands, argv) {
