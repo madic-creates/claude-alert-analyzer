@@ -23,10 +23,17 @@ type APIClient struct {
 }
 
 // NewAPIClient creates a client from config with default 10s timeout.
+// The URL is normalised to always end with "/" so that path concatenation
+// (e.g. url+"objects/host_config/"+hostname) produces a valid URL regardless
+// of whether the operator included a trailing slash in CHECKMK_API_URL.
 func NewAPIClient(cfg Config) *APIClient {
+	apiURL := cfg.CheckMKAPIURL
+	if !strings.HasSuffix(apiURL, "/") {
+		apiURL += "/"
+	}
 	return &APIClient{
 		HTTP:   &http.Client{Timeout: 10 * time.Second},
-		URL:    cfg.CheckMKAPIURL,
+		URL:    apiURL,
 		User:   cfg.CheckMKAPIUser,
 		Secret: cfg.CheckMKAPISecret,
 	}

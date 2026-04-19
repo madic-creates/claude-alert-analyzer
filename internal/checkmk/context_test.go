@@ -856,6 +856,55 @@ func TestGetHostServices_TruncatesLargeServiceList(t *testing.T) {
 	}
 }
 
+// TestNewAPIClient_URLNormalization verifies that NewAPIClient appends a trailing
+// slash when the caller omits it. Without normalization the path concatenation
+// in ValidateAndDescribeHost and GetHostServices produces broken URLs such as
+// "http://host/apiobjects/host_config/..." instead of
+// "http://host/api/objects/host_config/...".
+func TestNewAPIClient_URLNormalization(t *testing.T) {
+	// A test server that records what path it received.
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		http.NotFound(w, r) // 404 is fine; we only care about the path
+	}))
+	defer srv.Close()
+
+	tests := []struct {
+		inputURL string
+		wantPath string
+	}{
+		{
+			inputURL: srv.URL + "/cmk/check_mk/api/1.0", // no trailing slash
+			wantPath: "/cmk/check_mk/api/1.0/objects/host_config/myhost",
+		},
+		{
+			inputURL: srv.URL + "/cmk/check_mk/api/1.0/", // already has trailing slash
+			wantPath: "/cmk/check_mk/api/1.0/objects/host_config/myhost",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.inputURL, func(t *testing.T) {
+			gotPath = ""
+			cfg := Config{
+				CheckMKAPIURL:    tt.inputURL,
+				CheckMKAPIUser:   "automation",
+				CheckMKAPISecret: "secret",
+			}
+			client := NewAPIClient(cfg)
+			client.HTTP = srv.Client()
+
+			// The call will 404, but the path must be correct.
+			_, _ = client.ValidateAndDescribeHost(context.Background(), "myhost", "1.2.3.4")
+
+			if gotPath != tt.wantPath {
+				t.Errorf("URL path mismatch:\n  got:  %q\n  want: %q", gotPath, tt.wantPath)
+			}
+		})
+	}
+}
+
 // TestGetHostServices_CritNotMisclassifiedByDescription is a regression test for
 // a bug where the old two-pass sort used strings.Contains(line, ": OK —") to
 // detect OK services. A CRIT service whose *description* contained the literal
