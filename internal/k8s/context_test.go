@@ -809,6 +809,46 @@ func TestGatherContext_PrometheusUnreachable_StillReturnsKubeContext(t *testing.
 	}
 }
 
+// TestGatherContext_PrometheusTimeoutIsEnforced verifies that GatherContext applies a
+// bounded deadline to the Prometheus goroutine. Without cfg.PromTimeout (or the
+// defaultPromTimeout fallback), a Prometheus server that hangs for multiple query
+// round-trips could block a worker goroutine far beyond the Kubernetes API deadline.
+// The test uses a short PromTimeout and a hanging server to confirm that GatherContext
+// returns promptly with an error sentinel in the Prometheus section.
+func TestGatherContext_PrometheusTimeoutIsEnforced(t *testing.T) {
+	// Prometheus server that hangs until its request context is cancelled.
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+		fmt.Fprint(w, `{}`)
+	}))
+	defer slow.Close()
+
+	cs := fake.NewSimpleClientset()
+	alert := makeAlertWithLabels(map[string]string{"alertname": "Test", "namespace": "ns"})
+	cfg := Config{
+		AllowedNamespaces: []string{},
+		MaxLogBytes:       4096,
+		PromTimeout:       150 * time.Millisecond, // short deadline to trigger fast
+	}
+
+	prom := &PrometheusClient{HTTP: slow.Client(), URL: slow.URL}
+	start := time.Now()
+	actx := GatherContext(context.Background(), prom, cs, alert, cfg)
+	elapsed := time.Since(start)
+
+	if elapsed > 3*time.Second {
+		t.Errorf("GatherContext blocked for %v; expected to complete quickly when PromTimeout is short", elapsed)
+	}
+	if len(actx.Sections) != 4 {
+		t.Fatalf("expected 4 sections, got %d", len(actx.Sections))
+	}
+	// Prometheus section must contain an error sentinel, not be empty.
+	promContent := actx.Sections[0].Content
+	if promContent == "" {
+		t.Error("Prometheus section must not be empty after deadline — expected error sentinel from cancelled query")
+	}
+}
+
 func TestGatherContext_CancelledContext(t *testing.T) {
 	// Start a slow prometheus server
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

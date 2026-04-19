@@ -333,15 +333,30 @@ func GetKubeContext(ctx context.Context, clientset kubernetes.Interface, alert A
 	return
 }
 
+// defaultPromTimeout is the deadline applied to all Prometheus metric queries in
+// GatherContext when cfg.PromTimeout is zero. It mirrors defaultKubeAPITimeout so
+// that context-gathering always completes within a bounded wall-clock budget
+// regardless of Prometheus responsiveness: without it, a slow Prometheus could
+// make multiple sequential queries each taking up to the HTTP client timeout,
+// blocking the worker goroutine for far longer than the Kubernetes API deadline.
+const defaultPromTimeout = defaultKubeAPITimeout
+
 // GatherContext collects Prometheus metrics and Kubernetes context for the given alert.
 func GatherContext(ctx context.Context, prom *PrometheusClient, clientset kubernetes.Interface, alert Alert, cfg Config) shared.AnalysisContext {
 	slog.Info("gathering context",
 		"alertname", alert.Labels["alertname"],
 		"namespace", alert.Labels["namespace"])
 
+	promTimeout := cfg.PromTimeout
+	if promTimeout == 0 {
+		promTimeout = defaultPromTimeout
+	}
+	promCtx, promCancel := context.WithTimeout(ctx, promTimeout)
+	defer promCancel()
+
 	promCh := make(chan string, 1)
 	go func() {
-		promCh <- prom.GetMetrics(ctx, alert)
+		promCh <- prom.GetMetrics(promCtx, alert)
 	}()
 
 	events, podStatus, podLogs := GetKubeContext(ctx, clientset, alert, cfg)

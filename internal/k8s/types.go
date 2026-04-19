@@ -60,6 +60,7 @@ type Config struct {
 	APIBaseURL        string        // Claude API endpoint (supports Anthropic and OpenRouter)
 	APIKey            string        // API key for authentication
 	KubeAPITimeout    time.Duration // Timeout for Kubernetes API context gathering (0 = default 30s)
+	PromTimeout       time.Duration // Timeout for Prometheus context gathering (0 = default 30s)
 }
 
 // BaseConfig returns a shared.BaseConfig derived from this Config.
