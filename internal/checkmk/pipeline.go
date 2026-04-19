@@ -57,11 +57,10 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	// on success, but guard here to avoid a nil-pointer panic if they do not.
 	sshOK := deps.SSHEnabled && validationErr == nil && hostInfo != nil
 	if deps.SSHEnabled && !sshOK {
-		if validationErr != nil {
-			alertContext += "\n## Note\nSSH diagnostics unavailable: " + validationErr.Error() + "\n"
-		} else {
-			alertContext += "\n## Note\nSSH diagnostics unavailable: host validation returned no host info\n"
-		}
+		// Do not include the raw validation error in the Claude prompt: it
+		// contains untrusted values from the webhook payload (hostname,
+		// host_address) that could be used for prompt injection.
+		alertContext += "\n## Note\nSSH diagnostics unavailable: host validation failed\n"
 	}
 
 	var analysis string
