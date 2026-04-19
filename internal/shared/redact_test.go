@@ -84,6 +84,45 @@ func TestRedactSecrets_MongoDBURL(t *testing.T) {
 	}
 }
 
+func TestRedactSecrets_EmailAddress(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"simple email", "contact: admin@example.com for details"},
+		{"internal domain", "notify ops@monitoring.internal on failure"},
+		{"subdomain", "cert owner is user@mail.corp.example.org"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if result == tc.input {
+				t.Errorf("expected email to be redacted in %q, got: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker, got: %s", result)
+			}
+		})
+	}
+}
+
+// TestRedactSecrets_EmailNoFalsePositive_IPv4 verifies that bare IPv4 addresses
+// with a user prefix (e.g. "user@192.168.1.1") are NOT redacted. The email
+// pattern requires a TLD consisting of two or more ASCII letters; a numeric
+// final octet does not satisfy that requirement, so these should pass through.
+func TestRedactSecrets_EmailNoFalsePositive_IPv4(t *testing.T) {
+	cases := []string{
+		"connect to user@192.168.1.1",
+		"ssh nagios@10.0.0.1 failed",
+	}
+	for _, input := range cases {
+		result := RedactSecrets(input)
+		if result != input {
+			t.Errorf("false positive: %q was redacted to %q", input, result)
+		}
+	}
+}
+
 func TestRedactSecrets_NoFalsePositive(t *testing.T) {
 	input := "CPU load is 4.5 at 12:00"
 	result := RedactSecrets(input)
