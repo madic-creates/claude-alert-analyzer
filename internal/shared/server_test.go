@@ -230,10 +230,12 @@ func TestServer_BuildMux_Ready_CheckFails(t *testing.T) {
 		t.Errorf("GET /ready (check fails) = %d, want 503", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), "not ready") {
-		t.Errorf("body = %q, want 'not ready: ...'", w.Body.String())
+		t.Errorf("body = %q, want 'not ready'", w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "k8s api unreachable") {
-		t.Errorf("body = %q, want error message included", w.Body.String())
+	// The internal error detail must NOT be echoed in the response: /ready is
+	// unauthenticated and leaking connection strings or hostnames is a security risk.
+	if strings.Contains(w.Body.String(), "k8s api unreachable") {
+		t.Errorf("body leaks internal error detail: %q", w.Body.String())
 	}
 }
 

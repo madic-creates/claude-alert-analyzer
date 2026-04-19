@@ -66,8 +66,12 @@ func (s *Server) BuildMux(webhookHandler http.HandlerFunc) *http.ServeMux {
 			checkCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 			defer cancel()
 			if err := s.ReadyCheck(checkCtx); err != nil {
+				// Log the underlying error server-side but do not echo it in the
+				// response: /ready is unauthenticated and internal error messages
+				// (connection strings, hostnames, etc.) must not be exposed.
+				slog.Warn("readiness check failed", "error", err)
 				w.WriteHeader(http.StatusServiceUnavailable)
-				fmt.Fprintf(w, "not ready: %v", err)
+				fmt.Fprint(w, "not ready")
 				return
 			}
 		}
