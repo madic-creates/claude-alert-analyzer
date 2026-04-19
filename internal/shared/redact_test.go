@@ -92,6 +92,59 @@ func TestRedactSecrets_NoFalsePositive(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_NoFalsePositiveKeySuffix verifies that common English words
+// ending in a keyword suffix (e.g. "monkey" ends in "key", "turkey" ends in
+// "key") do not trigger false-positive redactions. Without a word-boundary
+// guard, "monkey=bananas" would be partially redacted to "mon[REDACTED]",
+// corrupting diagnostic output sent to Claude.
+func TestRedactSecrets_NoFalsePositiveKeySuffix(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"monkey", "monkey=bananas"},
+		{"donkey", "donkey=cart"},
+		{"turkey", "turkey=dinner"},
+		{"jockey", "jockey=horse"},
+		{"hockey", "hockey=puck"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if result != tc.input {
+				t.Errorf("false positive: %q was redacted to %q", tc.input, result)
+			}
+		})
+	}
+}
+
+// TestRedactSecrets_UnderscorePrefixedKeywords verifies that underscore-prefixed
+// keyword patterns (api_key, API_KEY, cache_token, etc.) are still redacted.
+// Underscore is not a letter, so the word-boundary guard allows matches where
+// the keyword is preceded by an underscore.
+func TestRedactSecrets_UnderscorePrefixedKeywords(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string // substring that must NOT appear in the result
+	}{
+		{"api_key", "api_key=s3cr3t-value", "s3cr3t-value"},
+		{"API_KEY", "API_KEY=s3cr3t-value", "s3cr3t-value"},
+		{"cache_token", "cache_token=session-xyz", "session-xyz"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.want) {
+				t.Errorf("%q: secret %q not redacted; got %q", tc.input, tc.want, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("%q: expected [REDACTED] in result, got %q", tc.input, result)
+			}
+		})
+	}
+}
+
 func TestTruncate_Short(t *testing.T) {
 	result := Truncate("short", 100)
 	if result != "short" {
