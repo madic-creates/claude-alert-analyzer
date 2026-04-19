@@ -693,6 +693,44 @@ func TestGatherContext_TimestampIncluded(t *testing.T) {
 	}
 }
 
+// TestGatherContext_HostStateIncluded verifies that the host_state field from the
+// CheckMK notification is included in the Alert Details section sent to Claude.
+// A host's UP/DOWN/UNREACHABLE state is critical for root-cause analysis: if the
+// host itself is DOWN, service alerts are typically a consequence rather than
+// the root cause, and Claude needs this context to reason correctly.
+func TestGatherContext_HostStateIncluded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"value":[]}`)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "auto", Secret: "secret"}
+	alert := shared.AlertPayload{
+		Fields: map[string]string{
+			"hostname":            "web01",
+			"host_address":        "10.0.0.1",
+			"host_state":          "DOWN",
+			"service_description": "HTTP",
+			"service_state":       "CRITICAL",
+			"service_output":      "connection refused",
+			"notification_type":   "PROBLEM",
+			"perf_data":           "",
+			"timestamp":           "2024-01-15T03:00:00Z",
+		},
+	}
+
+	actx := GatherContext(context.Background(), apiClient, alert, nil)
+	prompt := actx.FormatForPrompt()
+
+	if !strings.Contains(prompt, "DOWN") {
+		t.Errorf("expected host_state 'DOWN' in alert details prompt, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Host State") {
+		t.Errorf("expected 'Host State' label in alert details prompt, got:\n%s", prompt)
+	}
+}
+
 // TestGetHostServices_InvalidHostname verifies that the hostname guard fires
 // before any network call is made.
 func TestGetHostServices_InvalidHostname(t *testing.T) {
