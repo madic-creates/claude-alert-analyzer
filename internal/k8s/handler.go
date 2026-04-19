@@ -17,6 +17,17 @@ import (
 // Alertmanager batches multiple alerts per request; 1 MiB is generous.
 const maxWebhookBodyBytes = 1 << 20 // 1 MiB
 
+// maxAlertsPerBatch is the maximum number of alert objects accepted in a
+// single Alertmanager webhook payload. Alertmanager typically sends small
+// batches; an unbounded array could cause excessive cooldown-map growth and
+// CPU consumption even for an authenticated caller.
+const maxAlertsPerBatch = 100
+
+// maxFingerprintLen is the maximum byte length accepted for an alert
+// fingerprint. Alertmanager generates 40-character hex fingerprints; we allow
+// some extra room but cap at 256 bytes to prevent unbounded map key growth.
+const maxFingerprintLen = 256
+
 // HandleWebhook returns an HTTP handler that receives Alertmanager webhook payloads,
 // validates auth, applies cooldown, and enqueues alerts for processing.
 // metrics may be nil, in which case no counters are incremented by the handler.
@@ -48,9 +59,19 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 			return
 		}
 
+		if len(payload.Alerts) > maxAlertsPerBatch {
+			http.Error(w, "too many alerts in batch", http.StatusRequestEntityTooLarge)
+			return
+		}
+
 		queued := 0
 		dropped := 0
 		for _, alert := range payload.Alerts {
+			if len(alert.Fingerprint) > maxFingerprintLen {
+				slog.Warn("skipping alert with oversized fingerprint", "alertname", alert.Labels["alertname"])
+				continue
+			}
+
 			if cfg.SkipResolved && alert.Status == "resolved" {
 				// Clear the cooldown so that if the same alert fires again within
 				// the TTL window it is not silently suppressed.

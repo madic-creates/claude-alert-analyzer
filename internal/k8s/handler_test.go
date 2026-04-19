@@ -509,3 +509,85 @@ func TestPromqlQuery_Unreachable(t *testing.T) {
 		t.Error("expected non-empty error result for unreachable server")
 	}
 }
+
+// TestHandleWebhook_TooManyAlerts verifies that a batch exceeding maxAlertsPerBatch
+// is rejected with 413 before any alerts are processed.
+func TestHandleWebhook_TooManyAlerts(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	}, nil)
+
+	alerts := make([]Alert, maxAlertsPerBatch+1)
+	for i := range alerts {
+		alerts[i] = makeAlert(fmt.Sprintf("fp-%d", i), "TestAlert", "firing")
+	}
+	rr := postWebhook(t, handler, "test-secret", makeWebhook(alerts))
+
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("expected 413 for oversized batch, got %d", rr.Code)
+	}
+	if enqueued.Load() != 0 {
+		t.Errorf("expected no alerts enqueued, got %d", enqueued.Load())
+	}
+}
+
+// TestHandleWebhook_ExactMaxAlerts verifies that a batch of exactly maxAlertsPerBatch
+// alerts is accepted.
+func TestHandleWebhook_ExactMaxAlerts(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	}, nil)
+
+	alerts := make([]Alert, maxAlertsPerBatch)
+	for i := range alerts {
+		alerts[i] = makeAlert(fmt.Sprintf("fp-exact-%d", i), "TestAlert", "firing")
+	}
+	rr := postWebhook(t, handler, "test-secret", makeWebhook(alerts))
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 for batch of exactly %d alerts, got %d", maxAlertsPerBatch, rr.Code)
+	}
+	if int(enqueued.Load()) != maxAlertsPerBatch {
+		t.Errorf("expected %d enqueued, got %d", maxAlertsPerBatch, enqueued.Load())
+	}
+}
+
+// TestHandleWebhook_OversizedFingerprintSkipped verifies that an alert with a
+// fingerprint exceeding maxFingerprintLen is silently skipped rather than
+// inserted into the cooldown map with an unbounded key.
+func TestHandleWebhook_OversizedFingerprintSkipped(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	}, nil)
+
+	oversizedFP := strings.Repeat("a", maxFingerprintLen+1)
+	alerts := []Alert{
+		{
+			Fingerprint: oversizedFP,
+			Status:      "firing",
+			Labels:      map[string]string{"alertname": "OversizedFP", "severity": "warning"},
+			Annotations: map[string]string{},
+			StartsAt:    time.Now(),
+		},
+	}
+	rr := postWebhook(t, handler, "test-secret", makeWebhook(alerts))
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 (alert silently skipped), got %d", rr.Code)
+	}
+	if enqueued.Load() != 0 {
+		t.Errorf("expected 0 enqueued for oversized fingerprint, got %d", enqueued.Load())
+	}
+}
