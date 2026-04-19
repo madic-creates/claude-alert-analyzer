@@ -112,6 +112,17 @@ var systemctlReadOnly = map[string]bool{
 	"list-timers": true, "list-sockets": true, "list-dependencies": true,
 }
 
+// findExecFlags are find(1) primary expressions that execute a sub-process.
+// They allow running arbitrary commands for each matched file and must be
+// blocked even when "find" itself is not in the denylist — just as
+// bash/python/env are blocked to prevent denylist bypass via a shell wrapper.
+var findExecFlags = map[string]bool{
+	"-exec":    true,
+	"-execdir": true,
+	"-ok":      true,
+	"-okdir":   true,
+}
+
 func isDenied(denied map[string]bool, argv []string) bool {
 	if len(argv) == 0 {
 		return true
@@ -140,6 +151,19 @@ func isDenied(denied map[string]bool, argv []string) bool {
 			return true // no subcommand found — deny
 		}
 		return !systemctlReadOnly[subcmd]
+	}
+
+	// Special case: find with -exec/-execdir/-ok/-okdir can run arbitrary
+	// sub-processes for each matched file — effectively bypassing the denylist.
+	// Deny whenever any of those flags appear in the argument list, regardless
+	// of whether "find" itself is in the denylist.
+	if cmd == "find" {
+		for _, arg := range argv[1:] {
+			if findExecFlags[arg] {
+				return true
+			}
+		}
+		return denied[cmd]
 	}
 
 	return denied[cmd]

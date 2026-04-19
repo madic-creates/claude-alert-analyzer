@@ -604,3 +604,76 @@ func TestRunAgenticDiagnostics_SystemPromptContainsMaxRounds(t *testing.T) {
 			runner.capturedMaxRounds, customRounds)
 	}
 }
+
+// TestIsDenied_FindExecBlocked verifies that find with -exec/-execdir/-ok/-okdir
+// is denied even when "find" is not in the denylist. These flags let find spawn
+// arbitrary sub-processes for each matched file, which would bypass the denylist
+// check (e.g. "find / -exec rm {} ;" runs rm without any denylist check on rm).
+func TestIsDenied_FindExecBlocked(t *testing.T) {
+	// All exec-capable flags must be denied with the default denylist.
+	denied := [][]string{
+		{"find", "/", "-exec", "rm", "{}", ";"},
+		{"find", "/var/log", "-execdir", "cat", "{}", ";"},
+		{"find", "/", "-ok", "rm", "{}", ";"},
+		{"find", "/", "-okdir", "chmod", "+x", "{}", ";"},
+		// Absolute path to find must still trigger the exec check.
+		{"/usr/bin/find", "/", "-exec", "sh", "-c", "rm -rf /", ";"},
+		// -exec to run a read-only command is still denied (we can't inspect
+		// the sub-command safely, so all -exec uses are blocked).
+		{"find", "/var/log", "-name", "*.log", "-exec", "cat", "{}", ";"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected find -exec variant denied: %v", argv)
+		}
+	}
+}
+
+// TestIsDenied_FindReadOnlyAllowed verifies that find without exec flags is
+// still allowed for diagnostic use (listing files, filtering by name/time, etc.).
+func TestIsDenied_FindReadOnlyAllowed(t *testing.T) {
+	allowed := [][]string{
+		{"find", "/var/log", "-name", "*.log"},
+		{"find", "/etc", "-type", "f"},
+		{"find", "/var/log", "-mtime", "-1"},
+		{"find", "/", "-name", "core", "-type", "f"},
+		{"/usr/bin/find", "/tmp", "-newer", "/etc/hosts"},
+	}
+	for _, argv := range allowed {
+		if isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected read-only find allowed: %v", argv)
+		}
+	}
+}
+
+// TestIsDenied_FindExecAlwaysChecked verifies that find -exec is denied even
+// when a custom denylist does not include "find". This is the same defence-in-
+// depth guarantee that applies to systemctl (always checked for destructive
+// subcommands regardless of the denylist contents).
+func TestIsDenied_FindExecAlwaysChecked(t *testing.T) {
+	// Custom denylist that does NOT include "find".
+	custom := map[string]bool{"rm": true, "dd": true}
+
+	denied := [][]string{
+		{"find", "/", "-exec", "rm", "{}", ";"},
+		{"find", "/var/log", "-execdir", "cat", "{}", ";"},
+		{"find", "/", "-ok", "rm", "{}", ";"},
+		{"find", "/", "-okdir", "chmod", "+x", "{}", ";"},
+	}
+	for _, argv := range denied {
+		if !isDenied(custom, argv) {
+			t.Errorf("find exec variant not blocked with custom denylist: %v", argv)
+		}
+	}
+
+	// Read-only find must still be allowed with the custom denylist.
+	allowed := [][]string{
+		{"find", "/var/log", "-name", "*.log"},
+		{"find", "/etc", "-type", "f"},
+	}
+	for _, argv := range allowed {
+		if isDenied(custom, argv) {
+			t.Errorf("read-only find should be allowed with custom denylist: %v", argv)
+		}
+	}
+}
