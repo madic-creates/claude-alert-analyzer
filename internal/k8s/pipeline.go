@@ -40,8 +40,8 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	slog.Info("processing alert", "alertname", alertname, "namespace", namespace)
 
 	actx := deps.GatherContext(ctx, alert)
-	userPrompt := fmt.Sprintf("## Alert: %s\n- Status: %s\n- Severity: %s\n- Namespace: %s\n\n%s",
-		alertname, alert.Fields["status"], alert.Severity, namespace, actx.FormatForPrompt())
+	userPrompt := fmt.Sprintf("## Alert: %s\n- Status: %s\n- Severity: %s\n- Namespace: %s\n- StartsAt: %s\n\n%s",
+		alertname, alert.Fields["status"], alert.Severity, namespace, alert.Fields["startsAt"], actx.FormatForPrompt())
 
 	analysis, err := deps.Analyzer.Analyze(ctx, deps.SystemPrompt, userPrompt)
 	if err != nil {

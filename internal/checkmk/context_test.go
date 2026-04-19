@@ -657,6 +657,42 @@ func TestGatherContext_LongPluginOutputIncluded(t *testing.T) {
 	})
 }
 
+// TestGatherContext_TimestampIncluded verifies that the CheckMK notification
+// timestamp is included in the Alert Details section sent to Claude. The timestamp
+// tells Claude when the alert fired, which is useful for correlating with
+// deployments or other events that happened around the same time.
+func TestGatherContext_TimestampIncluded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"value":[]}`)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "auto", Secret: "secret"}
+	alert := shared.AlertPayload{
+		Fields: map[string]string{
+			"hostname":            "web01",
+			"host_address":        "10.0.0.1",
+			"service_description": "CPU",
+			"service_state":       "CRITICAL",
+			"service_output":      "CPU at 99%",
+			"notification_type":   "PROBLEM",
+			"perf_data":           "",
+			"timestamp":           "2024-01-15T03:00:00Z",
+		},
+	}
+
+	actx := GatherContext(context.Background(), apiClient, alert, nil)
+	prompt := actx.FormatForPrompt()
+
+	if !strings.Contains(prompt, "2024-01-15T03:00:00Z") {
+		t.Errorf("expected timestamp in alert details prompt, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Timestamp") {
+		t.Errorf("expected 'Timestamp' label in alert details prompt, got:\n%s", prompt)
+	}
+}
+
 // TestGetHostServices_InvalidHostname verifies that the hostname guard fires
 // before any network call is made.
 func TestGetHostServices_InvalidHostname(t *testing.T) {

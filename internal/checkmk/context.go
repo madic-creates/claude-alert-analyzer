@@ -238,10 +238,11 @@ func GatherContext(ctx context.Context, apiClient *APIClient, alert shared.Alert
 		}
 	}
 
-	alertDetails := fmt.Sprintf("- Hostname: %s\n- Address: %s\n- Service: %s\n- State: %s\n- Output: %s\n- Type: %s\n- Perf Data: %s",
+	alertDetails := fmt.Sprintf("- Hostname: %s\n- Address: %s\n- Service: %s\n- State: %s\n- Output: %s\n- Type: %s\n- Perf Data: %s\n- Timestamp: %s",
 		hostname, hostAddress, alert.Fields["service_description"],
 		alert.Fields["service_state"], shared.RedactSecrets(alert.Fields["service_output"]),
-		alert.Fields["notification_type"], shared.RedactSecrets(alert.Fields["perf_data"]))
+		alert.Fields["notification_type"], shared.RedactSecrets(alert.Fields["perf_data"]),
+		alert.Fields["timestamp"])
 	// long_plugin_output can be very large (multi-line check details up to the 1 MiB
 	// webhook body limit). Truncate to 4 KiB so a single verbose plugin does not
 	// exhaust the Claude context window or inflate analysis costs unnecessarily.

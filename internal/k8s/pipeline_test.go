@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
@@ -277,6 +278,56 @@ func TestProcessAlert_PriorityMapping(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestProcessAlert_StartsAtInPrompt verifies that the startsAt timestamp is
+// included in the user prompt passed to the analyzer. The timestamp tells Claude
+// when the alert fired, which is useful for correlating with deployments or
+// other events that happened around the same time.
+func TestProcessAlert_StartsAtInPrompt(t *testing.T) {
+	var capturedPrompt string
+	pub := &mockPublisher{}
+	metrics := new(shared.AlertMetrics)
+
+	deps := PipelineDeps{
+		Analyzer:     &capturePromptAnalyzer{result: "analysis", captured: &capturedPrompt},
+		Publishers:   []shared.Publisher{pub},
+		Cooldown:     shared.NewCooldownManager(),
+		Metrics:      metrics,
+		SystemPrompt: "test",
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "fp-startsat",
+		Title:       "HighCPU",
+		Severity:    "warning",
+		Fields: map[string]string{
+			"status":          "firing",
+			"label:namespace": "production",
+			"startsAt":        "2024-01-15T03:00:00Z",
+		},
+	}
+	ProcessAlert(context.Background(), deps, alert)
+
+	if !strings.Contains(capturedPrompt, "2024-01-15T03:00:00Z") {
+		t.Errorf("expected startsAt timestamp in user prompt, got:\n%s", capturedPrompt)
+	}
+	if !strings.Contains(capturedPrompt, "StartsAt") {
+		t.Errorf("expected 'StartsAt' label in user prompt, got:\n%s", capturedPrompt)
+	}
+}
+
+type capturePromptAnalyzer struct {
+	result   string
+	captured *string
+}
+
+func (c *capturePromptAnalyzer) Analyze(_ context.Context, _, userPrompt string) (string, error) {
+	*c.captured = userPrompt
+	return c.result, nil
 }
 
 // TestProcessAlert_TitleFormatting verifies that the published title includes
