@@ -133,8 +133,47 @@ func TestRunAgenticDiagnostics_AllowedCommandExecuted(t *testing.T) {
 	if !strings.Contains(runner.toolOutputs[0], "Filesystem") {
 		t.Errorf("expected SSH output in tool result, got: %q", runner.toolOutputs[0])
 	}
-	if !strings.Contains(runner.toolOutputs[0], "$ df -h") {
-		t.Errorf("expected command echo in tool result, got: %q", runner.toolOutputs[0])
+	// Tool result must use the shell-quoted form so the prefix accurately
+	// represents the command that was executed on the remote host.
+	if !strings.Contains(runner.toolOutputs[0], "$ 'df' '-h'") {
+		t.Errorf("expected shell-quoted command echo in tool result, got: %q", runner.toolOutputs[0])
+	}
+}
+
+// TestRunAgenticDiagnostics_SpaceArgShellQuoted verifies that when a command
+// argument contains a space (e.g. a grep pattern), the tool result prefix uses
+// the shell-quoted form so Claude can distinguish multi-word arguments from
+// separate tokens. Without quoting, "grep -r some pattern /var/log" looks like
+// four arguments but "$ 'grep' '-r' 'some pattern' '/var/log'" is unambiguous.
+func TestRunAgenticDiagnostics_SpaceArgShellQuoted(t *testing.T) {
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		_, _ = io.WriteString(ch, "/var/log/app.log:error: out of memory\n")
+		sendExitStatus(ch, 0)
+	})
+
+	runner := &capturingToolRunner{
+		calls:  []agentToolCall{{name: "execute_command", input: `{"command": ["grep", "-r", "out of memory", "/var/log"]}`}},
+		result: "memory analysis",
+	}
+	dialer := &fixedDialer{client: client}
+
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(runner.toolOutputs) != 1 {
+		t.Fatalf("expected 1 tool output, got %d", len(runner.toolOutputs))
+	}
+	// The argument with a space must be quoted so the prefix is unambiguous.
+	if !strings.Contains(runner.toolOutputs[0], "'out of memory'") {
+		t.Errorf("expected space-containing arg to be quoted in tool result, got: %q", runner.toolOutputs[0])
+	}
+	// Verify the full prefix format.
+	if !strings.Contains(runner.toolOutputs[0], "$ 'grep' '-r' 'out of memory' '/var/log'") {
+		t.Errorf("expected shell-quoted command prefix in tool result, got: %q", runner.toolOutputs[0])
 	}
 }
 
