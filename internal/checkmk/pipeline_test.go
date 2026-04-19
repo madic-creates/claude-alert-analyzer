@@ -469,6 +469,59 @@ func TestProcessAlert_PanicClearsCooldown(t *testing.T) {
 	}
 }
 
+// TestProcessAlert_SSH_NilHostInfo_FallsBackToStatic is a regression test for a
+// nil-pointer panic that occurred when ValidateHost returned (nil, nil) — a
+// successful call that produced no HostInfo — while SSHEnabled was true. The old
+// code set sshOK=true because validationErr==nil, then dereferenced hostInfo.VerifiedIP
+// unconditionally, causing a panic. After the fix, a nil hostInfo must be treated the
+// same as a failed validation: SSH is skipped and static analysis is used instead.
+func TestProcessAlert_SSH_NilHostInfo_FallsBackToStatic(t *testing.T) {
+	analyzer := &mockAnalyzer{result: "static analysis result"}
+	pub := &mockPublisher{}
+	cooldown := shared.NewCooldownManager()
+	metrics := new(shared.AlertMetrics)
+
+	deps := PipelineDeps{
+		// Analyzer handles the static-analysis fallback path.
+		Analyzer:   analyzer,
+		ToolRunner: &mockAnalyzer{result: "should not be called"},
+		Publishers: []shared.Publisher{pub},
+		Cooldown:   cooldown,
+		Metrics:    metrics,
+		SSHEnabled: true,
+		// ValidateHost returns (nil, nil): success but no HostInfo.
+		ValidateHost: func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
+			return nil, nil
+		},
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{Sections: []shared.ContextSection{{Name: "Test", Content: "data"}}}
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "nil-hostinfo-fp",
+		Title:       "NilHostInfo",
+		Severity:    "warning",
+		Fields:      map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+	}
+
+	// Must not panic; static analysis must be used and the alert must be published.
+	ProcessAlert(context.Background(), deps, alert)
+
+	if metrics.AlertsFailed.Load() != 0 {
+		t.Errorf("AlertsFailed = %d, want 0 (static analysis should succeed)", metrics.AlertsFailed.Load())
+	}
+	if metrics.AlertsProcessed.Load() != 1 {
+		t.Errorf("AlertsProcessed = %d, want 1", metrics.AlertsProcessed.Load())
+	}
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
+	}
+	if pub.calls[0].body != "static analysis result" {
+		t.Errorf("published body = %q, want %q", pub.calls[0].body, "static analysis result")
+	}
+}
+
 // TestProcessAlert_NoSSH_UsesStaticPrompt verifies that when SSH is disabled the
 // pipeline calls Analyze with StaticAnalysisSystemPrompt. The agentic prompt
 // instructs Claude to use SSH tool-use; sending it without tools

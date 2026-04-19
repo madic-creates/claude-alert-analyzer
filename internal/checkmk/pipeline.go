@@ -52,9 +52,16 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	actx := deps.GatherContext(ctx, alert, hostInfo)
 	alertContext := actx.FormatForPrompt()
 
-	sshOK := deps.SSHEnabled && validationErr == nil
+	// hostInfo must be non-nil to access VerifiedIP for SSH dialing.
+	// ValidateHost implementations should always return a non-nil *HostInfo
+	// on success, but guard here to avoid a nil-pointer panic if they do not.
+	sshOK := deps.SSHEnabled && validationErr == nil && hostInfo != nil
 	if deps.SSHEnabled && !sshOK {
-		alertContext += "\n## Note\nSSH diagnostics unavailable: " + validationErr.Error() + "\n"
+		if validationErr != nil {
+			alertContext += "\n## Note\nSSH diagnostics unavailable: " + validationErr.Error() + "\n"
+		} else {
+			alertContext += "\n## Note\nSSH diagnostics unavailable: host validation returned no host info\n"
+		}
 	}
 
 	var analysis string
