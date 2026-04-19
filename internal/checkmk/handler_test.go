@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -91,6 +92,32 @@ func TestCheckmkHandleWebhook_InvalidJSON(t *testing.T) {
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", rr.Code)
+	}
+}
+
+// TestCheckmkHandleWebhook_InvalidJSON_NoInternalDetails verifies that JSON
+// parse errors do not leak internal error details (e.g. offset, field names)
+// to the caller. Returning raw Go error messages exposes implementation details
+// and can aid an attacker in crafting malicious payloads.
+func TestCheckmkHandleWebhook_InvalidJSON_NoInternalDetails(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cd := shared.NewCooldownManager()
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil)
+
+	req := httptest.NewRequest("POST", "/webhook", bytes.NewReader([]byte(`{"bad": [1, 2, `)))
+	req.Header.Set("Authorization", "Bearer test-secret")
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	// Must not contain Go-internal terms that reveal implementation details.
+	for _, leak := range []string{"offset", "unexpected end", "json:", "syntax error"} {
+		if strings.Contains(strings.ToLower(body), leak) {
+			t.Errorf("response body leaks internal JSON error detail %q: %s", leak, body)
+		}
 	}
 }
 

@@ -102,6 +102,29 @@ func TestHandleWebhook_InvalidJSON(t *testing.T) {
 	}
 }
 
+// TestHandleWebhook_InvalidJSON_NoInternalDetails verifies that JSON parse errors
+// do not leak internal error messages (offset, field names, etc.) to the caller.
+func TestHandleWebhook_InvalidJSON_NoInternalDetails(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil)
+
+	req := httptest.NewRequest("POST", "/webhook", bytes.NewReader([]byte(`{"alerts": [1, 2, `)))
+	req.Header.Set("Authorization", "Bearer test-secret")
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	for _, leak := range []string{"offset", "unexpected end", "json:", "syntax error"} {
+		if strings.Contains(strings.ToLower(body), leak) {
+			t.Errorf("response body leaks internal JSON error detail %q: %s", leak, body)
+		}
+	}
+}
+
 func TestHandleWebhook_EmptyAlerts(t *testing.T) {
 	cfg := makeConfig()
 	cd := shared.NewCooldownManager()
