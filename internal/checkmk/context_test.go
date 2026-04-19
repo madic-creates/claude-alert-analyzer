@@ -289,6 +289,24 @@ func TestGatherContext_HostContextSanitized(t *testing.T) {
 				actx.Sections[0].Content, want)
 		}
 	})
+
+	t.Run("secrets redacted in operator-provided context", func(t *testing.T) {
+		// Operators might accidentally include credentials in the ai_context field,
+		// e.g. when documenting database connection details. These must be redacted
+		// before the context is sent to the Claude API, just like service_output and
+		// other alert fields.
+		hostInfo := &HostInfo{AIContext: "Debian 12, Nginx. DB connect: password=s3cr3t host=db.internal"}
+		actx := GatherContext(context.Background(), apiClient, alert, hostInfo)
+		if actx.Sections[0].Name != "Host Context (operator-provided)" {
+			t.Fatalf("expected host context section, got %q", actx.Sections[0].Name)
+		}
+		if strings.Contains(actx.Sections[0].Content, "s3cr3t") {
+			t.Errorf("secret not redacted from ai_context: %q", actx.Sections[0].Content)
+		}
+		if !strings.Contains(actx.Sections[0].Content, "[REDACTED]") {
+			t.Errorf("expected [REDACTED] marker in ai_context, got: %q", actx.Sections[0].Content)
+		}
+	})
 }
 
 func TestValidateAndDescribeHost_RejectsInvalidHostname(t *testing.T) {

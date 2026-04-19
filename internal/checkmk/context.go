@@ -233,7 +233,7 @@ func GatherContext(ctx context.Context, apiClient *APIClient, alert shared.Alert
 		if cleaned := sanitizeHostContext(hostInfo.AIContext); cleaned != "" {
 			sections = append(sections, shared.ContextSection{
 				Name:    "Host Context (operator-provided)",
-				Content: cleaned,
+				Content: shared.RedactSecrets(cleaned),
 			})
 		}
 	}
