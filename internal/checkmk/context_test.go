@@ -70,6 +70,40 @@ func TestValidateAndDescribeHost_NotFound(t *testing.T) {
 	}
 }
 
+func TestValidateAndDescribeHost_ServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, "internal server error")
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "automation", Secret: "secret"}
+	_, err := apiClient.ValidateAndDescribeHost(context.Background(), "host1", "1.2.3.4")
+	if err == nil {
+		t.Error("expected error for 500 response")
+	}
+	if err != nil && !strings.Contains(err.Error(), "500") {
+		t.Errorf("error should mention HTTP status 500, got: %v", err)
+	}
+}
+
+func TestValidateAndDescribeHost_InvalidJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `not valid json at all`)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "automation", Secret: "secret"}
+	_, err := apiClient.ValidateAndDescribeHost(context.Background(), "host1", "1.2.3.4")
+	if err == nil {
+		t.Error("expected error for malformed JSON response")
+	}
+	if err != nil && !strings.Contains(err.Error(), "parse host response") {
+		t.Errorf("error should mention parse failure, got: %v", err)
+	}
+}
+
 func TestValidateAndDescribeHost_ReturnsAIContext(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
