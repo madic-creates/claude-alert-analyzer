@@ -695,3 +695,71 @@ func TestIsDenied_FindExecAlwaysChecked(t *testing.T) {
 		}
 	}
 }
+
+// TestIsDenied_SedInPlaceBlocked verifies that sed with in-place flags is denied even
+// when "sed" is not in the denylist. sed -i edits files on disk without shell
+// redirection, making it as destructive as cp/mv for overwriting file content.
+func TestIsDenied_SedInPlaceBlocked(t *testing.T) {
+	denied := [][]string{
+		{"sed", "-i", "s/foo/bar/", "/etc/hosts"},
+		{"sed", "-i.bak", "s/foo/bar/", "/etc/hosts"},
+		{"sed", "--in-place", "s/foo/bar/", "/etc/hosts"},
+		{"sed", "--in-place=.bak", "s/foo/bar/", "/etc/hosts"},
+		// Absolute path to sed must still trigger the in-place check.
+		{"/usr/bin/sed", "-i", "s/x/y/", "/tmp/file"},
+		// -i flag after the script (flag order should not matter).
+		{"sed", "s/foo/bar/", "/etc/hosts", "-i"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected sed in-place variant denied: %v", argv)
+		}
+	}
+}
+
+// TestIsDenied_SedReadOnlyAllowed verifies that sed without in-place flags is
+// still allowed for diagnostic use (filtering log lines, extracting ranges, etc.).
+func TestIsDenied_SedReadOnlyAllowed(t *testing.T) {
+	allowed := [][]string{
+		{"sed", "-n", "10,20p", "/var/log/syslog"},
+		{"sed", "s/password=[^ ]*/password=[REDACTED]/g", "/var/log/app.log"},
+		{"sed", "-n", "/ERROR/p", "/var/log/messages"},
+		{"/usr/bin/sed", "-n", "1,50p", "/var/log/auth.log"},
+	}
+	for _, argv := range allowed {
+		if isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected read-only sed allowed: %v", argv)
+		}
+	}
+}
+
+// TestIsDenied_SedInPlaceAlwaysChecked verifies that sed -i is denied even when
+// a custom denylist does not include "sed". This is the same defence-in-depth
+// guarantee that applies to systemctl and find -exec.
+func TestIsDenied_SedInPlaceAlwaysChecked(t *testing.T) {
+	// Custom denylist that does NOT include "sed".
+	custom := map[string]bool{"rm": true, "dd": true}
+
+	denied := [][]string{
+		{"sed", "-i", "s/foo/bar/", "/etc/hosts"},
+		{"sed", "-i.bak", "s/x/y/", "/tmp/file"},
+		{"sed", "--in-place", "s/a/b/", "/etc/resolv.conf"},
+		{"sed", "--in-place=.orig", "s/a/b/", "/etc/resolv.conf"},
+	}
+	for _, argv := range denied {
+		if !isDenied(custom, argv) {
+			t.Errorf("sed in-place not blocked with custom denylist: %v", argv)
+		}
+	}
+
+	// Read-only sed must still be allowed with the custom denylist.
+	allowed := [][]string{
+		{"sed", "-n", "10,20p", "/var/log/syslog"},
+		{"sed", "s/secret=.*/secret=[REDACTED]/", "/var/log/app.log"},
+	}
+	for _, argv := range allowed {
+		if isDenied(custom, argv) {
+			t.Errorf("read-only sed should be allowed with custom denylist: %v", argv)
+		}
+	}
+}
