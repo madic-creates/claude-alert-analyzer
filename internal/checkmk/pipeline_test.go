@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
@@ -11,19 +12,22 @@ import (
 )
 
 type mockAnalyzer struct {
-	result           string
-	err              error
-	capturedPrompt   string
+	result              string
+	err                 error
+	capturedPrompt      string
+	capturedUserPrompt  string
 }
 
 func (m *mockAnalyzer) Analyze(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
 	m.capturedPrompt = systemPrompt
+	m.capturedUserPrompt = userPrompt
 	return m.result, m.err
 }
 
 func (m *mockAnalyzer) RunToolLoop(ctx context.Context, systemPrompt, userPrompt string,
 	tools []shared.Tool, maxRounds int, handleTool func(string, json.RawMessage) (string, error)) (string, error) {
 	m.capturedPrompt = systemPrompt
+	m.capturedUserPrompt = userPrompt
 	return m.result, m.err
 }
 
@@ -557,5 +561,68 @@ func TestProcessAlert_NoSSH_UsesStaticPrompt(t *testing.T) {
 
 	if analyzer.capturedPrompt != StaticAnalysisSystemPrompt {
 		t.Errorf("no-SSH path used wrong system prompt; got %q, want StaticAnalysisSystemPrompt", analyzer.capturedPrompt)
+	}
+}
+
+// TestProcessAlert_SSH_ValidationError_FallsBackToStatic verifies that when
+// SSHEnabled=true but ValidateHost returns an error, the pipeline:
+//   - falls back to static analysis (no SSH attempted)
+//   - appends a note to the alert context so Claude knows SSH was unavailable
+//   - completes successfully when static analysis succeeds
+//
+// This is the code path at pipeline.go lines 59–65 and 83–96.
+func TestProcessAlert_SSH_ValidationError_FallsBackToStatic(t *testing.T) {
+	analyzer := &mockAnalyzer{result: "static fallback analysis"}
+	pub := &mockPublisher{}
+	cooldown := shared.NewCooldownManager()
+	metrics := new(shared.AlertMetrics)
+
+	deps := PipelineDeps{
+		Analyzer:   analyzer,
+		ToolRunner: &mockAnalyzer{result: "should not be reached"},
+		Publishers: []shared.Publisher{pub},
+		Cooldown:   cooldown,
+		Metrics:    metrics,
+		SSHEnabled: true,
+		ValidateHost: func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
+			return nil, fmt.Errorf("host %q not found in CheckMK", hostname)
+		},
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{Sections: []shared.ContextSection{{Name: "Test", Content: "data"}}}
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "ssh-val-err-fp",
+		Title:       "host1 - Disk Usage",
+		Severity:    "critical",
+		Fields:      map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+	}
+
+	ProcessAlert(context.Background(), deps, alert)
+
+	// Static analysis must succeed and the alert published normally.
+	if metrics.AlertsFailed.Load() != 0 {
+		t.Errorf("AlertsFailed = %d, want 0", metrics.AlertsFailed.Load())
+	}
+	if metrics.AlertsProcessed.Load() != 1 {
+		t.Errorf("AlertsProcessed = %d, want 1", metrics.AlertsProcessed.Load())
+	}
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
+	}
+	if pub.calls[0].body != "static fallback analysis" {
+		t.Errorf("published body = %q, want static fallback analysis", pub.calls[0].body)
+	}
+
+	// The static analysis system prompt must be used, not the agentic SSH prompt.
+	if analyzer.capturedPrompt != StaticAnalysisSystemPrompt {
+		t.Errorf("wrong system prompt: got %q", analyzer.capturedPrompt)
+	}
+
+	// The alert context passed to Analyze must include a note explaining why
+	// SSH diagnostics were skipped, so Claude has full context.
+	if !strings.Contains(analyzer.capturedUserPrompt, "SSH diagnostics unavailable") {
+		t.Errorf("alert context missing SSH-unavailable note; got:\n%s", analyzer.capturedUserPrompt)
 	}
 }
