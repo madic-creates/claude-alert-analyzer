@@ -87,7 +87,7 @@ var DefaultDeniedCommands = map[string]bool{
 	"sudo": true, "su": true, "pkexec": true, "doas": true,
 	"chmod": true, "chown": true, "chgrp": true,
 	"kill": true, "killall": true, "pkill": true,
-	"mv": true, "cp": true, "ln": true,
+	"mv": true, "cp": true, "ln": true, "tee": true,
 	"useradd": true, "userdel": true, "usermod": true, "groupadd": true, "groupdel": true,
 	"passwd": true, "crontab": true,
 	"iptables": true, "ip6tables": true, "nft": true,

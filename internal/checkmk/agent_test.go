@@ -250,6 +250,7 @@ func TestIsDenied_BlocksDestructiveCommands(t *testing.T) {
 		{"chmod", "777", "/etc/passwd"},
 		{"kill", "-9", "1"},
 		{"mv", "/etc/hosts", "/tmp/"},
+		{"tee", "/etc/cron.d/backdoor"},
 		{"iptables", "-F"},
 		{"mount", "/dev/sdb1", "/mnt"},
 		{"pkexec", "bash"},
@@ -263,6 +264,23 @@ func TestIsDenied_BlocksDestructiveCommands(t *testing.T) {
 	for _, argv := range denied {
 		if !isDenied(DefaultDeniedCommands, argv) {
 			t.Errorf("expected denied: %v", argv)
+		}
+	}
+}
+
+// TestIsDenied_BlocksTee verifies that tee is blocked. tee opens its output
+// file(s) with O_TRUNC before reading stdin, so "tee /path/to/file" truncates
+// the file to zero bytes even when SSH stdin is empty. This makes it as
+// dangerous as cp/mv for file destruction and must be denied alongside them.
+func TestIsDenied_BlocksTee(t *testing.T) {
+	denied := [][]string{
+		{"tee", "/etc/passwd"},
+		{"tee", "-a", "/etc/cron.d/job"},
+		{"/usr/bin/tee", "/tmp/writeable"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected tee variant denied: %v", argv)
 		}
 	}
 }
