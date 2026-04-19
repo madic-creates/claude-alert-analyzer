@@ -92,8 +92,12 @@ func sanitizeHostContext(s string) string {
 	}
 	s = strings.TrimSpace(b.String())
 	if len(s) > maxAIContextBytes {
-		// Truncate at a valid UTF-8 boundary to avoid splitting multi-byte characters.
-		s = strings.ToValidUTF8(s[:maxAIContextBytes], "") + " [truncated]"
+		// Reserve space for the marker so the total stays within maxAIContextBytes,
+		// matching the same accounting done in shared.Truncate. strings.ToValidUTF8
+		// trims to a valid UTF-8 boundary to avoid splitting multi-byte characters.
+		const marker = " [truncated]"
+		cutAt := maxAIContextBytes - len(marker)
+		s = strings.ToValidUTF8(s[:cutAt], "") + marker
 	}
 	return s
 }

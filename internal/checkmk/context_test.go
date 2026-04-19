@@ -261,8 +261,8 @@ func TestGatherContext_HostContextSanitized(t *testing.T) {
 		hostInfo := &HostInfo{AIContext: long}
 		actx := GatherContext(context.Background(), apiClient, alert, hostInfo)
 		content := actx.Sections[0].Content
-		if len(content) > 2048+len(" [truncated]") {
-			t.Errorf("expected truncation, got length %d", len(content))
+		if len(content) > 2048 {
+			t.Errorf("expected truncation within 2048 bytes, got length %d", len(content))
 		}
 		if !strings.HasSuffix(content, " [truncated]") {
 			t.Errorf("expected truncation marker, got %q", content[len(content)-20:])
