@@ -170,15 +170,19 @@ func isDenied(denied map[string]bool, argv []string) bool {
 	// edits files in-place without shell redirection, making it as destructive as
 	// cp/mv for overwriting files. Deny whenever an in-place flag is present,
 	// regardless of whether "sed" itself is in the denylist.
-	// Note: combined short flags that include 'i' (e.g. -ni) are not detected here;
-	// the system prompt already restricts Claude to read-only commands, and the
-	// most common in-place forms are covered by these checks.
 	if cmd == "sed" {
 		for _, arg := range argv[1:] {
 			if len(arg) >= 2 && arg[:2] == "-i" {
 				return true // -i or -i<backup-suffix>
 			}
 			if arg == "--in-place" || strings.HasPrefix(arg, "--in-place=") {
+				return true
+			}
+			// Combined short flags that include 'i' also enable in-place editing,
+			// e.g. -ni (suppress output + in-place) or -Ei (extended regex + in-place).
+			// 'i' is only used by GNU sed for in-place editing, so its presence
+			// anywhere in a combined short-flag group is sufficient to deny.
+			if len(arg) >= 2 && arg[0] == '-' && arg[1] != '-' && strings.ContainsRune(arg[1:], 'i') {
 				return true
 			}
 		}

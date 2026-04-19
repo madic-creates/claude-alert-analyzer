@@ -709,6 +709,11 @@ func TestIsDenied_SedInPlaceBlocked(t *testing.T) {
 		{"/usr/bin/sed", "-i", "s/x/y/", "/tmp/file"},
 		// -i flag after the script (flag order should not matter).
 		{"sed", "s/foo/bar/", "/etc/hosts", "-i"},
+		// Combined short flags that include 'i' must also be caught.
+		{"sed", "-ni", "s/foo/bar/", "/etc/hosts"},  // suppress output + in-place
+		{"sed", "-Ei", "s/foo/bar/", "/etc/hosts"},  // extended regex + in-place
+		{"sed", "-in", "s/foo/bar/", "/etc/hosts"},  // in-place + suppress (reversed order)
+		{"/usr/bin/sed", "-ni", "s/x/y/", "/tmp/f"}, // absolute path + combined
 	}
 	for _, argv := range denied {
 		if !isDenied(DefaultDeniedCommands, argv) {
@@ -745,6 +750,8 @@ func TestIsDenied_SedInPlaceAlwaysChecked(t *testing.T) {
 		{"sed", "-i.bak", "s/x/y/", "/tmp/file"},
 		{"sed", "--in-place", "s/a/b/", "/etc/resolv.conf"},
 		{"sed", "--in-place=.orig", "s/a/b/", "/etc/resolv.conf"},
+		{"sed", "-ni", "s/foo/bar/", "/etc/hosts"},
+		{"sed", "-Ei", "s/foo/bar/", "/etc/hosts"},
 	}
 	for _, argv := range denied {
 		if !isDenied(custom, argv) {
