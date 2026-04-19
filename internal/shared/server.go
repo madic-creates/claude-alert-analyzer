@@ -142,7 +142,9 @@ func (s *Server) Run(webhookHandler http.HandlerFunc) {
 	slog.Info("shutting down...")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	server.Shutdown(shutdownCtx) //nolint:errcheck
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		slog.Error("HTTP server shutdown error", "error", err)
+	}
 
 	close(s.queue)
 
