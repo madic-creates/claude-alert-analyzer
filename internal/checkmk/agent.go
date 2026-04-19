@@ -104,6 +104,11 @@ var DefaultDeniedCommands = map[string]bool{
 	"perl": true, "ruby": true, "node": true, "nodejs": true,
 	// env and xargs can be used to invoke denied commands as a sub-process.
 	"env": true, "xargs": true,
+	// awk is a scripting language present on every Linux host; it can bypass
+	// the denylist via system("rm -rf /"), write files with print >"file",
+	// or pipe to denied commands with print | "cmd". gawk/mawk are common
+	// alternative implementations that must be denied for the same reason.
+	"awk": true, "gawk": true, "mawk": true,
 }
 
 var systemctlReadOnly = map[string]bool{

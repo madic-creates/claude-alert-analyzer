@@ -623,6 +623,26 @@ func TestRunAgenticDiagnostics_SystemPromptContainsMaxRounds(t *testing.T) {
 	}
 }
 
+// TestIsDenied_BlocksAwkInterpreter verifies that awk (and its common variants
+// gawk, mawk) are denied by DefaultDeniedCommands. Like perl/python, awk is a
+// scripting language that can bypass the command denylist via system("rm -rf /"),
+// write files with print >"file", or pipe to denied commands with print|"cmd".
+func TestIsDenied_BlocksAwkInterpreter(t *testing.T) {
+	denied := [][]string{
+		{"awk", "BEGIN { system(\"rm -rf /\") }"},
+		{"awk", "-F:", "{print $1}", "/etc/passwd"},
+		{"gawk", "BEGIN { system(\"reboot\") }"},
+		{"mawk", "BEGIN { print \"evil\" > \"/etc/cron.d/backdoor\" }"},
+		{"/usr/bin/awk", "BEGIN { system(\"shutdown now\") }"},
+		{"/usr/bin/gawk", "BEGIN { print \"x\" | \"crontab -\" }"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected awk variant denied: %v", argv)
+		}
+	}
+}
+
 // TestIsDenied_FindExecBlocked verifies that find with -exec/-execdir/-ok/-okdir
 // is denied even when "find" is not in the denylist. These flags let find spawn
 // arbitrary sub-processes for each matched file, which would bypass the denylist
