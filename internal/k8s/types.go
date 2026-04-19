@@ -55,10 +55,11 @@ type Config struct {
 	SkipResolved      bool
 	Port              string
 	WebhookSecret     string
-	AllowedNamespaces []string // Namespace allowlist for log collection
-	MaxLogBytes       int      // Per-pod log truncation limit
-	APIBaseURL        string   // Claude API endpoint (supports Anthropic and OpenRouter)
-	APIKey            string   // API key for authentication
+	AllowedNamespaces []string      // Namespace allowlist for log collection
+	MaxLogBytes       int           // Per-pod log truncation limit
+	APIBaseURL        string        // Claude API endpoint (supports Anthropic and OpenRouter)
+	APIKey            string        // API key for authentication
+	KubeAPITimeout    time.Duration // Timeout for Kubernetes API context gathering (0 = default 30s)
 }
 
 // BaseConfig returns a shared.BaseConfig derived from this Config.

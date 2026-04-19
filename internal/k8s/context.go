@@ -299,6 +299,13 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace s
 	return strings.Join(logLines, "\n\n")
 }
 
+// defaultKubeAPITimeout is the deadline applied to all Kubernetes API calls in
+// GetKubeContext when cfg.KubeAPITimeout is zero. It prevents a hung API server
+// from blocking worker goroutines indefinitely: the worker context has no
+// deadline of its own, so without this guard a single slow API server would
+// exhaust all workers and stall alert processing.
+const defaultKubeAPITimeout = 30 * time.Second
+
 // GetKubeContext retrieves Kubernetes events, pod status, and pod logs for the alert namespace.
 func GetKubeContext(ctx context.Context, clientset kubernetes.Interface, alert Alert, cfg Config) (events, pods, logs string) {
 	namespace := alert.Labels["namespace"]
@@ -309,6 +316,13 @@ func GetKubeContext(ctx context.Context, clientset kubernetes.Interface, alert A
 		slog.Warn("dropping Kubernetes context queries: invalid namespace label", "namespace", namespace)
 		return "(invalid namespace label)", "(invalid namespace label)", "(invalid namespace label)"
 	}
+
+	timeout := cfg.KubeAPITimeout
+	if timeout == 0 {
+		timeout = defaultKubeAPITimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
 	var wg sync.WaitGroup
 	wg.Add(3)
