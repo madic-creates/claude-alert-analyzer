@@ -1172,6 +1172,58 @@ func TestIsDenied_BlocksBusybox(t *testing.T) {
 	}
 }
 
+// TestIsDenied_BlocksProcessWrappers verifies that process execution wrappers
+// are denied by DefaultDeniedCommands. These commands accept another command
+// as an argument and execute it as a child process, allowing any denied command
+// to bypass the denylist when used as a prefix. For example, "nohup rm -rf /"
+// passes the isDenied check on argv[0] ("nohup") but still invokes the denied
+// "rm" on the remote host. Blocking the wrappers closes this bypass vector.
+func TestIsDenied_BlocksProcessWrappers(t *testing.T) {
+	denied := [][]string{
+		// nohup / setsid — immune to hangups / new session.
+		{"nohup", "rm", "-rf", "/"},
+		{"nohup", "dd", "if=/dev/zero", "of=/dev/sda"},
+		{"/usr/bin/nohup", "shutdown", "-h", "now"},
+		{"setsid", "reboot"},
+		{"setsid", "bash", "-c", "rm -rf /"},
+		// timeout — runs a command with a time limit.
+		{"timeout", "5", "rm", "-rf", "/"},
+		{"timeout", "--signal=KILL", "10", "mkfs.ext4", "/dev/sda"},
+		{"/usr/bin/timeout", "30", "dd", "if=/dev/zero", "of=/dev/sda"},
+		// watch — executes a command repeatedly.
+		{"watch", "-n1", "rm", "-rf", "/tmp/x"},
+		{"watch", "dd", "if=/dev/zero", "of=/dev/sda"},
+		// nice / ionice — adjusted-priority command execution.
+		{"nice", "-n", "-20", "rm", "-rf", "/"},
+		{"ionice", "-c", "1", "dd", "if=/dev/zero", "of=/dev/sda"},
+		// flock — acquires a lock then executes a command.
+		{"flock", "/var/lock/x", "rm", "-rf", "/"},
+		{"flock", "-x", "/tmp/l", "sh", "-c", "reboot"},
+		// strace / ltrace — trace while executing a command.
+		{"strace", "rm", "-rf", "/"},
+		{"ltrace", "dd", "if=/dev/zero", "of=/dev/sda"},
+		{"/usr/bin/strace", "-e", "trace=file", "rm", "-rf", "/"},
+		// script — records a terminal session; -c executes an arbitrary command.
+		{"script", "-c", "rm -rf /", "/dev/null"},
+		{"script", "/dev/null", "-c", "dd if=/dev/zero of=/dev/sda"},
+		// nsenter / unshare / chroot — namespace / root manipulation then exec.
+		{"nsenter", "-t", "1", "--mount", "rm", "-rf", "/"},
+		{"unshare", "--pid", "bash"},
+		{"chroot", "/mnt/host", "rm", "-rf", "/"},
+		// expect — automates interactive programs; spawns arbitrary sub-processes.
+		{"expect", "-c", "spawn rm -rf /"},
+		{"/usr/bin/expect", "script.exp"},
+		// Absolute paths must be normalised and still denied.
+		{"/usr/bin/nohup", "rm", "-rf", "/"},
+		{"/bin/nice", "rm", "-rf", "/"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected process wrapper denied: %v", argv)
+		}
+	}
+}
+
 // TestIsDenied_BlocksSocat verifies that socat is denied by
 // DefaultDeniedCommands. socat is a more capable successor to nc/netcat: it
 // can relay data between arbitrary address types (TCP, UDP, Unix sockets,

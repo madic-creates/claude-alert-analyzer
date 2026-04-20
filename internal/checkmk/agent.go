@@ -135,6 +135,28 @@ var DefaultDeniedCommands = map[string]bool{
 	// at and batch schedule one-shot commands for deferred execution outside
 	// the current SSH session, allowing persistence after the session ends.
 	"at": true, "batch": true,
+	// Process execution wrappers: these commands accept another command as an
+	// argument and execute it as a child process, allowing any denied command
+	// to run undetected. For example, "nohup rm -rf /" passes the isDenied
+	// check (only argv[0] is checked) but still invokes the denied "rm".
+	// All common wrappers present on standard Linux systems are blocked here.
+	//
+	// nohup/setsid: run commands immune to hangups / in a new session.
+	// timeout/watch: run commands with a time limit or repeatedly.
+	// nice/ionice: execute a command with adjusted scheduling priority.
+	// flock: acquire a lock file then execute a command.
+	// strace/ltrace: trace syscalls/library calls while executing a command.
+	// script: record a terminal session; -c <cmd> executes an arbitrary command.
+	// nsenter/unshare/chroot: enter or create namespaces / change root, then exec.
+	// expect: automates interactive programs; can spawn arbitrary sub-processes.
+	"nohup": true, "setsid": true,
+	"timeout": true, "watch": true,
+	"nice": true, "ionice": true,
+	"flock": true,
+	"strace": true, "ltrace": true,
+	"script": true,
+	"nsenter": true, "unshare": true, "chroot": true,
+	"expect": true,
 }
 
 var systemctlReadOnly = map[string]bool{
