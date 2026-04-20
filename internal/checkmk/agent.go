@@ -293,12 +293,11 @@ func RunAgenticDiagnostics(
 		}
 
 		if isDenied(denied, argv) {
-			cmdStr := strings.Join(argv, " ")
-			slog.Warn("denied command", "hostname", hostname, "command", cmdStr)
+			slog.Warn("denied command", "hostname", hostname, "command", shellQuote(argv))
 			return fmt.Sprintf("Command denied: %q is not allowed (destructive or privileged command)", argv[0]), nil
 		}
 
-		logCmd := strings.Join(argv, " ")
+		logCmd := shellQuote(argv)
 		slog.Info("agentic SSH command", "hostname", hostname, "command", logCmd)
 
 		output, err := runSSHCommand(ctx, sshClient, argv, 10*time.Second)
