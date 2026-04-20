@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 	"golang.org/x/crypto/ssh"
@@ -301,6 +302,60 @@ func TestProcessAlert_EmptyAnalysis_PublishFailureNotification(t *testing.T) {
 
 	if metrics.AlertsFailed.Load() != 1 {
 		t.Errorf("AlertsFailed = %d, want 1", metrics.AlertsFailed.Load())
+	}
+}
+
+// TestProcessAlert_SSH_AgenticFails_PublishFailureNotification verifies that
+// when SSH agentic diagnostics fail (RunToolLoop returns an error) AND the
+// failure notification publish also fails, the pipeline logs a warning, still
+// increments AlertsFailed, clears the cooldown, and returns without panicking.
+// This covers the slog.Warn path at pipeline.go lines 76-77 (SSH agentic branch).
+func TestProcessAlert_SSH_AgenticFails_PublishFailureNotification(t *testing.T) {
+	sshClient := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		sendExitStatus(ch, 0)
+	})
+	dialer := &fixedDialer{client: sshClient}
+	failPub := &mockPublisher{err: fmt.Errorf("ntfy unreachable")}
+	cooldown := shared.NewCooldownManager()
+	metrics := new(shared.AlertMetrics)
+
+	deps := PipelineDeps{
+		ToolRunner: &capturingToolRunner{err: fmt.Errorf("tool loop failed")},
+		Publishers: []shared.Publisher{failPub},
+		Cooldown:   cooldown,
+		Metrics:    metrics,
+		SSHEnabled: true,
+		SSHDialer:  dialer,
+		SSHConfig:  Config{MaxAgentRounds: 3, SSHDeniedCommands: DefaultDeniedCommands},
+		GatherContext: func(_ context.Context, _ shared.AlertPayload, _ *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		ValidateHost: func(_ context.Context, _, _ string) (*HostInfo, error) {
+			return &HostInfo{VerifiedIP: "10.0.0.1"}, nil
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "ssh-agentic-fail-pub-fp",
+		Title:       "host1 - High Load",
+		Severity:    "warning",
+		Fields:      map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+	}
+
+	ProcessAlert(context.Background(), deps, alert)
+
+	if metrics.AlertsFailed.Load() != 1 {
+		t.Errorf("AlertsFailed = %d, want 1", metrics.AlertsFailed.Load())
+	}
+	if metrics.AlertsProcessed.Load() != 0 {
+		t.Errorf("AlertsProcessed = %d, want 0", metrics.AlertsProcessed.Load())
+	}
+	if len(failPub.calls) != 1 {
+		t.Errorf("expected 1 publish call (failure notification), got %d", len(failPub.calls))
+	}
+	// Cooldown must be cleared so the next webhook triggers a retry.
+	if !cooldown.CheckAndSet("ssh-agentic-fail-pub-fp", 300*time.Second) {
+		t.Error("cooldown not cleared after SSH agentic failure")
 	}
 }
 
