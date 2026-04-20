@@ -560,6 +560,38 @@ func TestHandleWebhook_ExactMaxAlerts(t *testing.T) {
 	}
 }
 
+// TestHandleWebhook_EmptyFingerprintSkipped verifies that an alert with an empty
+// fingerprint is silently skipped. An empty fingerprint must not be used as a
+// cooldown key because all fingerprint-less alerts would collide into one slot,
+// causing the second and subsequent alerts to be silently suppressed.
+func TestHandleWebhook_EmptyFingerprintSkipped(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	}, nil)
+
+	alerts := []Alert{
+		{
+			Fingerprint: "",
+			Status:      "firing",
+			Labels:      map[string]string{"alertname": "NoFingerprint", "severity": "warning"},
+			Annotations: map[string]string{},
+			StartsAt:    time.Now(),
+		},
+	}
+	rr := postWebhook(t, handler, "test-secret", makeWebhook(alerts))
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 (alert silently skipped), got %d", rr.Code)
+	}
+	if enqueued.Load() != 0 {
+		t.Errorf("expected 0 enqueued for empty fingerprint, got %d", enqueued.Load())
+	}
+}
+
 // TestHandleWebhook_OversizedFingerprintSkipped verifies that an alert with a
 // fingerprint exceeding maxFingerprintLen is silently skipped rather than
 // inserted into the cooldown map with an unbounded key.
