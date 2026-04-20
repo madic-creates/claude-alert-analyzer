@@ -16,6 +16,7 @@ import (
 // ServerConfig holds settings for the shared HTTP server and worker pool.
 type ServerConfig struct {
 	Port         string
+	MetricsPort  string
 	WorkerCount  int
 	QueueSize    int
 	DrainTimeout time.Duration
@@ -56,8 +57,9 @@ func (s *Server) Enqueue(alert AlertPayload) bool {
 	}
 }
 
-// BuildMux returns an http.ServeMux with /health, /metrics, and POST /webhook.
+// BuildMux returns an http.ServeMux with /health, /ready, and POST /webhook.
 // The webhookHandler is wrapped to increment WebhooksReceived.
+// /metrics is served on a separate port via BuildMetricsMux.
 func (s *Server) BuildMux(webhookHandler http.HandlerFunc) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -81,11 +83,17 @@ func (s *Server) BuildMux(webhookHandler http.HandlerFunc) *http.ServeMux {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "ready")
 	})
-	mux.HandleFunc("GET /metrics", s.metrics.MetricsHandler())
 	mux.HandleFunc("POST /webhook", func(w http.ResponseWriter, r *http.Request) {
 		s.metrics.WebhooksReceived.Add(1)
 		webhookHandler(w, r)
 	})
+	return mux
+}
+
+// BuildMetricsMux returns an http.ServeMux with only the /metrics endpoint.
+func (s *Server) BuildMetricsMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /metrics", s.metrics.MetricsHandler())
 	return mux
 }
 
@@ -105,6 +113,8 @@ func (s *Server) safeProcess(ctx context.Context, alert AlertPayload) {
 
 // Run starts workers, serves HTTP, and blocks until SIGINT/SIGTERM triggers
 // graceful shutdown. This function does not return until shutdown is complete.
+// The main server (PORT) serves /health, /ready, and /webhook.
+// A separate metrics server (METRICS_PORT) serves /metrics.
 func (s *Server) Run(webhookHandler http.HandlerFunc) {
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	defer workerCancel()
@@ -132,6 +142,19 @@ func (s *Server) Run(webhookHandler http.HandlerFunc) {
 		IdleTimeout:       60 * time.Second,
 	}
 
+	metricsPort := s.cfg.MetricsPort
+	if metricsPort == "" {
+		metricsPort = "9101"
+	}
+	metricsServer := &http.Server{
+		Addr:              ":" + metricsPort,
+		Handler:           s.BuildMetricsMux(),
+		ReadTimeout:       10 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -142,12 +165,22 @@ func (s *Server) Run(webhookHandler http.HandlerFunc) {
 		}
 	}()
 
+	go func() {
+		if err := metricsServer.ListenAndServe(); err != http.ErrServerClosed {
+			slog.Error("metrics server failed", "error", err)
+			os.Exit(1)
+		}
+	}()
+
 	<-ctx.Done()
 	slog.Info("shutting down...")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		slog.Error("HTTP server shutdown error", "error", err)
+	}
+	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+		slog.Error("metrics server shutdown error", "error", err)
 	}
 
 	close(s.queue)

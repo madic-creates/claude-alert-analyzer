@@ -74,20 +74,38 @@ func TestServer_BuildMux_Health(t *testing.T) {
 	}
 }
 
-func TestServer_BuildMux_Metrics(t *testing.T) {
+func TestServer_BuildMux_Metrics_NotOnMainMux(t *testing.T) {
 	metrics := new(AlertMetrics)
 	metrics.WebhooksReceived.Add(5)
 
 	srv := NewServer(ServerConfig{Port: "0", WorkerCount: 1, QueueSize: 5, DrainTimeout: 5 * time.Second}, metrics,
 		func(ctx context.Context, alert AlertPayload) {})
 
+	// /metrics must NOT be served on the main mux.
 	mux := srv.BuildMux(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	req := httptest.NewRequest("GET", "/metrics", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
+	if w.Code == http.StatusOK {
+		t.Errorf("GET /metrics on main mux should not return 200 (got %d); metrics must be on the metrics mux only", w.Code)
+	}
+}
+
+func TestServer_BuildMetricsMux(t *testing.T) {
+	metrics := new(AlertMetrics)
+	metrics.WebhooksReceived.Add(5)
+
+	srv := NewServer(ServerConfig{Port: "0", WorkerCount: 1, QueueSize: 5, DrainTimeout: 5 * time.Second}, metrics,
+		func(ctx context.Context, alert AlertPayload) {})
+
+	mux := srv.BuildMetricsMux()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
 	if w.Code != http.StatusOK {
-		t.Errorf("GET /metrics = %d, want 200", w.Code)
+		t.Errorf("GET /metrics on metrics mux = %d, want 200", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), "webhooks_received_total 5") {
 		t.Errorf("body missing expected metric, got:\n%s", w.Body.String())

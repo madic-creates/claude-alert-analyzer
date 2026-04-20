@@ -44,11 +44,15 @@ Both are also tagged with the short commit SHA (e.g. `:a1b2c3d`).
 
 ### API Endpoints
 
-Both analyzers expose:
+Both analyzers expose two HTTP servers:
 
+**Main server** (`PORT`, default `8080`):
 - `GET /health` -- liveness/readiness probe (returns `200 ok`)
-- `GET /metrics` -- Prometheus metrics (no authentication required)
+- `GET /ready` -- readiness probe with dependency checks
 - `POST /webhook` -- alert receiver (requires `Authorization: Bearer <WEBHOOK_SECRET>`)
+
+**Metrics server** (`METRICS_PORT`, default `9101`):
+- `GET /metrics` -- Prometheus metrics (no authentication required)
 
 ## Configuration
 
@@ -60,7 +64,8 @@ Both analyzers expose:
 | `API_KEY` | **(required)** | Anthropic or OpenRouter API key |
 | `API_BASE_URL` | `https://api.anthropic.com/v1/messages` | LLM API endpoint |
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Model to use for analysis |
-| `PORT` | `8080` | HTTP listen port |
+| `PORT` | `8080` | HTTP listen port for `/health`, `/ready`, and `/webhook` |
+| `METRICS_PORT` | `9101` | Port for the Prometheus `/metrics` endpoint |
 | `COOLDOWN_SECONDS` | `300` | Seconds before re-analyzing the same alert |
 | `NTFY_PUBLISH_URL` | `https://ntfy.example.com` | ntfy server URL |
 | `NTFY_PUBLISH_TOPIC` | *(varies per analyzer)* | ntfy topic name |
@@ -258,7 +263,7 @@ The `source` label is `k8s` for the Kubernetes analyzer and `checkmk` for the Ch
 ```yaml
 - job_name: claude-alert-analyzer
   static_configs:
-    - targets: ['claude-alert-analyzer.monitoring:8080']
+    - targets: ['claude-alert-analyzer.monitoring:9101']
 ```
 
 ## CI/CD

@@ -49,6 +49,7 @@ type BaseConfig struct {
 	ClaudeModel     string
 	CooldownSeconds int
 	Port            string
+	MetricsPort     string
 	WebhookSecret   string
 	APIBaseURL      string
 	APIKey          string

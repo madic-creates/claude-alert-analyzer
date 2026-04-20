@@ -54,6 +54,7 @@ type Config struct {
 	CooldownSeconds   int
 	SkipResolved      bool
 	Port              string
+	MetricsPort       string
 	WebhookSecret     string
 	AllowedNamespaces []string      // Namespace allowlist for log collection
 	MaxLogBytes       int           // Per-pod log truncation limit
@@ -69,6 +70,7 @@ func (c Config) BaseConfig() shared.BaseConfig {
 		ClaudeModel:     c.ClaudeModel,
 		CooldownSeconds: c.CooldownSeconds,
 		Port:            c.Port,
+		MetricsPort:     c.MetricsPort,
 		WebhookSecret:   c.WebhookSecret,
 		APIBaseURL:      c.APIBaseURL,
 		APIKey:          c.APIKey,

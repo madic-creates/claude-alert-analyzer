@@ -62,6 +62,7 @@ func loadConfig() k8s.Config {
 		CooldownSeconds:   cooldown,
 		SkipResolved:      shared.EnvOrDefault("SKIP_RESOLVED", "true") != "false",
 		Port:              shared.EnvOrDefault("PORT", "8080"),
+		MetricsPort:       shared.EnvOrDefault("METRICS_PORT", "9101"),
 		WebhookSecret:     webhookSecret,
 		AllowedNamespaces: nsList,
 		MaxLogBytes:       maxLogBytes,
@@ -124,6 +125,7 @@ func main() {
 
 	srv := shared.NewServer(shared.ServerConfig{
 		Port:         cfg.Port,
+		MetricsPort:  cfg.MetricsPort,
 		WorkerCount:  5,
 		QueueSize:    20,
 		DrainTimeout: 25 * time.Second,
@@ -133,7 +135,7 @@ func main() {
 	})
 
 	slog.Info("K8s Alert Analyzer started",
-		"port", cfg.Port, "model", cfg.ClaudeModel,
+		"port", cfg.Port, "metricsPort", cfg.MetricsPort, "model", cfg.ClaudeModel,
 		"apiBaseURL", cfg.APIBaseURL,
 		"allowedNamespaces", cfg.AllowedNamespaces)
 

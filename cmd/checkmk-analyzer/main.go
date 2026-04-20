@@ -63,6 +63,7 @@ func loadConfig() checkmk.Config {
 		ClaudeModel:       shared.EnvOrDefault("CLAUDE_MODEL", "claude-sonnet-4-6"),
 		CooldownSeconds:   cooldown,
 		Port:              shared.EnvOrDefault("PORT", "8080"),
+		MetricsPort:       shared.EnvOrDefault("METRICS_PORT", "9101"),
 		WebhookSecret:     webhookSecret,
 		APIBaseURL:        shared.EnvOrDefault("API_BASE_URL", "https://api.anthropic.com/v1/messages"),
 		APIKey:            apiKey,
@@ -136,6 +137,7 @@ func main() {
 
 	srv := shared.NewServer(shared.ServerConfig{
 		Port:         cfg.Port,
+		MetricsPort:  cfg.MetricsPort,
 		WorkerCount:  5,
 		QueueSize:    20,
 		DrainTimeout: 25 * time.Second,
@@ -145,7 +147,7 @@ func main() {
 	})
 
 	slog.Info("CheckMK Alert Analyzer started",
-		"port", cfg.Port, "model", cfg.ClaudeModel,
+		"port", cfg.Port, "metricsPort", cfg.MetricsPort, "model", cfg.ClaudeModel,
 		"checkmkAPI", cfg.CheckMKAPIURL)
 
 	handler := checkmk.HandleWebhook(cfg, cooldownMgr, srv.Enqueue, metrics)

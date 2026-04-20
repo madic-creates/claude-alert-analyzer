@@ -19,6 +19,7 @@ type Config struct {
 	ClaudeModel       string
 	CooldownSeconds   int
 	Port              string
+	MetricsPort       string
 	WebhookSecret     string
 	APIBaseURL        string
 	APIKey            string
@@ -39,6 +40,7 @@ func (c Config) BaseConfig() shared.BaseConfig {
 		ClaudeModel:     c.ClaudeModel,
 		CooldownSeconds: c.CooldownSeconds,
 		Port:            c.Port,
+		MetricsPort:     c.MetricsPort,
 		WebhookSecret:   c.WebhookSecret,
 		APIBaseURL:      c.APIBaseURL,
 		APIKey:          c.APIKey,
