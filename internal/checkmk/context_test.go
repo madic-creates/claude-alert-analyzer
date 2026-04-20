@@ -130,6 +130,33 @@ func TestValidateAndDescribeHost_ReturnsAIContext(t *testing.T) {
 	}
 }
 
+func TestValidateAndDescribeHost_NoIPAddress(t *testing.T) {
+	// When a CheckMK host has no ipaddress attribute configured, ValidateAndDescribeHost
+	// must return an error describing the missing configuration rather than silently
+	// accepting the host. Without an IP address there is no verified address to use
+	// for SSH connectivity or to compare against the webhook's host_address field.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := checkmkHostResponse{
+			ID: "noiphost",
+			Extensions: checkmkHostExtensions{
+				Attributes: checkmkHostAttributes{IPAddress: ""}, // no IP configured
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "automation", Secret: "secret"}
+	_, err := apiClient.ValidateAndDescribeHost(context.Background(), "noiphost", "10.0.0.1")
+	if err == nil {
+		t.Fatal("expected error when host has no IP address configured, got nil")
+	}
+	if !strings.Contains(err.Error(), "no IP address configured") {
+		t.Errorf("error should mention 'no IP address configured', got: %v", err)
+	}
+}
+
 func TestValidateAndDescribeHost_NoAIContext(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := checkmkHostResponse{

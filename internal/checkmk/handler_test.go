@@ -473,6 +473,36 @@ func TestCheckmkHandleWebhook_HostDown_SeverityCritical(t *testing.T) {
 	}
 }
 
+func TestCheckmkHandleWebhook_HostUp_SeverityOK(t *testing.T) {
+	// Host-level notification: ServiceState is empty, HostState is "UP".
+	// This occurs for ACKNOWLEDGEMENT or DOWNTIME notifications on a host that is
+	// currently UP. The handler must produce severity "ok", not the default "warning".
+	cfg := makeCheckmkConfig()
+	cd := shared.NewCooldownManager()
+	var got shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		got = ap
+		return true
+	}, nil)
+
+	notif := CheckMKNotification{
+		Hostname:         "myhost",
+		HostAddress:      "10.0.0.2",
+		HostState:        "UP",
+		ServiceState:     "",
+		NotificationType: "ACKNOWLEDGEMENT",
+		Timestamp:        "2024-01-15T12:00:00Z",
+	}
+	rr := postCheckmkWebhook(t, handler, "test-secret", notif)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if got.Severity != "ok" {
+		t.Errorf("expected severity 'ok' for host UP notification, got %q", got.Severity)
+	}
+}
+
 func TestCheckmkHandleWebhook_HostUnreachable_SeverityCritical(t *testing.T) {
 	cfg := makeCheckmkConfig()
 	cd := shared.NewCooldownManager()
