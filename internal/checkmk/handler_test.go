@@ -568,3 +568,30 @@ func TestFingerprint_Length(t *testing.T) {
 		t.Errorf("expected fingerprint length 64 (full SHA-256 hex), got %d", len(fp))
 	}
 }
+
+// TestFingerprint_NullByteSeparatorPreventsPrefixCollisions verifies that the
+// null-byte separator between parts prevents two differently-split inputs from
+// producing the same fingerprint. Without the separator, concatenating the raw
+// parts before hashing would make fingerprint("ab","c") == fingerprint("a","bc")
+// because both produce the same byte sequence "abc". A collision like that could
+// merge cooldowns across distinct alert identifiers (e.g. a host named "host1"
+// with service "" vs. host "host" with service "1"), silently suppressing alerts.
+func TestFingerprint_NullByteSeparatorPreventsPrefixCollisions(t *testing.T) {
+	cases := [][2][4]string{
+		// hostname boundary shift: "host1"+"" vs "host"+"1"
+		{{"host1", "", "PROBLEM", "CRITICAL"}, {"host", "1", "PROBLEM", "CRITICAL"}},
+		// service boundary shift: "CPU"+service vs host+"CPUservice"
+		{{"myhost", "CPU", "alert", ""}, {"myhost", "", "CPUalert", ""}},
+		// notification type boundary: "PROBLEM"+"CRITICAL" vs "PROBLEMCRITICAL"+""
+		{{"h", "s", "PROBLEM", "CRITICAL"}, {"h", "s", "PROBLEMCRITICAL", ""}},
+	}
+	for _, pair := range cases {
+		fp1 := fingerprint(pair[0][0], pair[0][1], pair[0][2], pair[0][3])
+		fp2 := fingerprint(pair[1][0], pair[1][1], pair[1][2], pair[1][3])
+		if fp1 == fp2 {
+			t.Errorf("prefix collision: fingerprint(%q,%q,%q,%q) == fingerprint(%q,%q,%q,%q) = %s",
+				pair[0][0], pair[0][1], pair[0][2], pair[0][3],
+				pair[1][0], pair[1][1], pair[1][2], pair[1][3], fp1)
+		}
+	}
+}
