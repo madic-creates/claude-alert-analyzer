@@ -553,6 +553,33 @@ func TestParseCommandInput_Invalid(t *testing.T) {
 	}
 }
 
+// TestParseCommandInput_EmptyElement verifies that an empty string in any
+// position of the command array is rejected. An empty argv[0] would bypass
+// isDenied because filepath.Base("") returns "." which is not in any denylist;
+// empty arguments elsewhere are never valid for diagnostic commands.
+func TestParseCommandInput_EmptyElement(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"empty command name", `{"command": ["", "-h"]}`},
+		{"empty middle arg", `{"command": ["df", "", "-h"]}`},
+		{"empty last arg", `{"command": ["df", "-h", ""]}`},
+		{"only empty string", `{"command": [""]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseCommandInput(json.RawMessage(tc.input))
+			if err == nil {
+				t.Errorf("expected error for input with empty element: %s", tc.input)
+			}
+			if err != nil && !strings.Contains(err.Error(), "empty") {
+				t.Errorf("error should mention empty, got: %v", err)
+			}
+		})
+	}
+}
+
 // TestParseCommandInput_TooManyElements verifies that an oversized argv is
 // rejected before any work is done. An adversary (or hallucinating model)
 // returning thousands of array elements could cause OOM in shellQuote and

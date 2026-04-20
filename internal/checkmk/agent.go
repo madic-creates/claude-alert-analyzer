@@ -246,6 +246,9 @@ func parseCommandInput(input json.RawMessage) ([]string, error) {
 		return nil, fmt.Errorf("command has %d elements, maximum is %d", len(parsed.Command), maxArgvElements)
 	}
 	for i, arg := range parsed.Command {
+		if arg == "" {
+			return nil, fmt.Errorf("argument %d is empty", i)
+		}
 		if len(arg) > maxArgLen {
 			return nil, fmt.Errorf("argument %d exceeds maximum length of %d bytes", i, maxArgLen)
 		}
