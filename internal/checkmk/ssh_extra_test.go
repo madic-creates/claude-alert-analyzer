@@ -172,10 +172,13 @@ func TestSSHDialer_Dial_RefusedConnection(t *testing.T) {
 		t.Fatalf("NewSSHDialer: %v", err)
 	}
 
-	// Port 1 on localhost is almost always closed; the dial should fail fast.
-	_, err = d.Dial("closedhost", "127.0.0.1:1")
+	// Dial expects a bare IP address; it always appends ":22" itself via
+	// net.JoinHostPort. Port 22 is almost certainly not listening in a test
+	// sandbox; even if it were, the remote host key would not match the dummy
+	// key stored in known_hosts, so the SSH handshake would still fail.
+	_, err = d.Dial("closedhost", "127.0.0.1")
 	if err == nil {
-		t.Fatal("expected TCP dial error for port 1")
+		t.Fatal("expected error when dialing an unreachable host")
 	}
 }
 
