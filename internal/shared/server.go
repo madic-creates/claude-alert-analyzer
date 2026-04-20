@@ -19,6 +19,8 @@ type ServerConfig struct {
 	WorkerCount  int
 	QueueSize    int
 	DrainTimeout time.Duration
+	// Source is the analyzer source label used for Prometheus metrics (e.g. "k8s", "checkmk").
+	Source string
 }
 
 // Server manages a webhook-driven worker pool with graceful shutdown.
@@ -46,6 +48,7 @@ func (s *Server) Enqueue(alert AlertPayload) bool {
 	select {
 	case s.queue <- alert:
 		s.metrics.AlertsQueued.Add(1)
+		s.metrics.SetQueueDepth(s.cfg.Source, float64(len(s.queue)))
 		return true
 	default:
 		s.metrics.AlertsQueueFull.Add(1)
@@ -112,6 +115,7 @@ func (s *Server) Run(webhookHandler http.HandlerFunc) {
 		go func() {
 			defer wg.Done()
 			for alert := range s.queue {
+				s.metrics.SetQueueDepth(s.cfg.Source, float64(len(s.queue)))
 				s.safeProcess(workerCtx, alert)
 			}
 		}()

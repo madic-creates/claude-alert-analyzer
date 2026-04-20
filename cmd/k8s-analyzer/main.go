@@ -105,10 +105,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	claudeClient := shared.NewClaudeClient(cfg.BaseConfig())
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	claudeClient := shared.NewClaudeClient(cfg.BaseConfig()).WithPrometheusMetrics(metrics, "k8s")
 	promClient := k8s.NewPrometheusClient(cfg.PrometheusURL)
 	cooldownMgr := shared.NewCooldownManager()
-	metrics := new(shared.AlertMetrics)
 	publishers := []shared.Publisher{
 		shared.NewNtfyPublisher(
 			shared.EnvOrDefault("NTFY_PUBLISH_URL", "https://ntfy.example.com"),
@@ -134,6 +134,7 @@ func main() {
 		WorkerCount:  5,
 		QueueSize:    20,
 		DrainTimeout: 25 * time.Second,
+		Source:       "k8s",
 	}, metrics, func(ctx context.Context, alert shared.AlertPayload) {
 		k8s.ProcessAlert(ctx, deps, alert)
 	})

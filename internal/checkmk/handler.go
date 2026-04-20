@@ -74,6 +74,7 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 			slog.Info("in cooldown", "hostname", notif.Hostname, "service", notif.ServiceDescription)
 			if metrics != nil {
 				metrics.AlertsCooldown.Add(1)
+				metrics.RecordCooldown("checkmk")
 			}
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, "in cooldown")

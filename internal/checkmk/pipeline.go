@@ -115,11 +115,13 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 
 	title := fmt.Sprintf("Analysis: %s", alert.Title)
 	if err := shared.PublishAll(ctx, deps.Publishers, title, priority, analysis); err != nil {
+		deps.Metrics.RecordNtfyPublishError(alert.Source)
 		deps.Cooldown.Clear(alert.Fingerprint)
 		deps.Metrics.AlertsFailed.Add(1)
 		return
 	}
 
 	deps.Metrics.AlertsProcessed.Add(1)
+	deps.Metrics.RecordAnalyzed(alert.Source, alert.Severity)
 	slog.Info("analysis complete", "hostname", hostname)
 }

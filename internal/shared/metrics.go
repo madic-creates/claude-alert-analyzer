@@ -1,14 +1,24 @@
 package shared
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"strings"
 	"sync/atomic"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // AlertMetrics holds operational counters for an alert analyzer instance.
 // All fields are safe for concurrent use via sync/atomic.
+//
+// Prom contains the labeled Prometheus metrics (alerts_analyzed_total,
+// alerts_cooldown_total, queue_depth, claude_api_duration_seconds,
+// claude_api_errors_total, ntfy_publish_errors_total). It is nil-safe: all
+// recording helpers below check for nil before accessing it so that tests
+// that only instantiate AlertMetrics with `new(AlertMetrics)` continue to
+// work without wiring up a PrometheusMetrics.
 type AlertMetrics struct {
 	// WebhooksReceived counts every authenticated POST /webhook request.
 	WebhooksReceived atomic.Int64
@@ -26,10 +36,58 @@ type AlertMetrics struct {
 	ProcessingDurationSum atomic.Int64
 	// ProcessingDurationCount tracks total alerts processed (for avg calculation).
 	ProcessingDurationCount atomic.Int64
+
+	// Prom holds the labeled Prometheus metrics. May be nil for tests.
+	Prom *PrometheusMetrics
+}
+
+// RecordAnalyzed increments the alerts_analyzed_total counter for the given
+// source and severity. No-ops when Prom is nil.
+func (m *AlertMetrics) RecordAnalyzed(source, severity string) {
+	if m.Prom != nil {
+		m.Prom.AlertsAnalyzed.WithLabelValues(source, severity).Inc()
+	}
+}
+
+// RecordCooldown increments the alerts_cooldown_total counter for the given
+// source. No-ops when Prom is nil.
+func (m *AlertMetrics) RecordCooldown(source string) {
+	if m.Prom != nil {
+		m.Prom.AlertsCooldown.WithLabelValues(source).Inc()
+	}
+}
+
+// SetQueueDepth sets the queue_depth gauge for the given source. No-ops when
+// Prom is nil.
+func (m *AlertMetrics) SetQueueDepth(source string, depth float64) {
+	if m.Prom != nil {
+		m.Prom.QueueDepth.WithLabelValues(source).Set(depth)
+	}
+}
+
+// RecordClaudeAPIError increments the claude_api_errors_total counter for the
+// given source. No-ops when Prom is nil.
+func (m *AlertMetrics) RecordClaudeAPIError(source string) {
+	if m.Prom != nil {
+		m.Prom.ClaudeAPIErrors.WithLabelValues(source).Inc()
+	}
+}
+
+// RecordNtfyPublishError increments the ntfy_publish_errors_total counter for
+// the given source. No-ops when Prom is nil.
+func (m *AlertMetrics) RecordNtfyPublishError(source string) {
+	if m.Prom != nil {
+		m.Prom.NtfyPublishErrors.WithLabelValues(source).Inc()
+	}
 }
 
 // MetricsHandler returns an HTTP handler that renders all counters in
 // Prometheus text exposition format (version 0.0.4).
+//
+// The response consists of two sections:
+//  1. Hand-rolled atomic counters (existing operational metrics without labels).
+//  2. If Prom is non-nil, the labeled Prometheus metrics gathered from its
+//     private registry via promhttp.
 //
 // All atomic counters are read into a strings.Builder before any bytes are
 // written to the ResponseWriter. This produces a single write to the
@@ -60,7 +118,32 @@ func (m *AlertMetrics) MetricsHandler() http.HandlerFunc {
 		fmt.Fprintf(&b, "# TYPE alert_analyzer_processing_duration_seconds summary\n")
 		fmt.Fprintf(&b, "alert_analyzer_processing_duration_seconds_sum %f\n", float64(m.ProcessingDurationSum.Load())/1e6)
 		fmt.Fprintf(&b, "alert_analyzer_processing_duration_seconds_count %d\n", m.ProcessingDurationCount.Load())
+
+		// Append labeled Prometheus metrics when available.
+		if m.Prom != nil {
+			var promBuf bytes.Buffer
+			promHandler := promhttp.HandlerFor(m.Prom.Registry(), promhttp.HandlerOpts{})
+			promHandler.ServeHTTP(newBufferedResponseWriter(&promBuf), r)
+			b.Write(promBuf.Bytes())
+		}
+
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		fmt.Fprint(w, b.String())
 	}
 }
+
+// bufferedResponseWriter captures the response body written by promhttp into a
+// bytes.Buffer so it can be concatenated with the hand-rolled metrics output.
+type bufferedResponseWriter struct {
+	buf    *bytes.Buffer
+	header http.Header
+	code   int
+}
+
+func newBufferedResponseWriter(buf *bytes.Buffer) *bufferedResponseWriter {
+	return &bufferedResponseWriter{buf: buf, header: make(http.Header)}
+}
+
+func (w *bufferedResponseWriter) Header() http.Header         { return w.header }
+func (w *bufferedResponseWriter) WriteHeader(code int)        { w.code = code }
+func (w *bufferedResponseWriter) Write(b []byte) (int, error) { return w.buf.Write(b) }

@@ -84,6 +84,7 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 				slog.Info("in cooldown", "alertname", alert.Labels["alertname"])
 				if metrics != nil {
 					metrics.AlertsCooldown.Add(1)
+					metrics.RecordCooldown("k8s")
 				}
 				continue
 			}

@@ -102,10 +102,10 @@ func main() {
 
 	cfg := loadConfig()
 
-	claudeClient := shared.NewClaudeClient(cfg.BaseConfig())
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	claudeClient := shared.NewClaudeClient(cfg.BaseConfig()).WithPrometheusMetrics(metrics, "checkmk")
 	apiClient := checkmk.NewAPIClient(cfg)
 	cooldownMgr := shared.NewCooldownManager()
-	metrics := new(shared.AlertMetrics)
 	publishers := []shared.Publisher{
 		shared.NewNtfyPublisher(
 			shared.EnvOrDefault("NTFY_PUBLISH_URL", "https://ntfy.example.com"),
@@ -146,6 +146,7 @@ func main() {
 		WorkerCount:  5,
 		QueueSize:    20,
 		DrainTimeout: 25 * time.Second,
+		Source:       "checkmk",
 	}, metrics, func(ctx context.Context, alert shared.AlertPayload) {
 		checkmk.ProcessAlert(ctx, deps, alert)
 	})

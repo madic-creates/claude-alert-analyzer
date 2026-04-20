@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 const anthropicVersion = "2023-06-01"
@@ -26,6 +28,11 @@ type ClaudeClient struct {
 	BaseURL string
 	APIKey  string
 	Model   string
+
+	// durationHistogram records Claude API call latency. May be nil.
+	durationHistogram prometheus.Histogram
+	// errorCounter counts Claude API errors by source. May be nil.
+	errorCounter prometheus.Counter
 }
 
 // NewClaudeClient creates a ClaudeClient from a BaseConfig with a
@@ -39,7 +46,18 @@ func NewClaudeClient(cfg BaseConfig) *ClaudeClient {
 	}
 }
 
+// WithPrometheusMetrics attaches Prometheus observers to the client so that
+// each API call is timed and errors are counted. Call this after NewClaudeClient.
+func (c *ClaudeClient) WithPrometheusMetrics(m *AlertMetrics, source string) *ClaudeClient {
+	if m != nil && m.Prom != nil {
+		c.durationHistogram = m.Prom.ClaudeAPIDuration
+		c.errorCounter = m.Prom.ClaudeAPIErrors.WithLabelValues(source)
+	}
+	return c
+}
+
 // sendRequest sends a JSON body to the Claude API and returns the raw response bytes.
+// It records call latency via durationHistogram and increments errorCounter on failure.
 func (c *ClaudeClient) sendRequest(ctx context.Context, body any) ([]byte, error) {
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
@@ -59,21 +77,36 @@ func (c *ClaudeClient) sendRequest(ctx context.Context, body any) ([]byte, error
 		req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	}
 
+	start := time.Now()
 	resp, err := c.HTTP.Do(req)
+	elapsed := time.Since(start).Seconds()
+
 	if err != nil {
+		if c.errorCounter != nil {
+			c.errorCounter.Inc()
+		}
 		return nil, fmt.Errorf("API request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBytes))
 	if err != nil {
+		if c.errorCounter != nil {
+			c.errorCounter.Inc()
+		}
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		if c.errorCounter != nil {
+			c.errorCounter.Inc()
+		}
 		return nil, fmt.Errorf("API returned %d: %s", resp.StatusCode, Truncate(string(respBody), 300))
 	}
 
+	if c.durationHistogram != nil {
+		c.durationHistogram.Observe(elapsed)
+	}
 	return respBody, nil
 }
 

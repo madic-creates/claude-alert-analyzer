@@ -47,6 +47,7 @@ Both are also tagged with the short commit SHA (e.g. `:a1b2c3d`).
 Both analyzers expose:
 
 - `GET /health` -- liveness/readiness probe (returns `200 ok`)
+- `GET /metrics` -- Prometheus metrics (no authentication required)
 - `POST /webhook` -- alert receiver (requires `Authorization: Bearer <WEBHOOK_SECRET>`)
 
 ## Configuration
@@ -220,6 +221,43 @@ docker build --target checkmk-analyzer -t claude-alert-checkmk-analyzer .
 
 ```bash
 go test ./...
+```
+
+## Observability
+
+Both analyzers expose a `/metrics` endpoint in Prometheus text format (no authentication required). The endpoint contains two sections:
+
+**Operational counters** (unlabeled, always present):
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `alert_analyzer_webhooks_received_total` | counter | Total webhook requests received |
+| `alert_analyzer_alerts_queued_total` | counter | Alerts successfully enqueued for processing |
+| `alert_analyzer_alerts_queue_full_total` | counter | Alerts dropped because the work queue was full |
+| `alert_analyzer_alerts_cooldown_total` | counter | Alerts skipped because a duplicate is in cooldown |
+| `alert_analyzer_alerts_processed_total` | counter | Alerts successfully analyzed and published |
+| `alert_analyzer_alerts_failed_total` | counter | Alerts where analysis or publishing failed |
+| `alert_analyzer_processing_duration_seconds` | summary | Processing time per alert (sum + count) |
+
+**Labeled Prometheus metrics** (with `source` and/or `severity` labels):
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `alerts_analyzed_total` | counter | `source`, `severity` | Total alerts successfully analyzed |
+| `alerts_cooldown_total` | counter | `source` | Alerts skipped due to active cooldown |
+| `queue_depth` | gauge | `source` | Current number of alerts waiting in the work queue |
+| `claude_api_duration_seconds` | histogram | — | Claude API call latency |
+| `claude_api_errors_total` | counter | `source` | Claude API errors |
+| `ntfy_publish_errors_total` | counter | `source` | ntfy publish failures |
+
+The `source` label is `k8s` for the Kubernetes analyzer and `checkmk` for the CheckMK analyzer.
+
+**Example Prometheus scrape config:**
+
+```yaml
+- job_name: claude-alert-analyzer
+  static_configs:
+    - targets: ['claude-alert-analyzer.monitoring:8080']
 ```
 
 ## CI/CD
