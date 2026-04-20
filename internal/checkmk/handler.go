@@ -50,16 +50,18 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 		}
 
 		if notif.NotificationType == "RECOVERY" {
-			// Clear cooldown entries for all non-OK notification types so that a
-			// service which recovers and then fails again within the TTL window is
-			// not silently suppressed. PROBLEM alerts can be in any of the three
-			// non-OK states; FLAPPING START/STOP alerts use their own notification
-			// type in the fingerprint key, so we must clear those separately.
-			// The empty string covers host-level notifications where ServiceState is "".
+			// Clear cooldown entries for all non-RECOVERY notification types so that
+			// a service which recovers and then fails again within the TTL window is
+			// not silently suppressed. Each notification type uses its own fingerprint
+			// key, so we must clear all types that may have been queued. The empty
+			// string covers host-level notifications where ServiceState is "".
 			for _, state := range []string{"CRITICAL", "WARNING", "UNKNOWN", ""} {
 				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "PROBLEM", state))
 				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "FLAPPING START", state))
 				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "FLAPPING STOP", state))
+				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "ACKNOWLEDGEMENT", state))
+				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "DOWNTIME START", state))
+				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "DOWNTIME END", state))
 			}
 			slog.Info("skipping recovery, cleared alert cooldowns",
 				"hostname", notif.Hostname, "service", notif.ServiceDescription)

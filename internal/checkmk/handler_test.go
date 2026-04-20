@@ -605,6 +605,81 @@ func TestFingerprint_Length(t *testing.T) {
 // because both produce the same byte sequence "abc". A collision like that could
 // merge cooldowns across distinct alert identifiers (e.g. a host named "host1"
 // with service "" vs. host "host" with service "1"), silently suppressing alerts.
+// TestCheckmkHandleWebhook_RecoveryClearsAcknowledgementCooldown verifies that a
+// RECOVERY notification clears cooldown entries that were set by ACKNOWLEDGEMENT
+// notifications. Without this fix, an ACKNOWLEDGEMENT processed during a TTL
+// window leaves a stale cooldown entry. When the service later fires a new
+// PROBLEM, it would be silently suppressed until the TTL expires — even though
+// a RECOVERY was already received.
+func TestCheckmkHandleWebhook_RecoveryClearsAcknowledgementCooldown(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cfg.CooldownSeconds = 60 // long TTL so cooldown is still active on second attempt
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	}, nil)
+
+	// ACKNOWLEDGEMENT notification: queued and sets a cooldown.
+	ack := makeNotification("host1", "Disk", "CRITICAL", "ACKNOWLEDGEMENT")
+	postCheckmkWebhook(t, handler, "test-secret", ack)
+	if enqueued.Load() != 1 {
+		t.Fatalf("expected 1 enqueued after ACKNOWLEDGEMENT, got %d", enqueued.Load())
+	}
+
+	// RECOVERY: must clear the ACKNOWLEDGEMENT cooldown.
+	recovery := makeNotification("host1", "Disk", "OK", "RECOVERY")
+	postCheckmkWebhook(t, handler, "test-secret", recovery)
+	if enqueued.Load() != 1 {
+		t.Errorf("RECOVERY should not be enqueued, still expect 1, got %d", enqueued.Load())
+	}
+
+	// New PROBLEM within original TTL: must be enqueued because RECOVERY cleared
+	// the ACKNOWLEDGEMENT cooldown. Without the fix this would be suppressed.
+	problem := makeNotification("host1", "Disk", "CRITICAL", "PROBLEM")
+	postCheckmkWebhook(t, handler, "test-secret", problem)
+	if enqueued.Load() != 2 {
+		t.Errorf("expected 2 enqueued after PROBLEM (cooldown cleared by RECOVERY), got %d", enqueued.Load())
+	}
+}
+
+// TestCheckmkHandleWebhook_RecoveryClearsDowntimeCooldown verifies that a RECOVERY
+// notification clears cooldown entries set by DOWNTIME START and DOWNTIME END
+// notifications, preventing the next real PROBLEM from being silently suppressed.
+func TestCheckmkHandleWebhook_RecoveryClearsDowntimeCooldown(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cfg.CooldownSeconds = 60
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	}, nil)
+
+	// DOWNTIME START notification: queued and sets a cooldown.
+	downtime := makeNotification("host1", "HTTP", "WARNING", "DOWNTIME START")
+	postCheckmkWebhook(t, handler, "test-secret", downtime)
+	if enqueued.Load() != 1 {
+		t.Fatalf("expected 1 enqueued after DOWNTIME START, got %d", enqueued.Load())
+	}
+
+	// RECOVERY: must clear the DOWNTIME START cooldown.
+	recovery := makeNotification("host1", "HTTP", "OK", "RECOVERY")
+	postCheckmkWebhook(t, handler, "test-secret", recovery)
+	if enqueued.Load() != 1 {
+		t.Errorf("RECOVERY should not be enqueued, still expect 1, got %d", enqueued.Load())
+	}
+
+	// New PROBLEM within original TTL: must be enqueued because RECOVERY cleared
+	// the DOWNTIME START cooldown. Without the fix this would be suppressed.
+	problem := makeNotification("host1", "HTTP", "CRITICAL", "PROBLEM")
+	postCheckmkWebhook(t, handler, "test-secret", problem)
+	if enqueued.Load() != 2 {
+		t.Errorf("expected 2 enqueued after PROBLEM (cooldown cleared by RECOVERY), got %d", enqueued.Load())
+	}
+}
+
 func TestFingerprint_NullByteSeparatorPreventsPrefixCollisions(t *testing.T) {
 	cases := [][2][4]string{
 		// hostname boundary shift: "host1"+"" vs "host"+"1"
