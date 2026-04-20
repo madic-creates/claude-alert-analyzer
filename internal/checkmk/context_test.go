@@ -962,3 +962,124 @@ func TestGetHostServices_CritNotMisclassifiedByDescription(t *testing.T) {
 		t.Errorf("CRIT state must appear in result; result:\n%s", result)
 	}
 }
+
+// TestSanitizeHostContext verifies the contract of sanitizeHostContext directly,
+// without the overhead of an HTTP test server. The function is used to clean
+// operator-provided multi-line host context before it is included in the Claude
+// prompt, so correctness of character filtering and truncation matters for both
+// prompt quality and token budget.
+func TestSanitizeHostContext(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "empty string",
+			input: "",
+			want:  "",
+		},
+		{
+			name:  "only whitespace",
+			input: "   \t\n  ",
+			want:  "",
+		},
+		{
+			name:  "plain text unchanged",
+			input: "hello world",
+			want:  "hello world",
+		},
+		{
+			name:  "leading and trailing whitespace trimmed",
+			input: "  hello  ",
+			want:  "hello",
+		},
+		{
+			name:  "tabs preserved",
+			input: "col1\tcol2",
+			want:  "col1\tcol2",
+		},
+		{
+			name:  "newlines preserved",
+			input: "line1\nline2",
+			want:  "line1\nline2",
+		},
+		{
+			name:  "carriage returns stripped (CRLF normalised to LF)",
+			input: "line1\r\nline2",
+			want:  "line1\nline2",
+		},
+		{
+			name:  "bare CR stripped",
+			input: "line1\rline2",
+			want:  "line1line2",
+		},
+		{
+			name:  "null bytes stripped",
+			input: "abc\x00def",
+			want:  "abcdef",
+		},
+		{
+			name:  "bell and other control chars stripped",
+			input: "a\x07b\x1bc",
+			want:  "abc",
+		},
+		{
+			name:  "only control chars becomes empty",
+			input: "\x00\x01\x02\x03",
+			want:  "",
+		},
+		{
+			name:  "multi-byte runes preserved",
+			input: "héllo wörld",
+			want:  "héllo wörld",
+		},
+		{
+			name:  "string exactly at limit not truncated",
+			input: strings.Repeat("a", maxAIContextBytes),
+			want:  strings.Repeat("a", maxAIContextBytes),
+		},
+		{
+			name:  "string one byte over limit is truncated with marker",
+			input: strings.Repeat("a", maxAIContextBytes+1),
+			want:  strings.Repeat("a", maxAIContextBytes-len(" [truncated]")) + " [truncated]",
+		},
+		{
+			name: "truncation preserves valid UTF-8 at boundary",
+			// Build a string where a multi-byte rune straddles the cut point.
+			// 'é' is 2 bytes (U+00E9). Fill to just before the cut point with
+			// ASCII 'a', then append 'é' so that the first byte of 'é' lands at
+			// the cut position. strings.ToValidUTF8 must drop the incomplete rune.
+			input: func() string {
+				const marker = " [truncated]"
+				cutAt := maxAIContextBytes - len(marker)
+				// cutAt-1 'a' bytes + 'é' (2 bytes) pushes one byte past cutAt.
+				return strings.Repeat("a", cutAt-1) + "é" + strings.Repeat("a", 20)
+			}(),
+			want: func() string {
+				const marker = " [truncated]"
+				cutAt := maxAIContextBytes - len(marker)
+				// The incomplete first byte of 'é' at position cutAt is dropped by
+				// strings.ToValidUTF8, leaving cutAt-1 'a' bytes before the marker.
+				return strings.Repeat("a", cutAt-1) + marker
+			}(),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sanitizeHostContext(tc.input)
+			if got != tc.want {
+				t.Errorf("sanitizeHostContext(%q)\n got  %q\n want %q", tc.input, got, tc.want)
+			}
+			// Output must always be valid UTF-8.
+			if !utf8.ValidString(got) {
+				t.Errorf("sanitizeHostContext returned invalid UTF-8: %q", got)
+			}
+			// Output must never exceed maxAIContextBytes.
+			if len(got) > maxAIContextBytes {
+				t.Errorf("output length %d exceeds maxAIContextBytes %d", len(got), maxAIContextBytes)
+			}
+		})
+	}
+}
