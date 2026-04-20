@@ -1,6 +1,9 @@
 package shared
 
 import (
+	"context"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -149,6 +152,123 @@ func TestMetricsHandler_ProcessingDurationIsSummary(t *testing.T) {
 	}
 	if !strings.Contains(body, "alert_analyzer_processing_duration_seconds_count 3") {
 		t.Errorf("expected _count value in body, got:\n%s", body)
+	}
+}
+
+// TestMetricsHandler_WithPrometheusMetrics_IncludesLabeledMetrics verifies that
+// when Prom is non-nil, MetricsHandler appends labeled Prometheus metrics to the
+// output. This exercises NewPrometheusMetrics, Registry, all Record* helpers,
+// the m.Prom != nil branch of MetricsHandler, and the bufferedResponseWriter
+// helper (Header, WriteHeader, Write).
+func TestMetricsHandler_WithPrometheusMetrics_IncludesLabeledMetrics(t *testing.T) {
+	m := &AlertMetrics{Prom: NewPrometheusMetrics()}
+	m.RecordAnalyzed("k8s", "critical")
+	m.RecordCooldown("k8s")
+	m.SetQueueDepth("k8s", 3)
+	m.RecordClaudeAPIError("k8s")
+	m.RecordNtfyPublishError("k8s")
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rr := httptest.NewRecorder()
+	m.MetricsHandler()(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+
+	wantMetrics := []string{
+		"alerts_analyzed_total",
+		"alerts_cooldown_total",
+		"queue_depth",
+		"claude_api_duration_seconds",
+		"claude_api_errors_total",
+		"ntfy_publish_errors_total",
+	}
+	for _, name := range wantMetrics {
+		if !strings.Contains(body, name) {
+			t.Errorf("labeled metric %q not found in output:\n%s", name, body)
+		}
+	}
+
+	// Verify counter values recorded via the helpers appear in the output.
+	if !strings.Contains(body, `alerts_analyzed_total{severity="critical",source="k8s"} 1`) {
+		t.Errorf("expected alerts_analyzed_total counter with value 1, got:\n%s", body)
+	}
+	if !strings.Contains(body, `alerts_cooldown_total{source="k8s"} 1`) {
+		t.Errorf("expected alerts_cooldown_total counter with value 1, got:\n%s", body)
+	}
+	if !strings.Contains(body, `claude_api_errors_total{source="k8s"} 1`) {
+		t.Errorf("expected claude_api_errors_total counter with value 1, got:\n%s", body)
+	}
+	if !strings.Contains(body, `ntfy_publish_errors_total{source="k8s"} 1`) {
+		t.Errorf("expected ntfy_publish_errors_total counter with value 1, got:\n%s", body)
+	}
+}
+
+// TestWithPrometheusMetrics_RecordsCallDuration verifies that WithPrometheusMetrics
+// wires the durationHistogram so that a successful API call records an observation.
+func TestWithPrometheusMetrics_RecordsCallDuration(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"content":[{"type":"text","text":"analysis"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}`)
+	}))
+	defer srv.Close()
+
+	m := &AlertMetrics{Prom: NewPrometheusMetrics()}
+	client := &ClaudeClient{
+		HTTP:    srv.Client(),
+		BaseURL: srv.URL,
+		APIKey:  "test-key",
+		Model:   "claude-test",
+	}
+	client.WithPrometheusMetrics(m, "k8s")
+
+	_, err := client.Analyze(context.Background(), "system", "user")
+	if err != nil {
+		t.Fatalf("Analyze returned error: %v", err)
+	}
+
+	// The histogram should have exactly one observation recorded.
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rr := httptest.NewRecorder()
+	m.MetricsHandler()(rr, req)
+	body := rr.Body.String()
+
+	if !strings.Contains(body, "claude_api_duration_seconds_count 1") {
+		t.Errorf("expected claude_api_duration_seconds_count 1 in output, got:\n%s", body)
+	}
+}
+
+// TestWithPrometheusMetrics_RecordsAPIErrors verifies that WithPrometheusMetrics
+// wires the errorCounter so that a non-200 API response increments it.
+func TestWithPrometheusMetrics_RecordsAPIErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	m := &AlertMetrics{Prom: NewPrometheusMetrics()}
+	client := &ClaudeClient{
+		HTTP:    srv.Client(),
+		BaseURL: srv.URL,
+		APIKey:  "test-key",
+		Model:   "claude-test",
+	}
+	client.WithPrometheusMetrics(m, "checkmk")
+
+	_, err := client.Analyze(context.Background(), "system", "user")
+	if err == nil {
+		t.Fatal("expected error from non-200 response, got nil")
+	}
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rr := httptest.NewRecorder()
+	m.MetricsHandler()(rr, req)
+	body := rr.Body.String()
+
+	if !strings.Contains(body, `claude_api_errors_total{source="checkmk"} 1`) {
+		t.Errorf("expected claude_api_errors_total{source=\"checkmk\"} 1 in output, got:\n%s", body)
 	}
 }
 
