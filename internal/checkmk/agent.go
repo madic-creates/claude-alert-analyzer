@@ -109,6 +109,17 @@ var DefaultDeniedCommands = map[string]bool{
 	// or pipe to denied commands with print | "cmd". gawk/mawk are common
 	// alternative implementations that must be denied for the same reason.
 	"awk": true, "gawk": true, "mawk": true,
+	// Network data-transfer tools: curl and wget can download and pipe payloads
+	// to a shell, exfiltrate data to remote hosts, or fetch and execute scripts.
+	// nc/ncat/netcat open raw TCP/UDP connections and can tunnel arbitrary data
+	// in or out of the host, including spawning a remote shell.
+	"curl": true, "wget": true, "nc": true, "ncat": true, "netcat": true,
+	// install copies files like cp but also sets ownership and permissions,
+	// making it trivially easy to plant a setuid binary or overwrite system files.
+	"install": true,
+	// at and batch schedule one-shot commands for deferred execution outside
+	// the current SSH session, allowing persistence after the session ends.
+	"at": true, "batch": true,
 }
 
 var systemctlReadOnly = map[string]bool{
@@ -251,6 +262,9 @@ func parseCommandInput(input json.RawMessage) ([]string, error) {
 		}
 		if len(arg) > maxArgLen {
 			return nil, fmt.Errorf("argument %d exceeds maximum length of %d bytes", i, maxArgLen)
+		}
+		if strings.ContainsRune(arg, '\x00') {
+			return nil, fmt.Errorf("argument %d contains null byte", i)
 		}
 	}
 	return parsed.Command, nil
