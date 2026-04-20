@@ -177,7 +177,7 @@ func getEvents(ctx context.Context, clientset kubernetes.Interface, namespace st
 	items := eventList.Items
 	// Sort descending by LastTimestamp so the most recent events come first.
 	sort.Slice(items, func(i, j int) bool {
-		return items[i].LastTimestamp.Time.After(items[j].LastTimestamp.Time)
+		return items[i].LastTimestamp.After(items[j].LastTimestamp.Time)
 	})
 	if len(items) > maxEvents {
 		items = items[:maxEvents]
