@@ -47,8 +47,7 @@ Both are also tagged with the short commit SHA (e.g. `:a1b2c3d`).
 Both analyzers expose two HTTP servers:
 
 **Main server** (`PORT`, default `8080`):
-- `GET /health` -- liveness/readiness probe (returns `200 ok`)
-- `GET /ready` -- readiness probe with dependency checks
+- `GET /health` -- liveness probe (returns `200 ok`)
 - `POST /webhook` -- alert receiver (requires `Authorization: Bearer <WEBHOOK_SECRET>`)
 
 **Metrics server** (`METRICS_PORT`, default `9101`):
@@ -64,7 +63,7 @@ Both analyzers expose two HTTP servers:
 | `API_KEY` | **(required)** | Anthropic or OpenRouter API key |
 | `API_BASE_URL` | `https://api.anthropic.com/v1/messages` | LLM API endpoint |
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Model to use for analysis |
-| `PORT` | `8080` | HTTP listen port for `/health`, `/ready`, and `/webhook` |
+| `PORT` | `8080` | HTTP listen port for `/health` and `/webhook` |
 | `METRICS_PORT` | `9101` | Port for the Prometheus `/metrics` endpoint |
 | `COOLDOWN_SECONDS` | `300` | Seconds before re-analyzing the same alert |
 | `NTFY_PUBLISH_URL` | `https://ntfy.example.com` | ntfy server URL |

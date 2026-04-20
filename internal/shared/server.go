@@ -26,11 +26,10 @@ type ServerConfig struct {
 
 // Server manages a webhook-driven worker pool with graceful shutdown.
 type Server struct {
-	cfg        ServerConfig
-	metrics    *AlertMetrics
-	process    func(ctx context.Context, alert AlertPayload)
-	queue      chan AlertPayload
-	ReadyCheck func(ctx context.Context) error
+	cfg     ServerConfig
+	metrics *AlertMetrics
+	process func(ctx context.Context, alert AlertPayload)
+	queue   chan AlertPayload
 }
 
 // NewServer creates a Server. Call Enqueue to add alerts, Run to start.
@@ -57,7 +56,7 @@ func (s *Server) Enqueue(alert AlertPayload) bool {
 	}
 }
 
-// BuildMux returns an http.ServeMux with /health, /ready, and POST /webhook.
+// BuildMux returns an http.ServeMux with /health and POST /webhook.
 // The webhookHandler is wrapped to increment WebhooksReceived.
 // /metrics is served on a separate port via BuildMetricsMux.
 func (s *Server) BuildMux(webhookHandler http.HandlerFunc) *http.ServeMux {
@@ -65,23 +64,6 @@ func (s *Server) BuildMux(webhookHandler http.HandlerFunc) *http.ServeMux {
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "ok")
-	})
-	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
-		if s.ReadyCheck != nil {
-			checkCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-			defer cancel()
-			if err := s.ReadyCheck(checkCtx); err != nil {
-				// Log the underlying error server-side but do not echo it in the
-				// response: /ready is unauthenticated and internal error messages
-				// (connection strings, hostnames, etc.) must not be exposed.
-				slog.Warn("readiness check failed", "error", err)
-				w.WriteHeader(http.StatusServiceUnavailable)
-				fmt.Fprint(w, "not ready")
-				return
-			}
-		}
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "ready")
 	})
 	mux.HandleFunc("POST /webhook", func(w http.ResponseWriter, r *http.Request) {
 		s.metrics.WebhooksReceived.Add(1)
@@ -113,7 +95,7 @@ func (s *Server) safeProcess(ctx context.Context, alert AlertPayload) {
 
 // Run starts workers, serves HTTP, and blocks until SIGINT/SIGTERM triggers
 // graceful shutdown. This function does not return until shutdown is complete.
-// The main server (PORT) serves /health, /ready, and /webhook.
+// The main server (PORT) serves /health and /webhook.
 // A separate metrics server (METRICS_PORT) serves /metrics.
 func (s *Server) Run(webhookHandler http.HandlerFunc) {
 	workerCtx, workerCancel := context.WithCancel(context.Background())
