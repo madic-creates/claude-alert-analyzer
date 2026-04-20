@@ -226,7 +226,7 @@ func getPodStatus(ctx context.Context, clientset kubernetes.Interface, namespace
 		phase := string(p.Status.Phase)
 		restarts := 0
 		ready := 0
-		total := len(p.Status.ContainerStatuses)
+		total := len(p.Spec.Containers)
 		for _, cs := range p.Status.ContainerStatuses {
 			restarts += int(cs.RestartCount)
 			if cs.Ready {

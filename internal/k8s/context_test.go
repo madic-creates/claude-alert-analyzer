@@ -113,6 +113,12 @@ func TestGetKubeContext_PodStatusListed(t *testing.T) {
 				Name:      "web-abc",
 				Namespace: "prod",
 			},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{
+					{Name: "main"},
+					{Name: "sidecar"},
+				},
+			},
 			Status: corev1.PodStatus{
 				Phase: corev1.PodRunning,
 				ContainerStatuses: []corev1.ContainerStatus{
