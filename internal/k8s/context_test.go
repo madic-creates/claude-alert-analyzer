@@ -1012,6 +1012,63 @@ func TestQuery_NonOKStatusCode(t *testing.T) {
 	}
 }
 
+// TestGetEvents_SortsByRecencyDescending verifies that getEvents returns the most
+// recent warning events when the namespace has more events than maxEvents. The
+// Kubernetes API returns events in etcd insertion order (oldest first), so without
+// client-side sorting a busy namespace with a long event history would show only
+// the oldest (least diagnostically useful) events to Claude.
+func TestGetEvents_SortsByRecencyDescending(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	now := time.Now()
+	// Inject 25 events: events 0-4 are old (hours ago), events 20-24 are recent.
+	// Without sorting, the first 20 returned by the API would be the old ones.
+	// With sorting, the 20 most recent should win.
+	cs.PrependReactor("list", "events", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		items := make([]corev1.Event, 25)
+		for i := range items {
+			age := time.Duration(25-i) * time.Hour // i=0 is oldest (25h ago), i=24 is newest (1h ago)
+			items[i] = corev1.Event{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("evt-%02d", i),
+					Namespace: "busy",
+				},
+				Type:          corev1.EventTypeWarning,
+				Reason:        "BackOff",
+				LastTimestamp: metav1.Time{Time: now.Add(-age)},
+				Message:       fmt.Sprintf("event-%02d", i),
+				InvolvedObject: corev1.ObjectReference{
+					Name: fmt.Sprintf("pod-%02d", i),
+				},
+			}
+		}
+		return true, &corev1.EventList{Items: items}, nil
+	})
+
+	result := getEvents(context.Background(), cs, "busy")
+
+	// The 5 oldest events (evt-00 through evt-04, timestamped 25h–21h ago)
+	// must NOT appear — they should be displaced by the 20 most recent ones.
+	for i := 0; i < 5; i++ {
+		old := fmt.Sprintf("event-%02d", i)
+		if strings.Contains(result, old) {
+			t.Errorf("old event %q appeared in output; expected only the 20 most recent events:\n%s", old, result)
+		}
+	}
+	// The 20 most recent events (evt-05 through evt-24) must all appear.
+	for i := 5; i < 25; i++ {
+		recent := fmt.Sprintf("event-%02d", i)
+		if !strings.Contains(result, recent) {
+			t.Errorf("recent event %q missing from output:\n%s", recent, result)
+		}
+	}
+	// Output must be bounded to at most maxEvents lines.
+	lines := strings.Split(strings.TrimRight(result, "\n"), "\n")
+	if len(lines) > 20 {
+		t.Errorf("getEvents returned %d lines, want at most 20", len(lines))
+	}
+}
+
 // TestQuery_MetricLabelsAreSorted verifies that when a Prometheus result contains
 // multiple metric labels they are emitted in alphabetical order, making the Claude
 // analysis context deterministic across runs.

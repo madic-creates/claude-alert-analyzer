@@ -160,26 +160,30 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 }
 
 func getEvents(ctx context.Context, clientset kubernetes.Interface, namespace string) string {
-	// Limit the API response to 20 events to prevent fetching thousands of
-	// warning events into memory for busy namespaces (e.g. a CrashLoopBackOff
-	// pod generating rapid-fire events). The API applies the limit server-side,
-	// so we never download more than we need — matching the approach taken for
-	// pod log fetches (LimitBytes).
+	// Fetch up to maxEvents*5 events from the API so that after sorting by
+	// recency we can present the most recent maxEvents to Claude. The Kubernetes
+	// API returns events in etcd insertion order (oldest first); without
+	// over-fetching and sorting, a busy namespace (e.g. a CrashLoopBackOff pod
+	// generating rapid-fire events) would show only the oldest warnings, which
+	// are the least diagnostically useful.
 	const maxEvents = 20
 	eventList, err := clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
 		FieldSelector: "type!=Normal",
-		Limit:         maxEvents,
+		Limit:         maxEvents * 5,
 	})
 	if err != nil {
 		return fmt.Sprintf("(failed: %v)", err)
 	}
-	var lines []string
 	items := eventList.Items
-	start := 0
+	// Sort descending by LastTimestamp so the most recent events come first.
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].LastTimestamp.Time.After(items[j].LastTimestamp.Time)
+	})
 	if len(items) > maxEvents {
-		start = len(items) - maxEvents
+		items = items[:maxEvents]
 	}
-	for _, e := range items[start:] {
+	var lines []string
+	for _, e := range items {
 		ts := ""
 		if !e.LastTimestamp.Time.IsZero() {
 			ts = e.LastTimestamp.Format(time.RFC3339)
