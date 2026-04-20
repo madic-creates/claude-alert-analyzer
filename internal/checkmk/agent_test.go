@@ -278,6 +278,41 @@ func TestRunAgenticDiagnostics_NonZeroExitIncludesOutput(t *testing.T) {
 	}
 }
 
+// TestRunAgenticDiagnostics_NonZeroExitNoOutput verifies that when a command
+// fails with a non-zero exit status AND produces no output at all (e.g. a
+// binary that exits immediately with an error code but writes nothing to
+// stdout or stderr), the tool result is the "Command failed: ..." string
+// rather than an empty string or the output-inclusive format used when there
+// is output to preserve.
+func TestRunAgenticDiagnostics_NonZeroExitNoOutput(t *testing.T) {
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		// Send a non-zero exit status without writing anything to the channel.
+		sendExitStatus(ch, 1)
+	})
+
+	runner := &capturingToolRunner{
+		calls:  []agentToolCall{{name: "execute_command", input: `{"command": ["false"]}`}},
+		result: "analysis with empty output",
+	}
+	dialer := &fixedDialer{client: client}
+
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+	)
+	if err != nil {
+		t.Fatalf("unexpected top-level error: %v", err)
+	}
+	if len(runner.toolOutputs) != 1 {
+		t.Fatalf("expected 1 tool output, got %d", len(runner.toolOutputs))
+	}
+	// When there is no output the result must be the simple "Command failed: ..."
+	// message rather than the output-inclusive "$ cmd\n...\n[exited: ...]" format.
+	if !strings.HasPrefix(runner.toolOutputs[0], "Command failed:") {
+		t.Errorf("expected 'Command failed:' prefix for no-output failure, got: %q", runner.toolOutputs[0])
+	}
+}
+
 func TestIsDenied_BlocksDestructiveCommands(t *testing.T) {
 	denied := [][]string{
 		{"rm", "-rf", "/"},
