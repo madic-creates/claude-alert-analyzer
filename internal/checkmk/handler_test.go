@@ -564,7 +564,7 @@ func TestFingerprint_SameInputsProduceSameHash(t *testing.T) {
 
 func TestFingerprint_Length(t *testing.T) {
 	fp := fingerprint("host1", "CPU", "PROBLEM", "WARNING")
-	if len(fp) != 16 {
-		t.Errorf("expected fingerprint length 16, got %d", len(fp))
+	if len(fp) != 64 {
+		t.Errorf("expected fingerprint length 64 (full SHA-256 hex), got %d", len(fp))
 	}
 }

@@ -137,5 +137,5 @@ func fingerprint(parts ...string) string {
 		h.Write([]byte(p))
 		h.Write([]byte{0})
 	}
-	return fmt.Sprintf("%x", h.Sum(nil))[:16]
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
