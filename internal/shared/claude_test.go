@@ -777,3 +777,50 @@ func TestRunToolLoop_SummaryRequestHasToolChoiceNone(t *testing.T) {
 		t.Errorf("summary request tool_choice.type = %q, want \"none\"", got)
 	}
 }
+
+// TestRunToolLoop_SummaryAPIErrorInBody verifies that when maxRounds is exhausted
+// and the forced-summary response is a 200 OK containing an API error object in the
+// body (e.g. an overload error reported inline by the API), the error is returned
+// with a "summary API error:" prefix rather than silently producing empty output.
+func TestRunToolLoop_SummaryAPIErrorInBody(t *testing.T) {
+	var callCount atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+
+		if call == 1 {
+			// Round 1 (only round, maxRounds=1): request a tool call.
+			fmt.Fprint(w, `{
+				"content": [
+					{"type": "tool_use", "id": "toolu_1", "name": "execute_command", "input": {"command": ["uptime"]}}
+				],
+				"stop_reason": "tool_use",
+				"usage": {"input_tokens": 50, "output_tokens": 10}
+			}`)
+		} else {
+			// Call 2 = forced summary. Return 200 OK but with an API error in the body.
+			fmt.Fprint(w, `{
+				"error": {"type": "overloaded_error", "message": "Service temporarily overloaded"},
+				"content": []
+			}`)
+		}
+	}))
+	defer srv.Close()
+
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
+	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+
+	_, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
+		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil })
+
+	if err == nil {
+		t.Fatal("expected error when summary response contains API error")
+	}
+	if !strings.Contains(err.Error(), "summary API error") {
+		t.Errorf("error should mention 'summary API error', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "overloaded_error") {
+		t.Errorf("error should include the API error type, got: %v", err)
+	}
+}
