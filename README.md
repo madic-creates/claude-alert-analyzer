@@ -65,6 +65,7 @@ Both analyzers expose:
 | `NTFY_PUBLISH_URL` | `https://ntfy.example.com` | ntfy server URL |
 | `NTFY_PUBLISH_TOPIC` | *(varies per analyzer)* | ntfy topic name |
 | `NTFY_PUBLISH_TOKEN` | *(empty)* | ntfy auth token (optional) |
+| `LOG_LEVEL` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 
 ### K8s Analyzer
 

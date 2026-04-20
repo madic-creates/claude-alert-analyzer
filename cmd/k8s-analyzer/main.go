@@ -83,14 +83,7 @@ func main() {
 		logLevel = slog.LevelInfo
 	}
 
-	logFormat := shared.EnvOrDefault("LOG_FORMAT", "text")
-	var logHandler slog.Handler
-	if logFormat == "json" {
-		logHandler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})
-	} else {
-		logHandler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})
-	}
-	slog.SetDefault(slog.New(logHandler))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})))
 
 	cfg := loadConfig()
 
