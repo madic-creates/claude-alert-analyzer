@@ -25,6 +25,58 @@ func TestRedactSecrets_BearerToken(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_BearerTokenShort verifies that a bearer token in an HTTP
+// Authorization header is fully redacted even when the token is shorter than
+// 20 characters and carries no known vendor prefix (e.g. sk-ant-, ghp_).
+// Previously, the generic keyword=value pattern only captured "Bearer" (the
+// first whitespace-delimited word) as the value, leaving the actual credential
+// on the following word unredacted. The new Authorization-specific pattern
+// must run before the generic one to catch the full "Bearer <token>" value.
+func TestRedactSecrets_BearerTokenShort(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		leak  string // substring that must NOT appear in result
+	}{
+		{
+			name:  "short token no prefix",
+			input: "Authorization: Bearer MyAppToken12",
+			leak:  "MyAppToken12",
+		},
+		{
+			name:  "short token in curl command",
+			input: "curl -H 'Authorization: Bearer abc123' https://api.example.com",
+			leak:  "abc123",
+		},
+		{
+			name:  "basic auth credentials",
+			input: "Authorization: Basic dXNlcjpwYXNz",
+			leak:  "dXNlcjpwYXNz",
+		},
+		{
+			name:  "long token without known prefix",
+			input: "Authorization: Bearer MyLongToken123456789",
+			leak:  "MyLongToken123456789",
+		},
+		{
+			name:  "case insensitive scheme",
+			input: "authorization: bearer InternalServiceKey99",
+			leak:  "InternalServiceKey99",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("token leaked in output:\n  input:  %s\n  output: %s\n  leaked: %s", tc.input, result, tc.leak)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
 func TestRedactSecrets_PrivateKey(t *testing.T) {
 	input := "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----"
 	result := RedactSecrets(input)
