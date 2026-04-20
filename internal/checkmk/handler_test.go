@@ -500,6 +500,35 @@ func TestCheckmkHandleWebhook_HostUnreachable_SeverityCritical(t *testing.T) {
 	}
 }
 
+func TestCheckmkHandleWebhook_HostDown_TitleIsHostnameOnly(t *testing.T) {
+	// Host-level notifications have an empty ServiceDescription.
+	// The alert title must be just the hostname, not "hostname - ".
+	cfg := makeCheckmkConfig()
+	cd := shared.NewCooldownManager()
+	var got shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		got = ap
+		return true
+	}, nil)
+
+	notif := CheckMKNotification{
+		Hostname:         "myhost",
+		HostAddress:      "10.0.0.2",
+		HostState:        "DOWN",
+		ServiceState:     "",
+		NotificationType: "PROBLEM",
+		Timestamp:        "2024-01-15T12:00:00Z",
+	}
+	rr := postCheckmkWebhook(t, handler, "test-secret", notif)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if got.Title != "myhost" {
+		t.Errorf("expected title %q for host-level notification, got %q", "myhost", got.Title)
+	}
+}
+
 func TestCheckmkHandleWebhook_HostRecovery_ClearsCooldown(t *testing.T) {
 	// Host-down PROBLEM sets a cooldown with empty ServiceState.
 	// A subsequent RECOVERY must clear that cooldown so the next PROBLEM is analyzed.

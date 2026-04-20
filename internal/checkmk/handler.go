@@ -100,9 +100,14 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 			}
 		}
 
+		title := notif.Hostname
+		if notif.ServiceDescription != "" {
+			title = fmt.Sprintf("%s - %s", notif.Hostname, notif.ServiceDescription)
+		}
+
 		ap := shared.AlertPayload{
 			Fingerprint: fp,
-			Title:       fmt.Sprintf("%s - %s", notif.Hostname, notif.ServiceDescription),
+			Title:       title,
 			Severity:    severity,
 			Source:      "checkmk",
 			Fields: map[string]string{
