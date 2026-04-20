@@ -258,6 +258,37 @@ func TestLimitedWriter_ZeroRemaining(t *testing.T) {
 	}
 }
 
+// TestLimitedWriter_TruncatedFlag verifies that the truncated field is set
+// exactly when data is discarded and remains false when all data fits.
+func TestLimitedWriter_TruncatedFlag(t *testing.T) {
+	t.Run("no truncation when data fits", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		lw := &limitedWriter{w: buf, remaining: 10}
+		_, _ = lw.Write([]byte("hello"))
+		if lw.truncated {
+			t.Error("truncated should be false when all data fits within limit")
+		}
+	})
+
+	t.Run("truncated set on partial write", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		lw := &limitedWriter{w: buf, remaining: 3}
+		_, _ = lw.Write([]byte("hello")) // 5 bytes, only 3 fit
+		if !lw.truncated {
+			t.Error("truncated should be true after a partial write")
+		}
+	})
+
+	t.Run("truncated set on full discard", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+		lw := &limitedWriter{w: buf, remaining: 0}
+		_, _ = lw.Write([]byte("anything"))
+		if !lw.truncated {
+			t.Error("truncated should be true when writing to a full buffer")
+		}
+	})
+}
+
 // marshalPrivateKeyPEM marshals an ed25519 private key into the OpenSSH PEM
 // format understood by ssh.ParsePrivateKey.
 func marshalPrivateKeyPEM(key ed25519.PrivateKey) ([]byte, error) {

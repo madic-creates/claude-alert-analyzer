@@ -91,17 +91,20 @@ type limitedWriter struct {
 	mu        sync.Mutex
 	w         *bytes.Buffer
 	remaining int
+	truncated bool // set to true the first time data is discarded
 }
 
 func (lw *limitedWriter) Write(p []byte) (int, error) {
 	lw.mu.Lock()
 	defer lw.mu.Unlock()
 	if lw.remaining <= 0 {
+		lw.truncated = true
 		return len(p), nil // discard, but pretend success so the session doesn't error
 	}
 	n := len(p)
 	if n > lw.remaining {
 		p = p[:lw.remaining]
+		lw.truncated = true // trailing bytes will be discarded after this write
 	}
 	written, err := lw.w.Write(p)
 	lw.remaining -= written
@@ -111,8 +114,9 @@ func (lw *limitedWriter) Write(p []byte) (int, error) {
 }
 
 type sshResult struct {
-	output string
-	err    error
+	output    string
+	err       error
+	truncated bool
 }
 
 // shellQuote joins argv into a single string safe for remote shell
@@ -155,8 +159,9 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 		cmdErr := session.Run(cmdStr)
 		lw.mu.Lock()
 		out := lw.w.String()
+		wasTruncated := lw.truncated
 		lw.mu.Unlock()
-		done <- sshResult{out, cmdErr}
+		done <- sshResult{out, cmdErr, wasTruncated}
 	}()
 
 	// Use time.NewTimer instead of time.After so we can call Stop() when the
@@ -168,7 +173,11 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 
 	select {
 	case r := <-done:
-		return r.output, r.err
+		out := r.output
+		if r.truncated {
+			out += fmt.Sprintf("\n[output truncated at %d bytes]", maxSSHOutputBytes)
+		}
+		return out, r.err
 	case <-timer.C:
 		session.Close()
 		return "", fmt.Errorf("timeout after %v", timeout)

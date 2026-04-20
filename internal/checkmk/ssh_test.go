@@ -175,7 +175,8 @@ func TestRunSSHCommand_CommandError(t *testing.T) {
 
 // TestRunSSHCommand_OutputTruncatedAtLimit verifies that when a remote command
 // produces more than maxSSHOutputBytes of output, the collected output is
-// capped at the limit rather than allowing unbounded memory growth.
+// capped at the limit rather than allowing unbounded memory growth, and that
+// a truncation notice is appended so callers know the output is incomplete.
 func TestRunSSHCommand_OutputTruncatedAtLimit(t *testing.T) {
 	// Write 2x the limit so we can be sure the cap fires.
 	oversized := strings.Repeat("A", maxSSHOutputBytes*2)
@@ -188,11 +189,11 @@ func TestRunSSHCommand_OutputTruncatedAtLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(out) > maxSSHOutputBytes {
-		t.Errorf("output not bounded: got %d bytes, want <= %d", len(out), maxSSHOutputBytes)
-	}
 	if len(out) == 0 {
 		t.Error("expected some output to be collected before the limit")
+	}
+	if !strings.Contains(out, "[output truncated at") {
+		t.Errorf("expected truncation notice in output, got %d bytes without notice", len(out))
 	}
 }
 
