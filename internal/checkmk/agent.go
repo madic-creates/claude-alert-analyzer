@@ -114,11 +114,21 @@ var DefaultDeniedCommands = map[string]bool{
 	// or pipe to denied commands with print | "cmd". gawk/mawk are common
 	// alternative implementations that must be denied for the same reason.
 	"awk": true, "gawk": true, "mawk": true,
+	// busybox is a multi-call binary that exposes almost every Unix utility
+	// (including sh, rm, wget, nc) under a single executable. Running
+	// "busybox rm -rf /" or "busybox sh -c '...'" completely bypasses the
+	// per-command denylist because the denylist checks the executable name
+	// ("busybox"), not the applet name passed as the first argument.
+	// busybox is standard on Alpine-based containers and embedded Linux images.
+	"busybox": true,
 	// Network data-transfer tools: curl and wget can download and pipe payloads
 	// to a shell, exfiltrate data to remote hosts, or fetch and execute scripts.
 	// nc/ncat/netcat open raw TCP/UDP connections and can tunnel arbitrary data
 	// in or out of the host, including spawning a remote shell.
-	"curl": true, "wget": true, "nc": true, "ncat": true, "netcat": true,
+	// socat is a more capable successor to nc: it can relay data between
+	// arbitrary address types (TCP, UDP, Unix sockets, files, PTYs) and is
+	// commonly used to spawn fully interactive reverse shells.
+	"curl": true, "wget": true, "nc": true, "ncat": true, "netcat": true, "socat": true,
 	// install copies files like cp but also sets ownership and permissions,
 	// making it trivially easy to plant a setuid binary or overwrite system files.
 	"install": true,
