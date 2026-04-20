@@ -271,9 +271,11 @@ func TestTruncate_PreservesValidUTF8(t *testing.T) {
 }
 
 func TestTruncate_NeverExceedsMaxBytes(t *testing.T) {
-	// Marker is 15 bytes; ensure the total output never exceeds maxBytes regardless
-	// of where the cut falls relative to multi-byte characters.
-	for _, maxBytes := range []int{15, 16, 50, 100, 4096} {
+	// truncationMarker is 16 bytes ("\n" + "... [truncated]"); ensure the total
+	// output never exceeds maxBytes regardless of where the cut falls relative to
+	// multi-byte characters. maxBytes=17 is the smallest value that allows any
+	// content before the marker (cutAt = 17-16 = 1).
+	for _, maxBytes := range []int{15, 16, 17, 50, 100, 4096} {
 		input := strings.Repeat("x", maxBytes*2)
 		result := Truncate(input, maxBytes)
 		if len(result) > maxBytes {
