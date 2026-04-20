@@ -11,7 +11,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
@@ -172,31 +174,49 @@ func TestGetEvents_ListError(t *testing.T) {
 
 // TestGetPodLogs_NoLogsOnGetLogsError verifies the "--- podname --- (no logs)"
 // sentinel that appears when GetLogs.DoRaw returns an error. This covers the
-// getPodLogs error path at context.go line 292.
-// The k8s fake client's GetLogs always returns "fake logs" and cannot be made
-// to return an error via the standard reactor mechanism (it uses a hardcoded
-// fakerest.RESTClient). We use an httptest server that returns a non-200 status
-// so that DoRaw fails with an error, exercising the error branch.
+// getPodLogs error path at context.go line 296.
+//
+// The k8s fake client's GetLogs always succeeds (hardcoded fakerest.RESTClient
+// ignores reactors), so we use a real kubernetes.NewForConfig client backed by
+// an httptest server that returns HTTP 500 for log requests. This forces
+// DoRaw to return an error and exercises the error branch.
 func TestGetPodLogs_NoLogsOnGetLogsError(t *testing.T) {
-	cs := fake.NewSimpleClientset()
+	podListJSON := `{
+		"apiVersion": "v1",
+		"kind": "PodList",
+		"metadata": {"resourceVersion": "1"},
+		"items": [{
+			"apiVersion": "v1",
+			"kind": "Pod",
+			"metadata": {"name": "errorpod", "namespace": "testns", "resourceVersion": "1"},
+			"spec": {"containers": [{"name": "app", "image": "nginx"}]},
+			"status": {"phase": "Failed"}
+		}]
+	}`
 
-	// Return a failing pod from the list call.
-	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
-		return true, &corev1.PodList{Items: []corev1.Pod{{
-			ObjectMeta: metav1.ObjectMeta{Name: "errorpod", Namespace: "testns"},
-			Status:     corev1.PodStatus{Phase: corev1.PodFailed},
-		}}}, nil
-	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/log") {
+			http.Error(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"internal error","code":500}`, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, podListJSON) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	cs, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatalf("failed to create clientset: %v", err)
+	}
 
 	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
 	result := getPodLogs(context.Background(), cs, "testns", cfg)
 
-	// The fake client always returns "fake logs", so this path exercises the
-	// success branch. The comment above explains why the error branch cannot
-	// currently be reached via the fake client. We at least verify the function
-	// runs and produces output for the pod.
 	if !strings.Contains(result, "errorpod") {
 		t.Errorf("expected pod name in output, got: %q", result)
+	}
+	if !strings.Contains(result, "(no logs)") {
+		t.Errorf("expected '(no logs)' sentinel for DoRaw error, got: %q", result)
 	}
 }
 
