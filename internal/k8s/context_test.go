@@ -579,6 +579,24 @@ func TestGetMetrics_MemoryAlertname(t *testing.T) {
 	}
 }
 
+// TestGetMetrics_OOMAlertname verifies that alert names containing "oom"
+// (case-insensitive) trigger the Top Memory Consumers section. This exercises
+// the right-hand side of the `strings.Contains(lower, "memory") || strings.Contains(lower, "oom")`
+// branch in GetMetrics, which was previously uncovered by tests.
+func TestGetMetrics_OOMAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"OOMKilled", "PodOOMKilled", "KubeContainerOOM"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "Top Memory Consumers") {
+			t.Errorf("alert %q: expected Top Memory Consumers section, got %q", name, result)
+		}
+	}
+}
+
 func TestGetMetrics_CPUAlertname(t *testing.T) {
 	srv := makePromServer(t, []PromResult{})
 	defer srv.Close()
