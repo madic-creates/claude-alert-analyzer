@@ -1119,3 +1119,24 @@ func TestIsDenied_FindDeleteAlwaysChecked(t *testing.T) {
 		}
 	}
 }
+
+// TestIsDenied_BlocksTruncateAndShred verifies that truncate and shred are
+// denied by the default denylist. truncate can zero or resize files (e.g.
+// "truncate -s 0 /etc/passwd") or fill a disk ("truncate -s 100G /tmp/fill").
+// shred overwrites file content to prevent recovery. Both are write operations
+// that must be blocked even though they are not shells or privilege-escalation tools.
+func TestIsDenied_BlocksTruncateAndShred(t *testing.T) {
+	cases := [][]string{
+		{"truncate", "-s", "0", "/etc/hostname"},
+		{"truncate", "--size=100G", "/tmp/fill"},
+		{"/usr/bin/truncate", "-s", "0", "/tmp/file"},
+		{"shred", "-u", "/var/log/auth.log"},
+		{"shred", "-n", "3", "/etc/shadow"},
+		{"/usr/bin/shred", "/tmp/secret"},
+	}
+	for _, argv := range cases {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected %v to be denied", argv)
+		}
+	}
+}

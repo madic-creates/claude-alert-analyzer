@@ -94,6 +94,11 @@ var DefaultDeniedCommands = map[string]bool{
 	"mount": true, "umount": true,
 	"mkswap": true, "swapon": true, "swapoff": true,
 	"insmod": true, "rmmod": true, "modprobe": true,
+	// truncate resizes or zeroes files (e.g. "truncate -s 0 /etc/passwd") and
+	// can fill a disk with "truncate -s 100G /tmp/fill". shred overwrites file
+	// content to prevent recovery — both are write operations that must be
+	// blocked even though they are not shells or privilege-escalation tools.
+	"truncate": true, "shred": true,
 	"systemctl": true, // handled specially below
 	// Shells and interpreters: deny to prevent denylist bypass via
 	// "bash -c 'rm -rf /'", "python3 -c 'import os; os.system(...)'", etc.
