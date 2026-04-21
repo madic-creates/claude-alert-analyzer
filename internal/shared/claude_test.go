@@ -10,6 +10,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 func TestSendRequest_OversizedResponseIsBounded(t *testing.T) {
@@ -848,5 +851,80 @@ func TestAnalyze_ParseResponseError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "parse response") {
 		t.Errorf("error should mention 'parse response', got: %v", err)
+	}
+}
+
+// TestSendRequest_DurationHistogramObservedOnSuccess verifies that the
+// durationHistogram is observed exactly once for a successful round-trip.
+// Without this, claude_api_duration_seconds would never increment regardless
+// of how many successful API calls are made, making latency invisible.
+func TestSendRequest_DurationHistogramObservedOnSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"content": [], "usage": {}}`)
+	}))
+	defer srv.Close()
+
+	hist := prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name: "test_sendrequest_duration_seconds",
+		Help: "test histogram",
+	})
+	client := &ClaudeClient{
+		HTTP:              srv.Client(),
+		BaseURL:           srv.URL,
+		APIKey:            "test-key",
+		Model:             "test",
+		durationHistogram: hist,
+	}
+	if _, err := client.sendRequest(context.Background(), map[string]string{"k": "v"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var m dto.Metric
+	if err := hist.Write(&m); err != nil {
+		t.Fatalf("read histogram: %v", err)
+	}
+	if m.Histogram.GetSampleCount() != 1 {
+		t.Errorf("expected 1 histogram observation, got %d", m.Histogram.GetSampleCount())
+	}
+	if m.Histogram.GetSampleSum() <= 0 {
+		t.Errorf("expected positive duration sum, got %f", m.Histogram.GetSampleSum())
+	}
+}
+
+// TestSendRequest_ErrorCounterIncrementedOnHTTPFailure verifies that the
+// errorCounter is incremented exactly once when HTTP.Do fails (e.g. network
+// error or cancelled context). Without this, claude_api_errors_total would
+// stay at zero during API unreachability, making failures invisible to alerts.
+func TestSendRequest_ErrorCounterIncrementedOnHTTPFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done() // block until the client gives up
+	}))
+	defer srv.Close()
+
+	counter := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "test_sendrequest_errors_total",
+		Help: "test error counter",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately so HTTP.Do fails right away
+
+	client := &ClaudeClient{
+		HTTP:         srv.Client(),
+		BaseURL:      srv.URL,
+		APIKey:       "test-key",
+		Model:        "test",
+		errorCounter: counter,
+	}
+	if _, err := client.sendRequest(ctx, map[string]string{"k": "v"}); err == nil {
+		t.Fatal("expected error for cancelled context, got nil")
+	}
+
+	var m dto.Metric
+	if err := counter.Write(&m); err != nil {
+		t.Fatalf("read counter: %v", err)
+	}
+	if m.Counter.GetValue() != 1 {
+		t.Errorf("expected error counter = 1, got %f", m.Counter.GetValue())
 	}
 }
