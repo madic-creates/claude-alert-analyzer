@@ -52,6 +52,7 @@ func TestValidateAndDescribeHost_NoIPConfigured(t *testing.T) {
 	// (e.g. AIContext) even though IP validation failed.
 	if info == nil {
 		t.Fatal("HostInfo must not be nil even when IP is missing")
+		return
 	}
 	if info.AIContext != "Some context" {
 		t.Errorf("AIContext = %q, want %q", info.AIContext, "Some context")
@@ -201,6 +202,7 @@ func TestSSHDialer_Dial_HappyPath(t *testing.T) {
 	}
 	if client == nil {
 		t.Fatal("Dial returned nil client on success")
+		return
 	}
 	client.Close()
 }

@@ -19,6 +19,7 @@ func TestNewAPIClient_FieldsFromConfig(t *testing.T) {
 	c := NewAPIClient(cfg)
 	if c == nil {
 		t.Fatal("NewAPIClient returned nil")
+		return
 	}
 	if c.URL != cfg.CheckMKAPIURL {
 		t.Errorf("URL = %q, want %q", c.URL, cfg.CheckMKAPIURL)
