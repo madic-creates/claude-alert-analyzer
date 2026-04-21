@@ -1,6 +1,7 @@
 package shared
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -156,5 +157,48 @@ func TestRunToolLoop_ForcedSummaryEmptyContent(t *testing.T) {
 	}
 	if result != "" {
 		t.Errorf("expected empty result for empty forced-summary content, got: %q", result)
+	}
+}
+
+// TestSendRequest_CreateRequestError verifies that sendRequest returns a "create
+// request: ..." error when http.NewRequestWithContext fails due to an invalid
+// BaseURL (e.g. a null byte injected by a misconfigured environment variable).
+// This covers lines 68-70 of claude.go, which were previously untested because
+// all existing tests use valid http/https URLs constructed by httptest.NewServer.
+func TestSendRequest_CreateRequestError(t *testing.T) {
+	// A null byte in the URL makes http.NewRequestWithContext fail with
+	// "invalid URL" before any network I/O takes place.
+	client := &ClaudeClient{
+		HTTP:    http.DefaultClient,
+		BaseURL: "http://host\x00invalid/v1/messages",
+		APIKey:  "test-key",
+		Model:   "test",
+	}
+	_, err := client.sendRequest(context.Background(), map[string]string{"k": "v"})
+	if err == nil {
+		t.Fatal("expected error for invalid URL, got nil")
+	}
+	if !strings.Contains(err.Error(), "create request") {
+		t.Errorf("error should mention 'create request', got: %v", err)
+	}
+}
+
+// TestNtfyPublisher_Publish_CreateRequestError verifies that Publish returns a
+// "create request: ..." error when http.NewRequestWithContext fails because the
+// publisher's URL contains an invalid character (null byte). This covers the
+// previously-untested branch at ntfy.go lines 85-87, which is the equivalent
+// misconfiguration guard for the ntfy pipeline.
+func TestNtfyPublisher_Publish_CreateRequestError(t *testing.T) {
+	p := &NtfyPublisher{
+		HTTP:  http.DefaultClient,
+		URL:   "http://host\x00invalid",
+		Topic: "alerts",
+	}
+	err := p.Publish(context.Background(), "title", "default", "body")
+	if err == nil {
+		t.Fatal("expected error for invalid URL, got nil")
+	}
+	if !strings.Contains(err.Error(), "create request") {
+		t.Errorf("error should mention 'create request', got: %v", err)
 	}
 }
