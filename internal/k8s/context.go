@@ -293,6 +293,7 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace s
 		logResp := clientset.CoreV1().Pods(namespace).GetLogs(p.Name, opts)
 		raw, err := logResp.DoRaw(ctx)
 		if err != nil {
+			slog.Warn("failed to get pod logs", "pod", p.Name, "namespace", namespace, "error", err)
 			logLines = append(logLines, fmt.Sprintf("--- %s --- (no logs)", p.Name))
 		} else {
 			redacted := shared.RedactSecrets(string(raw))
