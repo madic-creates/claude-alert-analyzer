@@ -183,6 +183,64 @@ func TestSendRequest_CreateRequestError(t *testing.T) {
 	}
 }
 
+// TestSendRequest_ReadBodyError verifies that sendRequest returns a "read response: ..."
+// error (and increments the errorCounter) when the server sends a valid HTTP 200
+// header but then drops the TCP connection before delivering the full body. This is
+// a real production failure mode (e.g. a load-balancer reset mid-stream) and covers
+// the previously-untested io.ReadAll error path in sendRequest (claude.go lines ~91-97).
+func TestSendRequest_ReadBodyError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Hijack the connection so we can write raw bytes and then close it
+		// before the response body is complete, causing the client's io.ReadAll
+		// to receive an unexpected EOF.
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Error("server does not support hijacking")
+			http.Error(w, "no hijack", 500)
+			return
+		}
+		conn, bufrw, err := hj.Hijack()
+		if err != nil {
+			t.Errorf("hijack failed: %v", err)
+			return
+		}
+		// Write a valid HTTP 200 response with Content-Length larger than what
+		// we actually send, then close the connection. The client will read the
+		// headers successfully (200 OK) and then fail on io.ReadAll because the
+		// connection is closed before the promised bytes arrive.
+		_, _ = bufrw.WriteString("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10000\r\n\r\n{")
+		_ = bufrw.Flush()
+		_ = conn.Close()
+	}))
+	defer srv.Close()
+
+	m := &AlertMetrics{Prom: NewPrometheusMetrics()}
+	client := &ClaudeClient{
+		HTTP:    srv.Client(),
+		BaseURL: srv.URL,
+		APIKey:  "test-key",
+		Model:   "test",
+	}
+	client.WithPrometheusMetrics(m, "k8s")
+
+	_, err := client.sendRequest(context.Background(), map[string]string{"k": "v"})
+	if err == nil {
+		t.Fatal("expected error when server drops connection mid-response, got nil")
+	}
+	if !strings.Contains(err.Error(), "read response") {
+		t.Errorf("error should mention 'read response', got: %v", err)
+	}
+
+	// Verify that the error counter was incremented via the Prometheus output.
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rr := httptest.NewRecorder()
+	m.MetricsHandler()(rr, req)
+	body := rr.Body.String()
+	if !strings.Contains(body, `claude_api_errors_total{source="k8s"} 1`) {
+		t.Errorf("expected claude_api_errors_total{source=\"k8s\"} 1 in metrics output, got:\n%s", body)
+	}
+}
+
 // TestNtfyPublisher_Publish_CreateRequestError verifies that Publish returns a
 // "create request: ..." error when http.NewRequestWithContext fails because the
 // publisher's URL contains an invalid character (null byte). This covers the
