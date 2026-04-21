@@ -284,6 +284,31 @@ func TestRunSSHCommand_ContextCancelled(t *testing.T) {
 	}
 }
 
+// TestRunSSHCommand_NewSessionFails verifies that runSSHCommand returns a
+// "new session: ..." error when the underlying SSH connection is closed before
+// NewSession is called. This is a real production failure mode: in an agentic
+// diagnostic loop, the SSH connection can drop between tool calls (e.g. due to
+// a server restart or network interruption). Without this path, a closed
+// connection would panic or return an opaque error; with it, the caller
+// receives a clear "new session: ..." diagnostic it can log or surface.
+// This covers ssh.go lines 146-148 which were previously untested.
+func TestRunSSHCommand_NewSessionFails(t *testing.T) {
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		sendExitStatus(ch, 0)
+	})
+
+	// Close the connection before issuing a command so that NewSession fails.
+	client.Close()
+
+	_, err := runSSHCommand(context.Background(), client, []string{"uptime"}, 5*time.Second)
+	if err == nil {
+		t.Fatal("expected error when SSH connection is closed, got nil")
+	}
+	if !strings.Contains(err.Error(), "new session") {
+		t.Errorf("expected 'new session' in error message, got: %v", err)
+	}
+}
+
 func TestRunSSHCommand_ShellMetacharsEscaped(t *testing.T) {
 	// The test SSH server captures the raw command string that the client
 	// sends. We verify that shell metacharacters in argv are properly
