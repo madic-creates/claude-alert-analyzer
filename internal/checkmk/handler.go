@@ -55,7 +55,7 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 			// not silently suppressed. Each notification type uses its own fingerprint
 			// key, so we must clear all types that may have been queued. The empty
 			// string covers host-level notifications where ServiceState is "".
-			for _, state := range []string{"CRITICAL", "WARNING", "UNKNOWN", ""} {
+			for _, state := range []string{"CRITICAL", "WARNING", "UNKNOWN", "OK", ""} {
 				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "PROBLEM", state))
 				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "FLAPPING START", state))
 				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "FLAPPING STOP", state))

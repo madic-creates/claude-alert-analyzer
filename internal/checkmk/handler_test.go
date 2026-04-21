@@ -710,6 +710,45 @@ func TestCheckmkHandleWebhook_RecoveryClearsDowntimeCooldown(t *testing.T) {
 	}
 }
 
+// TestCheckmkHandleWebhook_RecoveryClearsOKStateCooldown verifies that a RECOVERY
+// notification clears cooldown entries whose ServiceState is "OK". This covers the
+// case where a non-RECOVERY notification (e.g. DOWNTIME START) arrives for a service
+// that is currently in OK state. Without "OK" in the sweep list the fingerprint keyed
+// on that state would never be cleared, causing the next PROBLEM to be silently
+// suppressed until the TTL expired.
+func TestCheckmkHandleWebhook_RecoveryClearsOKStateCooldown(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cfg.CooldownSeconds = 60 // long TTL so cooldown is still active on second attempt
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	}, nil)
+
+	// DOWNTIME START on a service that is currently OK: sets a cooldown keyed on "OK".
+	downtime := makeNotification("host1", "HTTP", "OK", "DOWNTIME START")
+	postCheckmkWebhook(t, handler, "test-secret", downtime)
+	if enqueued.Load() != 1 {
+		t.Fatalf("expected 1 enqueued after DOWNTIME START, got %d", enqueued.Load())
+	}
+
+	// RECOVERY: must clear the OK-state DOWNTIME START cooldown.
+	recovery := makeNotification("host1", "HTTP", "OK", "RECOVERY")
+	postCheckmkWebhook(t, handler, "test-secret", recovery)
+	if enqueued.Load() != 1 {
+		t.Errorf("RECOVERY should not be enqueued, still expect 1, got %d", enqueued.Load())
+	}
+
+	// New PROBLEM within original TTL: must be enqueued because RECOVERY cleared the
+	// OK-state cooldown. Without "OK" in the sweep list this would be suppressed.
+	problem := makeNotification("host1", "HTTP", "CRITICAL", "PROBLEM")
+	postCheckmkWebhook(t, handler, "test-secret", problem)
+	if enqueued.Load() != 2 {
+		t.Errorf("expected 2 enqueued after PROBLEM (OK-state cooldown cleared by RECOVERY), got %d", enqueued.Load())
+	}
+}
+
 func TestFingerprint_NullByteSeparatorPreventsPrefixCollisions(t *testing.T) {
 	cases := [][2][4]string{
 		// hostname boundary shift: "host1"+"" vs "host"+"1"
