@@ -99,6 +99,12 @@ func (n *NtfyPublisher) Publish(ctx context.Context, title, priority, body strin
 			continue
 		}
 		respSnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		// Drain remaining body before closing so Go's HTTP transport can
+		// return the connection to the pool for reuse on the next attempt.
+		// Without this, the transport closes the TCP connection instead of
+		// reusing it, causing a new dial on every retry — the same pattern
+		// used in k8s/context.go for non-200 Prometheus responses.
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096)) //nolint:errcheck
 		_ = resp.Body.Close()
 
 		if resp.StatusCode >= 500 {

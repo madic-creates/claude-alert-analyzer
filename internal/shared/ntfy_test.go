@@ -3,10 +3,13 @@ package shared
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -288,6 +291,56 @@ func TestNtfyPublisher_Publish_NoRetryOn4xx(t *testing.T) {
 	}
 	if callCount != 1 {
 		t.Errorf("expected exactly 1 attempt (no retry on 4xx), got %d", callCount)
+	}
+}
+
+// TestNtfyPublisher_Publish_DrainsBodyForConnectionReuse verifies that when ntfy
+// returns a non-2xx response, the full response body is consumed before Close so
+// Go's HTTP transport can return the connection to the pool. Without draining,
+// each retry opens a new TCP connection (connection churn), observable via the
+// server-side ConnState callback counting distinct new connections.
+func TestNtfyPublisher_Publish_DrainsBodyForConnectionReuse(t *testing.T) {
+	var mu sync.Mutex
+	conns := make(map[net.Conn]struct{})
+
+	callCount := 0
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			// Body is much larger than the 256-byte snippet read cap; if the
+			// remainder is not drained the transport cannot reuse the connection.
+			fmt.Fprint(w, strings.Repeat("x", 2048))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv.Config.ConnState = func(c net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			mu.Lock()
+			conns[c] = struct{}{}
+			mu.Unlock()
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+
+	p := &NtfyPublisher{HTTP: srv.Client(), URL: srv.URL, Topic: "alerts", RetryDelays: []time.Duration{0, 0}}
+	if err := p.Publish(context.Background(), "t", "default", "body"); err != nil {
+		t.Fatalf("expected success after retries, got: %v", err)
+	}
+	if callCount != 3 {
+		t.Errorf("expected 3 attempts, got %d", callCount)
+	}
+
+	mu.Lock()
+	numConns := len(conns)
+	mu.Unlock()
+
+	// All three attempts should share a single TCP connection. Reuse is only
+	// possible when the response body is fully drained before Close.
+	if numConns != 1 {
+		t.Errorf("expected 1 TCP connection (body drained for reuse), got %d; response body not fully consumed before Close", numConns)
 	}
 }
 
