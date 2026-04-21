@@ -101,7 +101,7 @@ func (c *ClaudeClient) sendRequest(ctx context.Context, body any) ([]byte, error
 		if c.errorCounter != nil {
 			c.errorCounter.Inc()
 		}
-		return nil, fmt.Errorf("API returned %d: %s", resp.StatusCode, Truncate(string(respBody), 300))
+		return nil, fmt.Errorf("API returned %d: %s", resp.StatusCode, Truncate(RedactSecrets(string(respBody)), 300))
 	}
 
 	if c.durationHistogram != nil {
