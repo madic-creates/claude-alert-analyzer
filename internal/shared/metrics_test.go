@@ -238,6 +238,12 @@ func TestWithPrometheusMetrics_RecordsCallDuration(t *testing.T) {
 	if !strings.Contains(body, "claude_api_duration_seconds_count 1") {
 		t.Errorf("expected claude_api_duration_seconds_count 1 in output, got:\n%s", body)
 	}
+	// Verify that at least one custom bucket boundary (120 s) is present. The
+	// default prometheus.DefBuckets cap at 10 s and would not contain "le=\"120\"";
+	// finding it confirms the Claude-specific bucket set is in use.
+	if !strings.Contains(body, `le="120"`) {
+		t.Errorf("expected custom bucket le=\"120\" in histogram output, got:\n%s", body)
+	}
 }
 
 // TestWithPrometheusMetrics_RecordsAPIErrors verifies that WithPrometheusMetrics

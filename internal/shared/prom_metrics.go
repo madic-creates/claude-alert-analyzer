@@ -44,10 +44,17 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 		Help: "Current number of alerts waiting in the work queue, by source.",
 	}, []string{"source"})
 
+	// claudeAPIBuckets covers the expected latency range for Claude API calls.
+	// The Anthropic API typically responds in 5–60 s for analysis requests and
+	// up to 120 s for long agentic tool-loop conversations. prometheus.DefBuckets
+	// top out at 10 s, which would place the vast majority of calls in the +Inf
+	// bucket and make the histogram useless for percentile estimation.
+	claudeAPIBuckets := []float64{1, 5, 10, 20, 30, 45, 60, 90, 120}
+
 	claudeAPIDuration := prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name:    "claude_api_duration_seconds",
 		Help:    "Latency of Claude API calls in seconds.",
-		Buckets: prometheus.DefBuckets,
+		Buckets: claudeAPIBuckets,
 	})
 
 	claudeAPIErrors := prometheus.NewCounterVec(prometheus.CounterOpts{
