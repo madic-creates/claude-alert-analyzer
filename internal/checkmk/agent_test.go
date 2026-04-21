@@ -313,6 +313,46 @@ func TestRunAgenticDiagnostics_NonZeroExitNoOutput(t *testing.T) {
 	}
 }
 
+// TestRunAgenticDiagnostics_InvalidCommandInputReturnsError verifies that when
+// Claude sends an execute_command tool call with an invalid command array (e.g.
+// empty slice), parseCommandInput returns an error and handleTool propagates it
+// rather than panicking or passing the bad argv to the SSH session. This covers
+// the return "", err path in the handleTool closure.
+func TestRunAgenticDiagnostics_InvalidCommandInputReturnsError(t *testing.T) {
+	sshCalled := false
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		sshCalled = true
+		sendExitStatus(ch, 0)
+	})
+
+	runner := &capturingToolRunner{
+		// Empty command array — parseCommandInput returns an "empty command" error.
+		calls:  []agentToolCall{{name: "execute_command", input: `{"command": []}`}},
+		result: "analysis",
+	}
+	dialer := &fixedDialer{client: client}
+
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+	)
+	if err != nil {
+		t.Fatalf("unexpected top-level error: %v", err)
+	}
+	if sshCalled {
+		t.Error("SSH server should not be reached for invalid command input")
+	}
+	if len(runner.toolErrors) != 1 {
+		t.Fatalf("expected 1 tool error captured, got %d", len(runner.toolErrors))
+	}
+	if runner.toolErrors[0] == nil {
+		t.Error("expected error for empty command array, got nil")
+	}
+	if !strings.Contains(runner.toolErrors[0].Error(), "empty command") {
+		t.Errorf("unexpected error message: %v", runner.toolErrors[0])
+	}
+}
+
 func TestIsDenied_BlocksDestructiveCommands(t *testing.T) {
 	denied := [][]string{
 		{"rm", "-rf", "/"},
