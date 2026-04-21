@@ -1017,6 +1017,14 @@ func TestIsDenied_FindDeleteBlocked(t *testing.T) {
 			t.Errorf("expected find destructive flag denied: %v", argv)
 		}
 	}
+
+	// Same flags must be denied with a custom denylist that does NOT include "find".
+	custom := map[string]bool{"rm": true, "dd": true}
+	for _, argv := range denied {
+		if !isDenied(custom, argv) {
+			t.Errorf("find destructive flag not blocked with custom denylist: %v", argv)
+		}
+	}
 }
 
 // TestIsDenied_FindFprintfAndFlsBlocked verifies that find with -fprintf or -fls
