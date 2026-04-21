@@ -290,6 +290,14 @@ const maxArgvElements = 64
 // option; capping them prevents shellQuote from allocating huge strings.
 const maxArgLen = 4096
 
+// maxTotalArgBytes is the maximum combined byte length of all arguments in a
+// single command. Per-element limits alone allow up to maxArgvElements *
+// maxArgLen = 256 KB per invocation; a total cap closes that gap so that
+// shellQuote and log fields stay bounded even when many arguments are near
+// their individual limit. Real diagnostic commands (df -h, ps aux, cat
+// /path/to/file) never approach this ceiling.
+const maxTotalArgBytes = 16384
+
 func parseCommandInput(input json.RawMessage) ([]string, error) {
 	var parsed struct {
 		Command []string `json:"command"`
@@ -303,6 +311,7 @@ func parseCommandInput(input json.RawMessage) ([]string, error) {
 	if len(parsed.Command) > maxArgvElements {
 		return nil, fmt.Errorf("command has %d elements, maximum is %d", len(parsed.Command), maxArgvElements)
 	}
+	totalBytes := 0
 	for i, arg := range parsed.Command {
 		if arg == "" {
 			return nil, fmt.Errorf("argument %d is empty", i)
@@ -313,6 +322,10 @@ func parseCommandInput(input json.RawMessage) ([]string, error) {
 		if strings.ContainsRune(arg, '\x00') {
 			return nil, fmt.Errorf("argument %d contains null byte", i)
 		}
+		totalBytes += len(arg)
+	}
+	if totalBytes > maxTotalArgBytes {
+		return nil, fmt.Errorf("command total size %d bytes exceeds maximum of %d bytes", totalBytes, maxTotalArgBytes)
 	}
 	return parsed.Command, nil
 }

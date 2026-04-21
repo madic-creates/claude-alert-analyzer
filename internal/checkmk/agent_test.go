@@ -616,21 +616,42 @@ func TestParseCommandInput_ArgTooLong(t *testing.T) {
 }
 
 // TestParseCommandInput_ExactLimitsAccepted verifies that inputs right at the
-// limits (not over) are accepted without error.
+// per-element limits (not over) are accepted without error, provided the total
+// byte count also stays within maxTotalArgBytes.
 func TestParseCommandInput_ExactLimitsAccepted(t *testing.T) {
-	// Exactly maxArgvElements elements, each exactly maxArgLen bytes.
-	args := make([]string, maxArgvElements)
-	for i := range args {
-		if i == 0 {
-			args[i] = "cat" // first element is the command name
-		} else {
-			args[i] = strings.Repeat("A", maxArgLen)
-		}
-	}
+	// Two elements: command name + one argument at the per-element ceiling.
+	// Total bytes = len("cat") + maxArgLen = 3 + 4096 = 4099, well under
+	// maxTotalArgBytes, so both limits are satisfied simultaneously.
+	args := []string{"cat", strings.Repeat("A", maxArgLen)}
 	data, _ := json.Marshal(map[string]any{"command": args})
 	_, err := parseCommandInput(json.RawMessage(data))
 	if err != nil {
-		t.Fatalf("unexpected error for input at exact limits: %v", err)
+		t.Fatalf("unexpected error for input at exact per-element limits: %v", err)
+	}
+}
+
+// TestParseCommandInput_TotalSizeTooLarge verifies that a command whose
+// individual arguments each satisfy per-element limits but whose combined size
+// exceeds maxTotalArgBytes is rejected. This closes the gap where an adversary
+// (or hallucinating model) could pass maxArgvElements * maxArgLen = 256 KB in a
+// single call, causing shellQuote to allocate a large string.
+func TestParseCommandInput_TotalSizeTooLarge(t *testing.T) {
+	// Build a command whose total byte count just exceeds maxTotalArgBytes.
+	// Each individual argument is well under maxArgLen; the violation is the sum.
+	argSize := 1024
+	numArgs := (maxTotalArgBytes / argSize) + 1 // just enough to push over the limit
+	args := make([]string, numArgs+1)
+	args[0] = "cat"
+	for i := 1; i <= numArgs; i++ {
+		args[i] = strings.Repeat("A", argSize)
+	}
+	data, _ := json.Marshal(map[string]any{"command": args})
+	_, err := parseCommandInput(json.RawMessage(data))
+	if err == nil {
+		t.Fatalf("expected error for command with total size > %d bytes", maxTotalArgBytes)
+	}
+	if !strings.Contains(err.Error(), "total size") {
+		t.Errorf("error should mention total size, got: %v", err)
 	}
 }
 
