@@ -824,3 +824,29 @@ func TestRunToolLoop_SummaryAPIErrorInBody(t *testing.T) {
 		t.Errorf("error should include the API error type, got: %v", err)
 	}
 }
+
+// TestAnalyze_ParseResponseError verifies that when the Claude API returns a
+// 200 OK but with a non-JSON body (e.g. a CDN maintenance page, a load-balancer
+// error page, or a half-written response), Analyze propagates a clear
+// "parse response" error rather than silently returning empty output. Without
+// this the caller would receive ("", nil) and the pipeline would fire a
+// failure notification saying "Analysis produced empty result" with no hint
+// that the API returned garbage — making the failure much harder to diagnose.
+func TestAnalyze_ParseResponseError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		// Simulate a CDN or proxy returning an HTML maintenance page instead of JSON.
+		fmt.Fprint(w, `<!DOCTYPE html><html><body>Service Unavailable</body></html>`)
+	}))
+	defer srv.Close()
+
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
+	_, err := client.Analyze(context.Background(), "sys", "user")
+	if err == nil {
+		t.Fatal("expected error when API returns non-JSON body, got nil")
+	}
+	if !strings.Contains(err.Error(), "parse response") {
+		t.Errorf("error should mention 'parse response', got: %v", err)
+	}
+}
