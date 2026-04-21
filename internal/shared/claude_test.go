@@ -929,6 +929,72 @@ func TestSendRequest_ErrorCounterIncrementedOnNon200Response(t *testing.T) {
 	}
 }
 
+// TestSendRequest_MarshalFailure verifies that sendRequest returns a clear
+// "marshal request" error when the request body cannot be marshalled to JSON.
+// This protects future callers that may pass non-serialisable types (channels,
+// functions, etc.) from receiving a confusing HTTP error or a silent failure.
+func TestSendRequest_MarshalFailure(t *testing.T) {
+	client := &ClaudeClient{
+		HTTP:    http.DefaultClient,
+		BaseURL: "http://127.0.0.1:1", // unreachable — should never be dialled
+		APIKey:  "test-key",
+		Model:   "test",
+	}
+	// Channels are not JSON-serialisable and cause json.Marshal to return an error.
+	_, err := client.sendRequest(context.Background(), make(chan int))
+	if err == nil {
+		t.Fatal("expected error for unmarshalable body, got nil")
+	}
+	if !strings.Contains(err.Error(), "marshal request") {
+		t.Errorf("expected 'marshal request' in error, got: %v", err)
+	}
+}
+
+// TestRunToolLoop_SummaryParseFailure verifies that when max rounds are
+// exhausted and the forced-summary response is a 200 OK with a non-JSON body
+// (e.g. a proxy returning an HTML error page), RunToolLoop returns a clear
+// "summary parse" error rather than silently returning empty output. This
+// makes it obvious at the call site that the summary request failed at the
+// JSON parsing stage rather than appearing as an unexplained empty analysis.
+func TestRunToolLoop_SummaryParseFailure(t *testing.T) {
+	var callCount atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+
+		if call == 1 {
+			// Round 1 (only round, maxRounds=1): request a tool call.
+			fmt.Fprint(w, `{
+				"content": [
+					{"type": "tool_use", "id": "toolu_1", "name": "execute_command", "input": {"command": ["uptime"]}}
+				],
+				"stop_reason": "tool_use",
+				"usage": {"input_tokens": 50, "output_tokens": 10}
+			}`)
+		} else {
+			// Call 2 = forced summary. Return 200 OK but with non-JSON body
+			// (simulating a CDN maintenance page or a load-balancer error page).
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<!DOCTYPE html><body>Service Unavailable</body>`)
+		}
+	}))
+	defer srv.Close()
+
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
+	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+
+	_, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
+		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil })
+
+	if err == nil {
+		t.Fatal("expected error when summary response is not valid JSON, got nil")
+	}
+	if !strings.Contains(err.Error(), "summary parse") {
+		t.Errorf("error should mention 'summary parse', got: %v", err)
+	}
+}
+
 // TestSendRequest_ErrorCounterIncrementedOnHTTPFailure verifies that the
 // errorCounter is incremented exactly once when HTTP.Do fails (e.g. network
 // error or cancelled context). Without this, claude_api_errors_total would
