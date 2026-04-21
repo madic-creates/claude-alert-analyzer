@@ -434,3 +434,65 @@ func TestValidateAndDescribeHost_APIRequestFails(t *testing.T) {
 		t.Errorf("expected 'CheckMK API request' in error, got: %v", err)
 	}
 }
+
+// hijackDropConn is a helper that writes a valid HTTP/1.1 200 header with a
+// Content-Length larger than the body actually sent, then closes the connection.
+// The client's io.ReadAll will receive an unexpected EOF mid-body, exercising
+// the "read response" error paths in ValidateAndDescribeHost and GetHostServices.
+func hijackDropConn(t *testing.T, w http.ResponseWriter) {
+	t.Helper()
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		t.Error("responsewriter does not support hijacking")
+		http.Error(w, "no hijack", http.StatusInternalServerError)
+		return
+	}
+	conn, bufrw, err := hj.Hijack()
+	if err != nil {
+		t.Errorf("hijack: %v", err)
+		return
+	}
+	// Promise 10 000 bytes but only deliver one byte before closing so that
+	// io.ReadAll on the client side gets an unexpected EOF.
+	_, _ = bufrw.WriteString("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10000\r\n\r\n{")
+	_ = bufrw.Flush()
+	_ = conn.Close()
+}
+
+// TestValidateAndDescribeHost_ReadBodyError verifies that ValidateAndDescribeHost
+// returns a "read response: ..." error when the server sends a valid 200 header
+// but then drops the TCP connection before delivering the body. This covers the
+// io.ReadAll failure path at context.go:131-133, which represents a real
+// production scenario (e.g. a load-balancer reset mid-stream).
+func TestValidateAndDescribeHost_ReadBodyError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hijackDropConn(t, w)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "auto", Secret: "secret"}
+	_, err := apiClient.ValidateAndDescribeHost(context.Background(), "host1", "1.2.3.4")
+	if err == nil {
+		t.Fatal("expected error when server drops connection mid-response, got nil")
+	}
+	if !strings.Contains(err.Error(), "read response") {
+		t.Errorf("error should mention 'read response', got: %v", err)
+	}
+}
+
+// TestGetHostServices_ReadBodyError verifies that GetHostServices returns the
+// "(failed to read response)" sentinel when the server sends a valid 200 header
+// but then drops the TCP connection before delivering the body. This covers the
+// io.ReadAll failure path at context.go:182-184.
+func TestGetHostServices_ReadBodyError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hijackDropConn(t, w)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "auto", Secret: "secret"}
+	result := apiClient.GetHostServices(context.Background(), "host1")
+	if result != "(failed to read response)" {
+		t.Errorf("expected '(failed to read response)', got: %s", result)
+	}
+}
