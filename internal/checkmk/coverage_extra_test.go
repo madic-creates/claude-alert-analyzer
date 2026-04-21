@@ -385,3 +385,50 @@ type errorReader struct{}
 func (e *errorReader) Read(_ []byte) (int, error) {
 	return 0, fmt.Errorf("simulated read failure")
 }
+
+// TestValidateAndDescribeHost_RequestCreateError verifies that
+// ValidateAndDescribeHost returns a "create request: ..." error when
+// http.NewRequestWithContext fails due to a null byte in the APIClient base URL.
+// This is the ValidateAndDescribeHost analogue of
+// TestGetHostServices_RequestCreateError. The error path at context.go:119
+// was previously uncovered — all existing tests use a valid c.URL and exercise
+// only the post-request branches.
+func TestValidateAndDescribeHost_RequestCreateError(t *testing.T) {
+	// A null byte in the base URL makes NewRequestWithContext fail even when
+	// the hostname itself passes the isValidHostname guard.
+	apiClient := &APIClient{
+		HTTP:   http.DefaultClient,
+		URL:    "http://host\x00invalid/api/",
+		User:   "auto",
+		Secret: "secret",
+	}
+	_, err := apiClient.ValidateAndDescribeHost(context.Background(), "host1", "1.2.3.4")
+	if err == nil {
+		t.Fatal("expected error for invalid base URL, got nil")
+	}
+	if !strings.Contains(err.Error(), "create request") {
+		t.Errorf("expected 'create request' in error, got: %v", err)
+	}
+}
+
+// TestValidateAndDescribeHost_APIRequestFails verifies that
+// ValidateAndDescribeHost returns a "CheckMK API request: ..." error when the
+// HTTP Do call fails at the TCP level (e.g. the server is unreachable). This
+// is the ValidateAndDescribeHost analogue of TestGetHostServices_APIRequestFails.
+// The error path at context.go:126 was previously uncovered.
+func TestValidateAndDescribeHost_APIRequestFails(t *testing.T) {
+	// Port 1 is almost always closed, so the request will fail at the TCP level.
+	apiClient := &APIClient{
+		HTTP:   &http.Client{},
+		URL:    "http://127.0.0.1:1/api/",
+		User:   "auto",
+		Secret: "secret",
+	}
+	_, err := apiClient.ValidateAndDescribeHost(context.Background(), "host1", "1.2.3.4")
+	if err == nil {
+		t.Fatal("expected error for unreachable server, got nil")
+	}
+	if !strings.Contains(err.Error(), "CheckMK API request") {
+		t.Errorf("expected 'CheckMK API request' in error, got: %v", err)
+	}
+}
