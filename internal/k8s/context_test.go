@@ -456,13 +456,50 @@ func TestGetPodStatus_LimitBoundedOutput(t *testing.T) {
 
 	pods := getPodStatus(context.Background(), cs, "busy")
 
+	// The last line is the truncation marker; exclude it when counting pod lines.
+	if !strings.Contains(pods, "more may exist") {
+		t.Error("expected truncation marker when pod count reaches API limit")
+	}
 	lines := strings.Split(strings.TrimRight(pods, "\n"), "\n")
-	if len(lines) > maxPods {
-		t.Errorf("getPodStatus returned %d lines, want at most %d (maxPods); unbounded List risks OOM on large namespaces",
-			len(lines), maxPods)
+	// maxPods pod lines + 1 truncation marker line.
+	if len(lines) > maxPods+1 {
+		t.Errorf("getPodStatus returned %d lines, want at most %d (maxPods+marker); unbounded List risks OOM on large namespaces",
+			len(lines), maxPods+1)
 	}
 	if pods == "(no pods)" {
 		t.Error("expected pod entries in output, got no-pods sentinel")
+	}
+}
+
+// TestGetPodStatus_NoTruncationMarkerWhenUnderLimit verifies that the truncation
+// marker is NOT appended when the namespace has fewer pods than maxPods, so
+// Claude is not given a misleading "more may exist" note for small namespaces.
+func TestGetPodStatus_NoTruncationMarkerWhenUnderLimit(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	// Return fewer pods than the limit.
+	items := make([]corev1.Pod, maxPods-1)
+	for i := range items {
+		items[i] = corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("pod-%03d", i),
+				Namespace: "small",
+			},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		}
+	}
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.PodList{Items: items}, nil
+	})
+
+	pods := getPodStatus(context.Background(), cs, "small")
+
+	if strings.Contains(pods, "more may exist") {
+		t.Errorf("unexpected truncation marker for namespace with fewer than maxPods pods: %q", pods)
+	}
+	lines := strings.Split(strings.TrimRight(pods, "\n"), "\n")
+	if len(lines) != maxPods-1 {
+		t.Errorf("expected %d pod lines, got %d", maxPods-1, len(lines))
 	}
 }
 

@@ -250,6 +250,12 @@ func getPodStatus(ctx context.Context, clientset kubernetes.Interface, namespace
 	if len(lines) == 0 {
 		return "(no pods)"
 	}
+	// When the API returned exactly maxPods pods, the server-side Limit was
+	// reached and more pods may exist. Append a note so Claude knows the list
+	// may be incomplete — mirroring the truncation marker used by GetHostServices.
+	if len(lines) >= maxPods {
+		lines = append(lines, fmt.Sprintf("... [%d pods shown; more may exist — API limit reached]", len(lines)))
+	}
 	return strings.Join(lines, "\n")
 }
 
