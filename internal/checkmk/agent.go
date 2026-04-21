@@ -129,6 +129,16 @@ var DefaultDeniedCommands = map[string]bool{
 	// arbitrary address types (TCP, UDP, Unix sockets, files, PTYs) and is
 	// commonly used to spawn fully interactive reverse shells.
 	"curl": true, "wget": true, "nc": true, "ncat": true, "netcat": true, "socat": true,
+	// SSH and file-transfer clients: ssh can connect to arbitrary remote hosts,
+	// enabling lateral movement or exfiltration of gathered diagnostic data to
+	// an attacker-controlled server. scp/sftp transfer files over SSH in either
+	// direction. rsync synchronises file trees over SSH or rsync protocol and can
+	// push data to a remote host. ftp/lftp open plaintext sessions to arbitrary
+	// servers. All are blocked because a hallucinating or adversarially-prompted
+	// model could use them to exfiltrate /etc/shadow, SSH private keys, or other
+	// secrets collected during the diagnostic session. Diagnostic SSH access is
+	// provided through the controlled Dialer — direct ssh spawning is not needed.
+	"ssh": true, "scp": true, "sftp": true, "rsync": true, "ftp": true, "lftp": true,
 	// install copies files like cp but also sets ownership and permissions,
 	// making it trivially easy to plant a setuid binary or overwrite system files.
 	"install": true,
