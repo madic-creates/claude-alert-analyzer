@@ -1093,6 +1093,84 @@ func TestGetEvents_SortsByRecencyDescending(t *testing.T) {
 	}
 }
 
+// TestGetEvents_EventTimeFallback verifies that getEvents uses EventTime (MicroTime)
+// when LastTimestamp is zero. Kubernetes 1.14+ populates EventTime as the canonical
+// field and may leave LastTimestamp unset; without the fallback those events would
+// sort to the bottom of the list (behind genuinely old events) and their timestamp
+// would render as an empty string in the Claude prompt.
+func TestGetEvents_EventTimeFallback(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	now := time.Now().UTC()
+	// Three events:
+	//   A: has only LastTimestamp (older event style), set 2h ago
+	//   B: has only EventTime (newer event style, Kubernetes 1.14+), set 1h ago — most recent
+	//   C: has both fields; LastTimestamp should take priority
+	cs.PrependReactor("list", "events", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		items := []corev1.Event{
+			{
+				ObjectMeta:    metav1.ObjectMeta{Name: "evt-A", Namespace: "default"},
+				Type:          corev1.EventTypeWarning,
+				Reason:        "OldStyle",
+				LastTimestamp: metav1.Time{Time: now.Add(-2 * time.Hour)},
+				Message:       "old-style-event",
+				InvolvedObject: corev1.ObjectReference{Name: "pod-A"},
+			},
+			{
+				ObjectMeta:    metav1.ObjectMeta{Name: "evt-B", Namespace: "default"},
+				Type:          corev1.EventTypeWarning,
+				Reason:        "NewStyle",
+				EventTime:     metav1.MicroTime{Time: now.Add(-1 * time.Hour)},
+				Message:       "new-style-event",
+				InvolvedObject: corev1.ObjectReference{Name: "pod-B"},
+			},
+			{
+				ObjectMeta:    metav1.ObjectMeta{Name: "evt-C", Namespace: "default"},
+				Type:          corev1.EventTypeWarning,
+				Reason:        "Both",
+				LastTimestamp: metav1.Time{Time: now.Add(-30 * time.Minute)},
+				EventTime:     metav1.MicroTime{Time: now.Add(-3 * time.Hour)}, // older; must be ignored
+				Message:       "both-fields-event",
+				InvolvedObject: corev1.ObjectReference{Name: "pod-C"},
+			},
+		}
+		return true, &corev1.EventList{Items: items}, nil
+	})
+
+	result := getEvents(context.Background(), cs, "default")
+
+	// All three events must appear.
+	for _, msg := range []string{"old-style-event", "new-style-event", "both-fields-event"} {
+		if !strings.Contains(result, msg) {
+			t.Errorf("missing event %q in output:\n%s", msg, result)
+		}
+	}
+
+	// evt-B (EventTime only, 1h ago) must sort above evt-A (LastTimestamp, 2h ago):
+	// the line for evt-B must appear before the line for evt-A.
+	posB := strings.Index(result, "new-style-event")
+	posA := strings.Index(result, "old-style-event")
+	if posB >= posA {
+		t.Errorf("expected new-style-event (EventTime only) before old-style-event, got:\n%s", result)
+	}
+
+	// evt-C must sort first (LastTimestamp 30m ago, most recent of the three).
+	posC := strings.Index(result, "both-fields-event")
+	if posC >= posB {
+		t.Errorf("expected both-fields-event (most recent) first, got:\n%s", result)
+	}
+
+	// evt-B's line must contain a non-empty timestamp string (RFC3339 formatted).
+	lines := strings.Split(strings.TrimRight(result, "\n"), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "new-style-event") {
+			if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "Warning") {
+				t.Errorf("EventTime-only event has empty timestamp in output line: %q", line)
+			}
+		}
+	}
+}
+
 // TestQuery_MetricLabelsAreSorted verifies that when a Prometheus result contains
 // multiple metric labels they are emitted in alphabetical order, making the Claude
 // analysis context deterministic across runs.

@@ -175,9 +175,20 @@ func getEvents(ctx context.Context, clientset kubernetes.Interface, namespace st
 		return fmt.Sprintf("(failed: %v)", err)
 	}
 	items := eventList.Items
-	// Sort descending by LastTimestamp so the most recent events come first.
+	// eventTime returns the best available timestamp for an event. Kubernetes
+	// 1.14+ populates EventTime (MicroTime) as the canonical field and may
+	// leave LastTimestamp zero; older events only set LastTimestamp. Using
+	// EventTime as a fallback ensures newer-style events are sorted correctly
+	// and their timestamps are displayed rather than shown as an empty string.
+	eventTime := func(e corev1.Event) time.Time {
+		if !e.LastTimestamp.Time.IsZero() {
+			return e.LastTimestamp.Time
+		}
+		return e.EventTime.Time
+	}
+	// Sort descending by recency so the most recent events come first.
 	sort.Slice(items, func(i, j int) bool {
-		return items[i].LastTimestamp.After(items[j].LastTimestamp.Time)
+		return eventTime(items[i]).After(eventTime(items[j]))
 	})
 	if len(items) > maxEvents {
 		items = items[:maxEvents]
@@ -185,8 +196,8 @@ func getEvents(ctx context.Context, clientset kubernetes.Interface, namespace st
 	var lines []string
 	for _, e := range items {
 		ts := ""
-		if !e.LastTimestamp.Time.IsZero() {
-			ts = e.LastTimestamp.Format(time.RFC3339)
+		if t := eventTime(e); !t.IsZero() {
+			ts = t.UTC().Format(time.RFC3339)
 		}
 		lines = append(lines, fmt.Sprintf("%s %s %s %s: %s",
 			ts, e.Type, e.Reason, e.InvolvedObject.Name, e.Message))
