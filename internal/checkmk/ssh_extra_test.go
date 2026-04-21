@@ -68,6 +68,7 @@ func TestNewSSHDialer_ValidKeyAndKnownHosts(t *testing.T) {
 	}
 	if d == nil {
 		t.Fatal("NewSSHDialer returned nil dialer")
+		return
 	}
 	if d.user != "monitor" {
 		t.Errorf("user = %q, want %q", d.user, "monitor")
