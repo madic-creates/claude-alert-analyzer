@@ -18,9 +18,11 @@ import (
 // Dialer opens SSH connections to remote hosts.
 // Dial connects to the host by dialing ip directly (preventing DNS hijacking)
 // while presenting hostname to the known_hosts callback so that hostname-keyed
-// entries in the known_hosts file continue to match.
+// entries in the known_hosts file continue to match. The context controls
+// cancellation of the TCP dial, so a shutdown or deadline propagates cleanly
+// instead of blocking for the full TCP connect timeout.
 type Dialer interface {
-	Dial(hostname, ip string) (*ssh.Client, error)
+	Dial(ctx context.Context, hostname, ip string) (*ssh.Client, error)
 }
 
 // SSHDialer caches the parsed SSH key and known_hosts callback.
@@ -51,17 +53,24 @@ func NewSSHDialer(cfg Config) (*SSHDialer, error) {
 // known_hosts callback. This ensures the TCP connection goes to the
 // CheckMK-verified IP address (preventing DNS hijacking) while still
 // allowing known_hosts entries that are keyed by hostname to match.
-func (d *SSHDialer) Dial(hostname, ip string) (*ssh.Client, error) {
+// The ctx is forwarded to net.DialContext so that a cancelled context
+// (e.g. during graceful shutdown) terminates the TCP dial immediately
+// instead of blocking for the full connect timeout.
+func (d *SSHDialer) Dial(ctx context.Context, hostname, ip string) (*ssh.Client, error) {
+	const dialTimeout = 10 * time.Second
 	sshCfg := &ssh.ClientConfig{
 		User:            d.user,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(d.signer)},
 		HostKeyCallback: d.hostKeyCallback,
-		Timeout:         10 * time.Second,
+		Timeout:         dialTimeout,
 	}
 	// Establish the TCP connection directly to the verified IP so that no
-	// DNS resolution can redirect us to a different host.
+	// DNS resolution can redirect us to a different host. DialContext is
+	// used instead of DialTimeout so that a cancelled context terminates
+	// the dial immediately rather than waiting for the full timeout.
 	ipAddr := net.JoinHostPort(ip, "22")
-	conn, err := net.DialTimeout("tcp", ipAddr, sshCfg.Timeout)
+	nd := &net.Dialer{Timeout: dialTimeout}
+	conn, err := nd.DialContext(ctx, "tcp", ipAddr)
 	if err != nil {
 		return nil, fmt.Errorf("TCP dial %s: %w", ipAddr, err)
 	}

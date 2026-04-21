@@ -123,7 +123,7 @@ func TestSSHDialer_Dial_HandshakeFailure(t *testing.T) {
 
 	// Dial("localhost", "127.0.0.1") will connect to 127.0.0.1:22 where the
 	// server immediately closes the connection, triggering the handshake error.
-	_, dialErr := d.Dial("localhost", "127.0.0.1")
+	_, dialErr := d.Dial(context.Background(), "localhost", "127.0.0.1")
 	if dialErr == nil {
 		t.Fatal("expected SSH handshake error, got nil")
 	}
@@ -195,7 +195,7 @@ func TestSSHDialer_Dial_HappyPath(t *testing.T) {
 		hostKeyCallback: ssh.FixedHostKey(hostPubKey),
 	}
 
-	client, dialErr := d.Dial("localhost", "127.0.0.1")
+	client, dialErr := d.Dial(context.Background(), "localhost", "127.0.0.1")
 	if dialErr != nil {
 		t.Fatalf("Dial returned unexpected error: %v", dialErr)
 	}

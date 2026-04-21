@@ -352,7 +352,7 @@ func RunAgenticDiagnostics(
 
 	slog.Info("starting agentic SSH diagnostics", "hostname", hostname, "verifiedIP", verifiedIP, "maxRounds", maxRounds, "deniedCommands", len(denied))
 
-	sshClient, err := dialer.Dial(hostname, verifiedIP)
+	sshClient, err := dialer.Dial(ctx, hostname, verifiedIP)
 	if err != nil {
 		return "", fmt.Errorf("SSH connection failed: %w", err)
 	}

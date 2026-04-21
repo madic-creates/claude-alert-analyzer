@@ -107,7 +107,7 @@ type mockDialer struct {
 	dialedIP       string
 }
 
-func (d *mockDialer) Dial(hostname, ip string) (*ssh.Client, error) {
+func (d *mockDialer) Dial(_ context.Context, hostname, ip string) (*ssh.Client, error) {
 	d.dialedHostname = hostname
 	d.dialedIP = ip
 	return nil, fmt.Errorf("mock dial error")

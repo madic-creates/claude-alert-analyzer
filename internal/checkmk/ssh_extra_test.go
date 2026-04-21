@@ -2,6 +2,7 @@ package checkmk
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
@@ -176,9 +177,30 @@ func TestSSHDialer_Dial_RefusedConnection(t *testing.T) {
 	// net.JoinHostPort. Port 22 is almost certainly not listening in a test
 	// sandbox; even if it were, the remote host key would not match the dummy
 	// key stored in known_hosts, so the SSH handshake would still fail.
-	_, err = d.Dial("closedhost", "127.0.0.1")
+	_, err = d.Dial(context.Background(), "closedhost", "127.0.0.1")
 	if err == nil {
 		t.Fatal("expected error when dialing an unreachable host")
+	}
+}
+
+// TestSSHDialer_Dial_ContextCancelled verifies that SSHDialer.Dial returns an
+// error immediately when the supplied context is already cancelled. Before this
+// fix, Dial used net.DialTimeout which has no cancellation path; a cancelled
+// worker context during graceful shutdown would block for the full 10-second
+// TCP connect timeout before returning. With net.DialContext the dial unblocks
+// as soon as the context is done.
+func TestSSHDialer_Dial_ContextCancelled(t *testing.T) {
+	d, err := buildTestDialer(t)
+	if err != nil {
+		t.Fatalf("buildTestDialer: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel before dialing.
+
+	_, err = d.Dial(ctx, "somehost", "127.0.0.1")
+	if err == nil {
+		t.Fatal("expected error for already-cancelled context, got nil")
 	}
 }
 

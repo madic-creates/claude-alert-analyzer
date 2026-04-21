@@ -51,7 +51,7 @@ type fixedDialer struct {
 	err    error
 }
 
-func (d *fixedDialer) Dial(_, _ string) (*ssh.Client, error) {
+func (d *fixedDialer) Dial(_ context.Context, _, _ string) (*ssh.Client, error) {
 	return d.client, d.err
 }
 
