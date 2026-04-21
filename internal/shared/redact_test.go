@@ -128,6 +128,49 @@ func TestRedactSecrets_RedisURL(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_RedisURLWithIP verifies that a password-only Redis URL
+// (empty username) pointing at an IP address is redacted. The DB URL pattern
+// previously used [^:\s/]+ (one-or-more chars before the colon), so an empty
+// username bypassed it. The email-fallback pattern cannot rescue this case
+// because IP addresses have no letter-only TLD. The bug only surfaced in
+// production when Redis was configured without a username (common in Redis <
+// 6.0 where only a password was supported) and the connection string pointed
+// at a private IP address rather than a DNS hostname.
+func TestRedactSecrets_RedisURLWithIPAndEmptyUser(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "empty username with IPv4 host",
+			input: "REDIS_URL=redis://:s3cr3t@192.168.1.100:6379/0",
+			leak:  "s3cr3t",
+		},
+		{
+			name:  "empty username with hostname",
+			input: "cache: redis://:p%40ssword@redis.internal:6379/1",
+			leak:  "p%40ssword",
+		},
+		{
+			name:  "amqp empty user with IP",
+			input: "amqp://:rabbit_secret@10.0.0.5:5672/vhost",
+			leak:  "rabbit_secret",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("credential leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output: %s", result)
+			}
+		})
+	}
+}
+
 func TestRedactSecrets_MongoDBURL(t *testing.T) {
 	input := "uri: mongodb+srv://admin:p%40ss@cluster0.example.net/mydb"
 	result := RedactSecrets(input)

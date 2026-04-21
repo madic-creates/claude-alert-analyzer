@@ -50,8 +50,13 @@ var sensitivePatterns = []sensitivePattern{
 	// DB connection strings must come before the generic email pattern, because
 	// the user:pass@host portion of a URL would otherwise be partially consumed
 	// by the email regex (matching pass@host), leaving the username unredacted.
+	// The username group uses * (zero-or-more) instead of + (one-or-more) so
+	// that password-only URLs (e.g. redis://:secret@host) are also redacted.
+	// Redis commonly uses an empty username with a password-only auth string,
+	// and when the host is an IP address the email-fallback pattern cannot save
+	// the secret because it requires a letter-only TLD.
 	{
-		re:          regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://[^:\s/]+:[^@\s]+@\S+`),
+		re:          regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://[^:\s/]*:[^@\s]+@\S+`),
 		replacement: "[REDACTED]",
 	},
 	{
