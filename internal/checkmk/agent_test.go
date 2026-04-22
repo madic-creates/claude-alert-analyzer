@@ -758,6 +758,38 @@ func TestParseCommandInput_NullByteRejected(t *testing.T) {
 	}
 }
 
+// TestParseCommandInput_NewlineRejected verifies that arguments containing
+// newline or carriage-return characters are rejected. A leading newline in an
+// argument like "\n-i" shifts byte positions and can bypass the denylist
+// checks for sed -i / --in-place that inspect arg[:2] or compare full strings.
+// Carriage returns are equally invalid in shell arguments and are blocked for
+// the same reason.
+func TestParseCommandInput_NewlineRejected(t *testing.T) {
+	cases := []struct {
+		name  string
+		input []string
+	}{
+		{"LF in command name", []string{"sed\n", "s/x/y/", "file"}},
+		{"LF at start of argument", []string{"sed", "\n-i", "s/x/y/", "file"}},
+		{"LF bypassing --in-place check", []string{"sed", "\n--in-place", "s/x/y/", "file"}},
+		{"LF embedded in argument", []string{"cat", "/etc/pass\nwd"}},
+		{"CR in argument", []string{"cat", "/etc/passwd\r"}},
+		{"CRLF in argument", []string{"ls", "-la\r\n"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, _ := json.Marshal(map[string]any{"command": tc.input})
+			_, err := parseCommandInput(json.RawMessage(data))
+			if err == nil {
+				t.Errorf("expected error for command with newline: %v", tc.input)
+			}
+			if err != nil && !strings.Contains(err.Error(), "newline") {
+				t.Errorf("error should mention newline, got: %v", err)
+			}
+		})
+	}
+}
+
 func TestIsDenied_SystemctlFlagsBeforeSubcommand(t *testing.T) {
 	// Flags like --no-pager or --user before the subcommand are common in
 	// practice (Claude naturally adds --no-pager to suppress paging).

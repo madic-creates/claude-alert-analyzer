@@ -326,6 +326,9 @@ func parseCommandInput(input json.RawMessage) ([]string, error) {
 		if strings.ContainsRune(arg, '\x00') {
 			return nil, fmt.Errorf("argument %d contains null byte", i)
 		}
+		if strings.ContainsRune(arg, '\n') || strings.ContainsRune(arg, '\r') {
+			return nil, fmt.Errorf("argument %d contains newline", i)
+		}
 		totalBytes += len(arg)
 	}
 	if totalBytes > maxTotalArgBytes {
