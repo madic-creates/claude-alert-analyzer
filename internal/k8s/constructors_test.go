@@ -15,6 +15,7 @@ func TestNewPrometheusClient_FieldFromURL(t *testing.T) {
 	p := NewPrometheusClient(promURL)
 	if p == nil {
 		t.Fatal("NewPrometheusClient returned nil")
+		return
 	}
 	if p.URL != promURL {
 		t.Errorf("URL = %q, want %q", p.URL, promURL)

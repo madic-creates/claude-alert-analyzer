@@ -17,6 +17,7 @@ func TestNewClaudeClient_FieldsFromConfig(t *testing.T) {
 	c := NewClaudeClient(cfg)
 	if c == nil {
 		t.Fatal("NewClaudeClient returned nil")
+		return
 	}
 	if c.BaseURL != cfg.APIBaseURL {
 		t.Errorf("BaseURL = %q, want %q", c.BaseURL, cfg.APIBaseURL)
@@ -48,6 +49,7 @@ func TestNewNtfyPublisher_FieldsFromArgs(t *testing.T) {
 	p := NewNtfyPublisher("https://ntfy.example.com", "alerts", "my-token")
 	if p == nil {
 		t.Fatal("NewNtfyPublisher returned nil")
+		return
 	}
 	if p.URL != "https://ntfy.example.com" {
 		t.Errorf("URL = %q, want %q", p.URL, "https://ntfy.example.com")
