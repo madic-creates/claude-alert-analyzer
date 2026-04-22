@@ -179,6 +179,53 @@ func TestRedactSecrets_MongoDBURL(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_TLSSchemeVariants verifies that TLS variants of connection
+// URL schemes (amqps://, rediss://) are redacted like their non-TLS counterparts.
+// amqps is the standard TLS scheme for RabbitMQ/AMQP 0-9-1 and is commonly
+// found in Kubernetes secret mounts and pod environment variables. rediss is
+// the TLS scheme used by several Go Redis clients (e.g. go-redis, redigo with
+// TLS URL helpers). Before this fix only the bare amqp:// and redis:// schemes
+// were matched; the TLS variants would leak credentials into Claude prompts.
+func TestRedactSecrets_TLSSchemeVariants(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "amqps with credentials",
+			input: "AMQP_URL=amqps://user:tls_password@rabbit.internal:5671/vhost",
+			leak:  "tls_password",
+		},
+		{
+			name:  "amqps empty username with IP",
+			input: "amqps://:rabbit_tls_secret@10.0.0.5:5671/vhost",
+			leak:  "rabbit_tls_secret",
+		},
+		{
+			name:  "rediss with credentials",
+			input: "REDIS_URL=rediss://default:tls_secret@redis.internal:6380/0",
+			leak:  "tls_secret",
+		},
+		{
+			name:  "rediss empty username with IP",
+			input: "cache: rediss://:rediss_pass@192.168.1.100:6380/0",
+			leak:  "rediss_pass",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("credential leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output: %s", result)
+			}
+		})
+	}
+}
+
 func TestRedactSecrets_EmailAddress(t *testing.T) {
 	cases := []struct {
 		name  string

@@ -69,7 +69,7 @@ var sensitivePatterns = []sensitivePattern{
 	// and when the host is an IP address the email-fallback pattern cannot save
 	// the secret because it requires a letter-only TLD.
 	{
-		re:          regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://[^:\s/]*:[^@\s]+@\S+`),
+		re:          regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?)://[^:\s/]*:[^@\s]+@\S+`),
 		replacement: "[REDACTED]",
 	},
 	{
