@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // TestRunToolLoop_RoundParseError verifies that when the Claude API returns a
@@ -258,5 +260,88 @@ func TestNtfyPublisher_Publish_CreateRequestError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "create request") {
 		t.Errorf("error should mention 'create request', got: %v", err)
+	}
+}
+
+// TestServer_Enqueue_WhenStopped verifies that Enqueue returns false and does
+// not increment AlertsQueued when the server has entered its stopped state
+// (i.e. after graceful shutdown has begun and the queue has been closed).
+// Without this guard, a caller racing with shutdown would panic with "send on
+// closed channel". This covers the previously-untested `if s.stopped` branch
+// in Enqueue (server.go) which is the sole protection against that panic.
+func TestServer_Enqueue_WhenStopped(t *testing.T) {
+	metrics := new(AlertMetrics)
+	srv := NewServer(ServerConfig{
+		Port:         "0",
+		WorkerCount:  1,
+		QueueSize:    5,
+		DrainTimeout: time.Second,
+	}, metrics, func(ctx context.Context, alert AlertPayload) {})
+
+	// Directly set stopped to simulate the post-shutdown state reached inside
+	// Run. Because server_test.go is in package shared (same package), we can
+	// access the unexported field directly — no production API is needed.
+	srv.mu.Lock()
+	srv.stopped = true
+	srv.mu.Unlock()
+
+	if srv.Enqueue(AlertPayload{Fingerprint: "after-shutdown"}) {
+		t.Fatal("Enqueue should return false when server is stopped")
+	}
+	if metrics.AlertsQueued.Load() != 0 {
+		t.Errorf("AlertsQueued = %d, want 0 (must not increment when stopped)", metrics.AlertsQueued.Load())
+	}
+}
+
+// TestServer_Run_DrainTimeout verifies that when workers do not finish within
+// DrainTimeout, Run cancels the worker context and waits for them to stop
+// before returning. This exercises the `case <-drainTimer.C` branch in Run
+// (server.go) which was previously untested. Without this path, a hung worker
+// would prevent graceful shutdown from completing indefinitely.
+func TestServer_Run_DrainTimeout(t *testing.T) {
+	var contextCancelled atomic.Bool
+	metrics := new(AlertMetrics)
+
+	srv := NewServer(ServerConfig{
+		Port:         "0",
+		MetricsPort:  "0",
+		WorkerCount:  1,
+		QueueSize:    5,
+		DrainTimeout: 150 * time.Millisecond,
+	}, metrics, func(ctx context.Context, alert AlertPayload) {
+		// Block until the worker context is cancelled by the drain timer.
+		<-ctx.Done()
+		contextCancelled.Store(true)
+	})
+
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		srv.Run(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+	}()
+
+	// Wait for Run to reach <-ctx.Done() (the signal-notify context).
+	time.Sleep(50 * time.Millisecond)
+
+	// Enqueue an alert so the worker starts blocking before shutdown is triggered.
+	srv.Enqueue(AlertPayload{Fingerprint: "slow-worker"})
+	// Let the worker goroutine pick up the alert and enter the blocking process func.
+	time.Sleep(50 * time.Millisecond)
+
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatalf("send SIGTERM: %v", err)
+	}
+
+	select {
+	case <-runDone:
+		// Run returned — drain timeout fired, context was cancelled, workers stopped.
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return within 10 seconds after drain timeout")
+	}
+
+	if !contextCancelled.Load() {
+		t.Error("worker context was not cancelled during drain timeout")
 	}
 }
