@@ -1,6 +1,6 @@
 # Claude Alert Analyzer
 
-<a href="url"><img src="docs/screenshot01.png" alt="Analyzer Result" height="400" align="left" hspace="20"></a>
+<a href="docs/screenshot01.png"><img src="docs/screenshot01.png" alt="Analyzer Result" height="400" align="left" hspace="20"></a>
 
 LLM-powered root-cause analysis for monitoring alerts. Incoming alerts from Alertmanager (Kubernetes) or CheckMK trigger automated diagnostic collection, which is sent to Claude for analysis. The resulting root-cause assessment is delivered to operators via [ntfy](https://ntfy.sh).
 
