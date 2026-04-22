@@ -452,7 +452,7 @@ func TestRunToolLoop_ToolHandlerError(t *testing.T) {
 				"usage": {"input_tokens": 20, "output_tokens": 10}
 			}`)
 		} else {
-			// Second call receives the tool_result with the error message
+			// Second call receives the tool_result with the error message and is_error flag
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Errorf("failed to decode request body: %v", err)
@@ -465,6 +465,9 @@ func TestRunToolLoop_ToolHandlerError(t *testing.T) {
 			gotContent, _ := toolResult["content"].(string)
 			if !strings.HasPrefix(gotContent, "error:") {
 				t.Errorf("tool result content should start with 'error:', got: %q", gotContent)
+			}
+			if toolResult["is_error"] != true {
+				t.Errorf("tool result should have is_error=true when handleTool returns an error, got: %v", toolResult["is_error"])
 			}
 
 			fmt.Fprint(w, `{

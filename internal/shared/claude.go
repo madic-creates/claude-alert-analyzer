@@ -208,14 +208,17 @@ func (c *ClaudeClient) RunToolLoop(
 
 			slog.Info("tool call", "round", round+1, "tool", block.Name, "id", block.ID)
 			output, err := handleTool(block.Name, block.Input)
+			var isError bool
 			if err != nil {
 				output = fmt.Sprintf("error: %v", err)
+				isError = true
 			}
 
 			toolResults = append(toolResults, ContentBlock{
 				Type:      "tool_result",
 				ToolUseID: block.ID,
 				Content:   output,
+				IsError:   isError,
 			})
 		}
 
