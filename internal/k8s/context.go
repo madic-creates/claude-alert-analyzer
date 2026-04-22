@@ -378,6 +378,11 @@ func GatherContext(ctx context.Context, prom *PrometheusClient, clientset kubern
 
 	promCh := make(chan string, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				promCh <- fmt.Sprintf("(prometheus context gathering panicked: %v)", r)
+			}
+		}()
 		promCh <- prom.GetMetrics(promCtx, alert)
 	}()
 

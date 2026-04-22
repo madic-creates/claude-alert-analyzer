@@ -934,6 +934,52 @@ func TestGatherContext_CancelledContext(t *testing.T) {
 	}
 }
 
+// panicTransport is an http.RoundTripper that panics on every request.
+// It is used to verify that GatherContext recovers from a panicking Prometheus
+// goroutine and returns a safe error sentinel rather than deadlocking.
+type panicTransport struct{}
+
+func (panicTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	panic("simulated prometheus transport panic")
+}
+
+// TestGatherContext_PrometheusPanic verifies that a panic inside the Prometheus
+// goroutine is recovered and the result channel receives an error sentinel,
+// preventing a deadlock on <-promCh.
+func TestGatherContext_PrometheusPanic(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	alert := makeAlertWithLabels(map[string]string{"alertname": "Test", "namespace": "ns"})
+	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+
+	prom := &PrometheusClient{
+		HTTP: &http.Client{Transport: panicTransport{}},
+		URL:  "http://127.0.0.1:9999",
+	}
+
+	done := make(chan struct{})
+	var actx shared.AnalysisContext
+	go func() {
+		actx = GatherContext(context.Background(), prom, cs, alert, cfg)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// success: did not deadlock
+	case <-time.After(5 * time.Second):
+		t.Fatal("GatherContext deadlocked after Prometheus goroutine panic")
+	}
+
+	if len(actx.Sections) != 4 {
+		t.Fatalf("expected 4 sections, got %d", len(actx.Sections))
+		return
+	}
+	promContent := actx.Sections[0].Content
+	if !strings.Contains(promContent, "panicked") {
+		t.Errorf("expected panic sentinel in Prometheus section, got: %q", promContent)
+	}
+}
+
 // TestGetKubeContext_RespectsDeadlineFromConfig verifies that GetKubeContext derives
 // a child context with a deadline bounded by cfg.KubeAPITimeout. The test passes an
 // already-cancelled parent context and confirms that all three output strings carry
