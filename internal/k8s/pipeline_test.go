@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 type mockAnalyzer struct {
@@ -150,6 +151,41 @@ func TestProcessAlert_PublishFails(t *testing.T) {
 	// Cooldown must be cleared so the next webhook can re-trigger analysis.
 	if !cooldown.CheckAndSet("fp1", 300*1e9) {
 		t.Error("cooldown not cleared after publish failure")
+	}
+}
+
+// TestProcessAlert_PublishFails_RecordsPrometheusCounter verifies that when
+// PublishAll returns an error and Prom is non-nil, the ntfy_publish_errors_total
+// Prometheus counter is incremented. The existing TestProcessAlert_PublishFails
+// uses new(shared.AlertMetrics) (Prom == nil) so RecordNtfyPublishError is a
+// no-op there; this test exercises the non-nil path.
+func TestProcessAlert_PublishFails_RecordsPrometheusCounter(t *testing.T) {
+	pub := &mockPublisher{err: fmt.Errorf("ntfy unavailable")}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+
+	deps := PipelineDeps{
+		Analyzer:     &mockAnalyzer{result: "some analysis"},
+		Publishers:   []shared.Publisher{pub},
+		Cooldown:     shared.NewCooldownManager(),
+		Metrics:      metrics,
+		SystemPrompt: "test",
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "fp-prom",
+		Title:       "DiskFull",
+		Severity:    "critical",
+		Source:      "k8s",
+		Fields:      map[string]string{},
+	}
+	ProcessAlert(context.Background(), deps, alert)
+
+	got := testutil.ToFloat64(metrics.Prom.NtfyPublishErrors.WithLabelValues("k8s"))
+	if got != 1 {
+		t.Errorf("ntfy_publish_errors_total{source=\"k8s\"} = %v, want 1", got)
 	}
 }
 
