@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestNtfyPublisher_Publish_Success(t *testing.T) {
@@ -100,6 +101,39 @@ func TestNtfyPublisher_Publish_TruncatesLongTitle(t *testing.T) {
 	}
 	if !strings.HasSuffix(gotTitle, "...") {
 		t.Errorf("expected truncated title to end with '...', got: %q", gotTitle[max(0, len(gotTitle)-10):])
+	}
+}
+
+// TestNtfyPublisher_Publish_TruncatesLongTitleUTF8 verifies that title
+// truncation preserves valid UTF-8 when a multi-byte character straddles the
+// cut boundary. cutAt = maxNtfyTitleBytes - 3 = 247; if the first byte of a
+// 4-byte emoji lands at position 244, a naive title[:247] would include 3
+// bytes of an incomplete sequence. strings.ToValidUTF8 must strip those bytes
+// so the transmitted header is valid UTF-8 and within maxNtfyTitleBytes.
+func TestNtfyPublisher_Publish_TruncatesLongTitleUTF8(t *testing.T) {
+	var gotTitle string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTitle = r.Header.Get("Title")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	p := &NtfyPublisher{HTTP: srv.Client(), URL: srv.URL, Topic: "alerts"}
+	// Place a 4-byte emoji at byte 244 so that the cut point (247) falls
+	// inside the emoji, forcing the UTF-8 boundary trimming to kick in.
+	emoji := "🔥" // 4 bytes: 0xF0 0x9F 0x94 0xA5
+	title := strings.Repeat("x", 244) + emoji + strings.Repeat("y", 50)
+	if err := p.Publish(context.Background(), title, "default", "body"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(gotTitle) > maxNtfyTitleBytes {
+		t.Errorf("title not truncated: sent %d bytes, want <= %d", len(gotTitle), maxNtfyTitleBytes)
+	}
+	if !utf8.ValidString(gotTitle) {
+		t.Errorf("truncated title is not valid UTF-8: %q", gotTitle)
+	}
+	if !strings.HasSuffix(gotTitle, "...") {
+		t.Errorf("expected truncated title to end with '...', got: %q", gotTitle)
 	}
 }
 
