@@ -26,6 +26,19 @@ var sensitivePatterns = []sensitivePattern{
 		re:          regexp.MustCompile(`(?i)(^|[^a-zA-Z])(authorization)\s*:\s*(?:basic|bearer)\s+\S+`),
 		replacement: "${1}[REDACTED]",
 	},
+	// JSON-style double-quoted key-value pairs: "password": "value". Monitoring
+	// output and API error responses are often JSON-formatted, where the key is
+	// wrapped in double quotes and separated from the string value by ": ".
+	// The generic keyword=value pattern below cannot match this form because the
+	// closing quote after the key name is not whitespace and breaks the \s*[=:]
+	// match. Group 1 captures the keyword so the key name can be preserved in
+	// the replacement; group 2 captures the separator so its whitespace is
+	// preserved too. Must run before the generic pattern to avoid the generic
+	// pattern partially consuming the closing key-quote.
+	{
+		re:          regexp.MustCompile(`(?i)"(password|passwd|secret|token|key|authorization|bearer)"(\s*:\s*)"[^"]*"`),
+		replacement: `"${1}"${2}"[REDACTED]"`,
+	},
 	// Keyword=value pairs: require the keyword not to be immediately preceded by
 	// a letter so that words ending in a keyword suffix (e.g. "monkey", "donkey",
 	// "hockey" which all end in "key") are not partially redacted. The leading

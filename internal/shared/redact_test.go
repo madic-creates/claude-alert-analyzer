@@ -218,6 +218,60 @@ func TestRedactSecrets_EmailNoFalsePositive_IPv4(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_JSONKeyValue verifies that JSON-formatted secrets with
+// double-quoted keys and string values are redacted. The generic keyword=value
+// pattern cannot match this form because the closing double quote after the
+// key name breaks the \s*[=:] match, so a dedicated pattern is required.
+func TestRedactSecrets_JSONKeyValue(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "password value",
+			input: `{"password": "s3cr3t123"}`,
+			leak:  "s3cr3t123",
+		},
+		{
+			name:  "token no spaces",
+			input: `{"token":"api-token-xyz"}`,
+			leak:  "api-token-xyz",
+		},
+		{
+			name:  "secret in nested context",
+			input: `error: {"code": 401, "secret": "hunter2", "msg": "unauthorized"}`,
+			leak:  "hunter2",
+		},
+		{
+			name:  "key with spaces around colon",
+			input: `{"key" : "my-api-key-value"}`,
+			leak:  "my-api-key-value",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("secret leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
+// TestRedactSecrets_JSONKeyValueNoFalsePositive verifies that JSON keys not in
+// the sensitive keyword list are left untouched.
+func TestRedactSecrets_JSONKeyValueNoFalsePositive(t *testing.T) {
+	input := `{"status": "running", "count": "42", "host": "db.internal"}`
+	result := RedactSecrets(input)
+	if result != input {
+		t.Errorf("false positive: %q was modified to %q", input, result)
+	}
+}
+
 func TestRedactSecrets_NoFalsePositive(t *testing.T) {
 	input := "CPU load is 4.5 at 12:00"
 	result := RedactSecrets(input)
