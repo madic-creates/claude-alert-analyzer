@@ -126,4 +126,3 @@ type ToolResponse struct {
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
 }
-

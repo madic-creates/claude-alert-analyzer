@@ -108,4 +108,3 @@ func Truncate(s string, maxBytes int) string {
 	trimmed := strings.ToValidUTF8(s[:cutAt], "")
 	return trimmed + truncationMarker
 }
-

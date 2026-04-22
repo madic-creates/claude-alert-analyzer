@@ -5,6 +5,9 @@
   extends: [
     'config:recommended',
   ],
+  'pre-commit': {
+    enabled: true,
+  },
   assignees: [
     'madic-creates',
   ],
