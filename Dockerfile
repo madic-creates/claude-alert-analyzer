@@ -17,7 +17,7 @@ EXPOSE 8080
 ENTRYPOINT ["/k8s-analyzer"]
 
 # CheckMK analyzer: Alpine (needs openssh-client)
-FROM alpine:3.21 AS checkmk-analyzer
+FROM alpine:3.23 AS checkmk-analyzer
 RUN apk add --no-cache ca-certificates openssh-client && rm -rf /var/cache/apk/*
 COPY --from=builder /checkmk-analyzer /checkmk-analyzer
 USER 65534:65534
