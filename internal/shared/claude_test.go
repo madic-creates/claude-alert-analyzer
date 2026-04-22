@@ -230,6 +230,32 @@ func TestAnalyze_OpenRouterAuthHeader(t *testing.T) {
 	}
 }
 
+// TestIsAnthropicURL verifies that the helper correctly distinguishes genuine
+// Anthropic API URLs from URLs that merely contain "anthropic.com" as a
+// substring (which the old strings.Contains check would have misidentified).
+func TestIsAnthropicURL(t *testing.T) {
+	cases := []struct {
+		rawURL string
+		want   bool
+	}{
+		{"https://api.anthropic.com/v1/messages", true},
+		{"https://anthropic.com/v1/messages", true},
+		{"https://ANTHROPIC.COM/v1/messages", true},       // case-insensitive
+		{"https://api.anthropic.com:443/v1/messages", true}, // explicit port
+		{"https://anthropic.com.proxy.example.com", false},  // subdomain-prefix false positive
+		{"https://notanthropic.com/v1/messages", false},
+		{"http://localhost:8080", false},
+		{"https://openrouter.ai/api/v1/chat/completions", false},
+		{"not-a-url", false}, // parse error → false
+	}
+	for _, tc := range cases {
+		got := isAnthropicURL(tc.rawURL)
+		if got != tc.want {
+			t.Errorf("isAnthropicURL(%q) = %v, want %v", tc.rawURL, got, tc.want)
+		}
+	}
+}
+
 func TestAnalyze_ContextCancellation(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Never responds — context should cancel the request.
