@@ -496,6 +496,41 @@ func TestIsDenied_EmptyCommand(t *testing.T) {
 	}
 }
 
+// TestIsDenied_WhitespaceInArgv0 verifies that leading or trailing whitespace
+// in argv[0] cannot bypass the denylist. A hallucinating or adversarially-
+// prompted model might generate [" rm", "-rf", "/"] and without the TrimSpace
+// normalization, filepath.Base(" rm") → " rm" which does not match "rm" in
+// the denied map, so the command would be silently allowed.
+func TestIsDenied_WhitespaceInArgv0(t *testing.T) {
+	denied := [][]string{
+		{" rm", "-rf", "/"},      // leading space on a map-blocked command
+		{"rm ", "-rf", "/"},      // trailing space
+		{" rm ", "-rf", "/"},     // both sides
+		{" sed", "-i", "s/x/y/", "/etc/hosts"}, // leading space + sed in-place
+		{"sed ", "-i", "s/x/y/", "/etc/hosts"}, // trailing space + sed in-place
+		{" systemctl", "restart", "nginx"},      // leading space + destructive systemctl
+		{" find", "/", "-exec", "rm", "{}", ";"}, // leading space + find -exec
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected denied for argv[0] with whitespace: %v", argv)
+		}
+	}
+
+	// Non-destructive commands with whitespace in argv[0] must still be allowed.
+	allowed := [][]string{
+		{" df", "-h"},                             // leading space on allowed command
+		{" sed", "-n", "p"},                       // leading space, non-destructive sed
+		{" systemctl", "status", "nginx"},         // leading space, read-only systemctl
+		{" find", "/var/log", "-name", "*.log"},   // leading space, safe find
+	}
+	for _, argv := range allowed {
+		if isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected allowed for argv[0] with whitespace: %v", argv)
+		}
+	}
+}
+
 func TestIsDenied_EmptyDenylist(t *testing.T) {
 	empty := map[string]bool{}
 	// With empty denylist, everything is allowed (except empty commands)

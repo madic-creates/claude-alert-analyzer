@@ -219,8 +219,10 @@ func isDenied(denied map[string]bool, argv []string) bool {
 	}
 
 	// Normalize to base name so absolute paths (/bin/rm) and relative paths
-	// (./rm) are checked the same as bare names (rm).
-	cmd := filepath.Base(argv[0])
+	// (./rm) are checked the same as bare names (rm). Trim surrounding
+	// whitespace so that a model-generated argv[0] like " sed" or "rm "
+	// cannot bypass the denylist by making the name not match any entry.
+	cmd := strings.TrimSpace(filepath.Base(argv[0]))
 
 	// Special case: systemctl with read-only subcommands is allowed.
 	// Flags (e.g. --no-pager, --user) may appear before the subcommand,
