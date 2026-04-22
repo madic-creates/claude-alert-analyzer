@@ -111,9 +111,10 @@ var DefaultDeniedCommands = map[string]bool{
 	"env": true, "xargs": true,
 	// awk is a scripting language present on every Linux host; it can bypass
 	// the denylist via system("rm -rf /"), write files with print >"file",
-	// or pipe to denied commands with print | "cmd". gawk/mawk are common
+	// or pipe to denied commands with print | "cmd". gawk/mawk/nawk are common
 	// alternative implementations that must be denied for the same reason.
-	"awk": true, "gawk": true, "mawk": true,
+	// nawk ("one true awk") is the default on Alpine Linux and BSD systems.
+	"awk": true, "gawk": true, "mawk": true, "nawk": true,
 	// busybox is a multi-call binary that exposes almost every Unix utility
 	// (including sh, rm, wget, nc) under a single executable. Running
 	// "busybox rm -rf /" or "busybox sh -c '...'" completely bypasses the

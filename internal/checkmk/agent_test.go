@@ -869,17 +869,22 @@ func TestRunAgenticDiagnostics_SystemPromptContainsMaxRounds(t *testing.T) {
 }
 
 // TestIsDenied_BlocksAwkInterpreter verifies that awk (and its common variants
-// gawk, mawk) are denied by DefaultDeniedCommands. Like perl/python, awk is a
-// scripting language that can bypass the command denylist via system("rm -rf /"),
-// write files with print >"file", or pipe to denied commands with print|"cmd".
+// gawk, mawk, nawk) are denied by DefaultDeniedCommands. Like perl/python, awk
+// is a scripting language that can bypass the command denylist via
+// system("rm -rf /"), write files with print >"file", or pipe to denied
+// commands with print|"cmd". nawk ("one true awk") is the default on Alpine
+// Linux and BSD systems and must be denied alongside the other awk variants.
 func TestIsDenied_BlocksAwkInterpreter(t *testing.T) {
 	denied := [][]string{
 		{"awk", "BEGIN { system(\"rm -rf /\") }"},
 		{"awk", "-F:", "{print $1}", "/etc/passwd"},
 		{"gawk", "BEGIN { system(\"reboot\") }"},
 		{"mawk", "BEGIN { print \"evil\" > \"/etc/cron.d/backdoor\" }"},
+		{"nawk", "BEGIN { system(\"shutdown now\") }"},
+		{"nawk", "BEGIN { print \"x\" | \"rm -rf /\" }"},
 		{"/usr/bin/awk", "BEGIN { system(\"shutdown now\") }"},
 		{"/usr/bin/gawk", "BEGIN { print \"x\" | \"crontab -\" }"},
+		{"/usr/bin/nawk", "BEGIN { system(\"dd if=/dev/zero of=/dev/sda\") }"},
 	}
 	for _, argv := range denied {
 		if !isDenied(DefaultDeniedCommands, argv) {
