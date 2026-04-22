@@ -20,6 +20,11 @@ type ServerConfig struct {
 	WorkerCount  int
 	QueueSize    int
 	DrainTimeout time.Duration
+	// ShutdownTimeout is the maximum time allowed for graceful HTTP server
+	// shutdown before active connections are abandoned and an error is logged.
+	// Defaults to 30 seconds if zero. Tune this down in environments with tight
+	// termination grace periods (e.g. Kubernetes SIGTERM → SIGKILL windows).
+	ShutdownTimeout time.Duration
 	// Source is the analyzer source label used for Prometheus metrics (e.g. "k8s", "checkmk").
 	Source string
 }
@@ -163,7 +168,11 @@ func (s *Server) Run(webhookHandler http.HandlerFunc) {
 
 	<-ctx.Done()
 	slog.Info("shutting down...")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	shutdownTimeout := s.cfg.ShutdownTimeout
+	if shutdownTimeout == 0 {
+		shutdownTimeout = 30 * time.Second
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	// Shut down both servers concurrently so each gets the full 30-second
 	// budget. Sequential shutdown would give the metrics server whatever time

@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -345,3 +349,123 @@ func TestServer_Run_DrainTimeout(t *testing.T) {
 		t.Error("worker context was not cancelled during drain timeout")
 	}
 }
+
+// TestServer_Run_ShutdownError verifies that when the HTTP server shutdown
+// context expires before all active connections drain, Run logs
+// "HTTP server shutdown error" via slog.Error and still returns cleanly.
+// This covers the previously-untested slog.Error branches inside the two
+// concurrent server.Shutdown goroutines in Run (server.go).
+func TestServer_Run_ShutdownError(t *testing.T) {
+	// Capture slog.Error calls so we can assert the shutdown error was logged.
+	var captured []string
+	var capMu sync.Mutex
+	capHandler := &shutdownErrCapture{mu: &capMu, msgs: &captured}
+	old := slog.Default()
+	slog.SetDefault(slog.New(capHandler))
+	defer slog.SetDefault(old)
+
+	// Grab a free local port. There is a small TOCTOU window, but it is
+	// acceptable in tests: the OS does not immediately reuse recently-freed ports.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("could not bind test port: %v", err)
+	}
+	port := strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
+	_ = l.Close()
+
+	// unblock keeps the webhook handler alive so the connection stays active
+	// during server shutdown, forcing the 5ms ShutdownTimeout to expire.
+	unblock := make(chan struct{})
+	defer close(unblock) // clean up the handler goroutine after the test
+
+	srv := NewServer(ServerConfig{
+		Port:            port,
+		MetricsPort:     "0",
+		WorkerCount:     1,
+		QueueSize:       5,
+		DrainTimeout:    time.Second,
+		ShutdownTimeout: 5 * time.Millisecond, // expire instantly to force shutdown error
+	}, new(AlertMetrics), func(ctx context.Context, alert AlertPayload) {})
+
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		srv.Run(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Block until signalled so the connection stays active during shutdown.
+			<-unblock
+			w.WriteHeader(http.StatusOK)
+		}))
+	}()
+
+	// Wait for the server to be ready to accept connections.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err2 := http.Get("http://127.0.0.1:" + port + "/health")
+		if err2 == nil {
+			resp.Body.Close()
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Make a POST that will hold the connection open inside the blocking handler.
+	go func() {
+		req, _ := http.NewRequestWithContext(context.Background(), "POST",
+			"http://127.0.0.1:"+port+"/webhook", strings.NewReader("{}"))
+		http.DefaultClient.Do(req) //nolint:errcheck
+	}()
+	// Allow the request to reach the handler before triggering shutdown.
+	time.Sleep(30 * time.Millisecond)
+
+	// Trigger graceful shutdown. With ShutdownTimeout=5ms and an active
+	// connection, server.Shutdown() will return context.DeadlineExceeded and
+	// slog.Error("HTTP server shutdown error") will be logged.
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatalf("send SIGTERM: %v", err)
+	}
+
+	select {
+	case <-runDone:
+		// Run returned — shutdown completed despite the active connection.
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return within 10 seconds after SIGTERM")
+	}
+
+	capMu.Lock()
+	errs := make([]string, len(captured))
+	copy(errs, captured)
+	capMu.Unlock()
+
+	found := false
+	for _, msg := range errs {
+		if strings.Contains(msg, "shutdown") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected slog.Error mentioning 'shutdown', got messages: %v", errs)
+	}
+}
+
+// shutdownErrCapture is a slog.Handler that captures the messages of all
+// Error-level log records. It is used by TestServer_Run_ShutdownError to
+// verify that the shutdown error branches in Run are exercised.
+type shutdownErrCapture struct {
+	mu   *sync.Mutex
+	msgs *[]string
+}
+
+func (h *shutdownErrCapture) Enabled(_ context.Context, level slog.Level) bool {
+	return level >= slog.LevelError
+}
+
+func (h *shutdownErrCapture) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	*h.msgs = append(*h.msgs, r.Message)
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *shutdownErrCapture) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *shutdownErrCapture) WithGroup(_ string) slog.Handler      { return h }
