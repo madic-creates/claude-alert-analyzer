@@ -30,6 +30,8 @@ type Server struct {
 	metrics *AlertMetrics
 	process func(ctx context.Context, alert AlertPayload)
 	queue   chan AlertPayload
+	mu      sync.Mutex // protects stopped and queue close
+	stopped bool
 }
 
 // NewServer creates a Server. Call Enqueue to add alerts, Run to start.
@@ -43,8 +45,13 @@ func NewServer(cfg ServerConfig, metrics *AlertMetrics, process func(ctx context
 }
 
 // Enqueue attempts to place an alert on the work queue.
-// Returns false if the queue is full.
+// Returns false if the queue is full or the server is shutting down.
 func (s *Server) Enqueue(alert AlertPayload) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return false
+	}
 	select {
 	case s.queue <- alert:
 		s.metrics.AlertsQueued.Add(1)
@@ -178,7 +185,10 @@ func (s *Server) Run(webhookHandler http.HandlerFunc) {
 	}()
 	shutdownWg.Wait()
 
+	s.mu.Lock()
+	s.stopped = true
 	close(s.queue)
+	s.mu.Unlock()
 
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
