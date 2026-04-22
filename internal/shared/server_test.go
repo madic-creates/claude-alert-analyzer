@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -191,6 +192,56 @@ func (h *stackCaptureHandler) Handle(_ context.Context, r slog.Record) error {
 
 func (h *stackCaptureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 func (h *stackCaptureHandler) WithGroup(_ string) slog.Handler      { return h }
+
+// TestServer_Run_GracefulShutdown verifies that Run starts HTTP servers, drains
+// the alert queue on SIGTERM, and returns cleanly. Alerts enqueued before the
+// signal fires must be fully processed: the worker drain loop runs until the
+// queue is empty before Run returns.
+func TestServer_Run_GracefulShutdown(t *testing.T) {
+	var processed atomic.Int64
+	metrics := new(AlertMetrics)
+
+	srv := NewServer(ServerConfig{
+		Port:         "0", // OS assigns any free port
+		MetricsPort:  "0", // OS assigns any free port
+		WorkerCount:  1,
+		QueueSize:    5,
+		DrainTimeout: 3 * time.Second,
+	}, metrics, func(ctx context.Context, alert AlertPayload) {
+		processed.Add(1)
+	})
+
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		srv.Run(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+	}()
+
+	// Give Run time to call signal.NotifyContext and reach <-ctx.Done().
+	time.Sleep(50 * time.Millisecond)
+
+	// Enqueue an alert; after SIGTERM the queue is drained before Run returns.
+	srv.Enqueue(AlertPayload{Fingerprint: "run-drain-fp"})
+
+	// Trigger graceful shutdown via SIGTERM. signal.NotifyContext captures this
+	// signal, cancelling the context; the default termination handler is not invoked.
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatalf("send SIGTERM: %v", err)
+	}
+
+	select {
+	case <-runDone:
+		// Run returned — graceful shutdown and queue drain completed.
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return within 10 seconds of SIGTERM")
+	}
+
+	if processed.Load() != 1 {
+		t.Errorf("processed = %d after graceful shutdown, want 1", processed.Load())
+	}
+}
 
 func TestServer_BuildMux_WebhookCountsMetric(t *testing.T) {
 	metrics := new(AlertMetrics)
