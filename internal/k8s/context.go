@@ -27,10 +27,14 @@ type PrometheusClient struct {
 }
 
 // NewPrometheusClient creates a client with default 10s timeout.
-func NewPrometheusClient(url string) *PrometheusClient {
+// The URL is normalised to never end with "/" so that path concatenation
+// (e.g. url+"/api/v1/query") produces a valid URL regardless of whether the
+// operator included a trailing slash in PROMETHEUS_URL. This is the mirror of
+// NewAPIClient which always adds a trailing slash; here we always remove one.
+func NewPrometheusClient(rawURL string) *PrometheusClient {
 	return &PrometheusClient{
 		HTTP: &http.Client{Timeout: 10 * time.Second},
-		URL:  url,
+		URL:  strings.TrimRight(rawURL, "/"),
 	}
 }
 

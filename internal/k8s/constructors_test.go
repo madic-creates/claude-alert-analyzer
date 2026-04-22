@@ -44,6 +44,28 @@ func TestNewPrometheusClient_HTTPClientIsNotDefault(t *testing.T) {
 	}
 }
 
+// TestNewPrometheusClient_StripsTrailingSlash verifies that a URL configured
+// with a trailing slash is normalised so that query paths don't gain a double
+// slash (e.g. "http://host:9090//api/v1/query"). This mirrors NewAPIClient's
+// opposite normalisation, which always ensures the URL ends with "/".
+func TestNewPrometheusClient_StripsTrailingSlash(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"http://prometheus:9090/", "http://prometheus:9090"},
+		{"http://prometheus:9090//", "http://prometheus:9090"},
+		{"http://prometheus:9090", "http://prometheus:9090"},
+		{"http://prometheus:9090/prefix/", "http://prometheus:9090/prefix"},
+	}
+	for _, tc := range cases {
+		p := NewPrometheusClient(tc.input)
+		if p.URL != tc.want {
+			t.Errorf("NewPrometheusClient(%q).URL = %q, want %q", tc.input, p.URL, tc.want)
+		}
+	}
+}
+
 // TestConfig_BaseConfig verifies that the k8s Config.BaseConfig() method
 // correctly projects the shared configuration fields.
 func TestK8sConfig_BaseConfig(t *testing.T) {
