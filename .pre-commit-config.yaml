@@ -36,3 +36,9 @@ repos:
         language: system
         types: [go]
         pass_filenames: false
+      - id: go-test
+        name: go test
+        entry: bash -c 'GOMODCACHE=/tmp/gomodcache go test ./...'
+        language: system
+        types: [go]
+        pass_filenames: false
