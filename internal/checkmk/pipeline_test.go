@@ -37,6 +37,15 @@ func (p *panicAnalyzer) Analyze(_ context.Context, _, _ string) (string, error) 
 	panic("simulated analysis panic")
 }
 
+// panicToolRunner implements shared.ToolLoopRunner with a panic so that tests
+// can verify the deferred recovery in ProcessAlert fires on the SSH agentic path.
+type panicToolRunner struct{}
+
+func (p *panicToolRunner) RunToolLoop(_ context.Context, _, _ string,
+	_ []shared.Tool, _ int, _ func(string, json.RawMessage) (string, error)) (string, error) {
+	panic("simulated tool-loop panic")
+}
+
 type publishCall struct {
 	title    string
 	priority string
@@ -624,6 +633,54 @@ func TestProcessAlert_SSH_ValidationError_FallsBackToStatic(t *testing.T) {
 	// SSH diagnostics were skipped, so Claude has full context.
 	if !strings.Contains(analyzer.capturedUserPrompt, "SSH diagnostics unavailable") {
 		t.Errorf("alert context missing SSH-unavailable note; got:\n%s", analyzer.capturedUserPrompt)
+	}
+}
+
+// TestProcessAlert_SSH_PanicClearsCooldown verifies that the deferred panic
+// recovery in ProcessAlert fires even when the panic originates inside the SSH
+// agentic path (RunAgenticDiagnostics → RunToolLoop), not just the static
+// analysis path. The cooldown must be cleared so the next webhook can retry.
+func TestProcessAlert_SSH_PanicClearsCooldown(t *testing.T) {
+	pub := &mockPublisher{}
+	cooldown := shared.NewCooldownManager()
+	metrics := new(shared.AlertMetrics)
+
+	deps := PipelineDeps{
+		Analyzer:   &mockAnalyzer{result: "fallback"},
+		ToolRunner: &panicToolRunner{},
+		Publishers: []shared.Publisher{pub},
+		Cooldown:   cooldown,
+		Metrics:    metrics,
+		SSHEnabled: true,
+		SSHConfig:  Config{MaxAgentRounds: 3, SSHDeniedCommands: DefaultDeniedCommands},
+		// SSHDialer is nil — RunAgenticDiagnostics panics before dialing.
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		ValidateHost: func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
+			return &HostInfo{VerifiedIP: "10.0.0.1"}, nil
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "ssh-panic-fp",
+		Title:       "Test",
+		Severity:    "warning",
+		Fields:      map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+	}
+
+	// ProcessAlert re-panics after clearing cooldown; recover here so the test doesn't fail.
+	func() {
+		defer func() { recover() }()
+		ProcessAlert(context.Background(), deps, alert)
+	}()
+
+	// Cooldown must be cleared so the next webhook can re-trigger analysis.
+	if !cooldown.CheckAndSet("ssh-panic-fp", 300*1e9) {
+		t.Error("cooldown not cleared after SSH-path panic")
+	}
+	if metrics.AlertsFailed.Load() != 1 {
+		t.Errorf("AlertsFailed = %d, want 1", metrics.AlertsFailed.Load())
 	}
 }
 
