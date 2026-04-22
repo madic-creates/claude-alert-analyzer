@@ -393,6 +393,9 @@ func TestValidateAndDescribeHost_RejectsInvalidHostname(t *testing.T) {
 		// 1 + 253 + 1 = 255 characters — two over the limit.
 		{"254 chars (over limit)", strings.Repeat("a", 254)},
 		{"255 chars (over limit)", strings.Repeat("a", 255)},
+		// Consecutive dots are invalid in DNS label boundaries.
+		{"consecutive dots", "host..example.com"},
+		{"leading double dot", "..host"},
 	}
 
 	for _, tt := range tests {

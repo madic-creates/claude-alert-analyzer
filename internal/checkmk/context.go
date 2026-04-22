@@ -46,6 +46,10 @@ func NewAPIClient(cfg Config) *APIClient {
 var validHostnameRe = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,251}[a-zA-Z0-9])?$`)
 
 func isValidHostname(hostname string) bool {
+	// Reject consecutive dots (invalid in DNS labels) before applying the regex.
+	if strings.Contains(hostname, "..") {
+		return false
+	}
 	return validHostnameRe.MatchString(hostname)
 }
 
