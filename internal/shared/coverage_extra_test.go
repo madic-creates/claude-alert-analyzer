@@ -469,3 +469,167 @@ func (h *shutdownErrCapture) Handle(_ context.Context, r slog.Record) error {
 
 func (h *shutdownErrCapture) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 func (h *shutdownErrCapture) WithGroup(_ string) slog.Handler      { return h }
+
+// TestServer_Run_MetricsShutdownError verifies that when the metrics server
+// cannot drain all active connections within ShutdownTimeout, Run logs
+// "metrics server shutdown error" and still returns cleanly. This covers the
+// previously-untested slog.Error branch inside the concurrent
+// metricsServer.Shutdown goroutine in Run (server.go).
+//
+// The test holds a raw TCP connection to the metrics server that has only sent
+// a partial HTTP request line. Go's net/http server marks the connection as
+// active as soon as it is accepted, so Server.Shutdown waits for it to drain.
+// With a 5 ms ShutdownTimeout the context expires before the ReadHeaderTimeout
+// fires, forcing Shutdown to return context.DeadlineExceeded and logging the
+// error we want to exercise.
+func TestServer_Run_MetricsShutdownError(t *testing.T) {
+	// Capture slog.Error calls so we can assert the metrics-shutdown error path.
+	var captured []string
+	var capMu sync.Mutex
+	capHandler := &shutdownErrCapture{mu: &capMu, msgs: &captured}
+	old := slog.Default()
+	slog.SetDefault(slog.New(capHandler))
+	defer slog.SetDefault(old)
+
+	// Grab free local ports for the main and metrics servers. There is a small
+	// TOCTOU window, but it matches the pattern already used in TestServer_Run_ShutdownError
+	// and is acceptable in tests: the OS does not immediately reuse freed ports.
+	l1, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("could not bind test port for main server: %v", err)
+	}
+	mainPort := strconv.Itoa(l1.Addr().(*net.TCPAddr).Port)
+	_ = l1.Close()
+
+	l2, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("could not bind test port for metrics server: %v", err)
+	}
+	metricsPort := strconv.Itoa(l2.Addr().(*net.TCPAddr).Port)
+	_ = l2.Close()
+
+	srv := NewServer(ServerConfig{
+		Port:            mainPort,
+		MetricsPort:     metricsPort,
+		WorkerCount:     1,
+		QueueSize:       5,
+		DrainTimeout:    time.Second,
+		ShutdownTimeout: 5 * time.Millisecond, // expire fast to force shutdown error
+	}, new(AlertMetrics), func(ctx context.Context, alert AlertPayload) {})
+
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		srv.Run(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	}()
+
+	// Wait for the metrics server to be ready.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err2 := http.Get("http://127.0.0.1:" + metricsPort + "/metrics")
+		if err2 == nil {
+			resp.Body.Close()
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Open a raw TCP connection to the metrics server and send only the first
+	// line of an HTTP request — the server goroutine will block waiting for the
+	// remaining headers, keeping the connection in an active (non-idle) state
+	// until the ReadHeaderTimeout fires (5 s). With ShutdownTimeout=5 ms, the
+	// shutdown context expires long before that, triggering the error path.
+	metricsConn, err := net.Dial("tcp", "127.0.0.1:"+metricsPort)
+	if err != nil {
+		t.Fatalf("failed to connect to metrics server: %v", err)
+	}
+	defer metricsConn.Close()
+	if _, err = metricsConn.Write([]byte("GET /metrics HTTP/1.1\r\n")); err != nil {
+		t.Fatalf("failed to write partial request: %v", err)
+	}
+	// Allow the server goroutine to accept the connection and start reading.
+	time.Sleep(30 * time.Millisecond)
+
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatalf("send SIGTERM: %v", err)
+	}
+
+	select {
+	case <-runDone:
+		// Run returned — shutdown completed despite the hanging metrics connection.
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return within 10 seconds after SIGTERM")
+	}
+
+	capMu.Lock()
+	errs := make([]string, len(captured))
+	copy(errs, captured)
+	capMu.Unlock()
+
+	found := false
+	for _, msg := range errs {
+		if strings.Contains(msg, "metrics server shutdown error") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected slog.Error mentioning 'metrics server shutdown error', got messages: %v", errs)
+	}
+}
+
+// TestServer_Run_DefaultMetricsPort verifies that when ServerConfig.MetricsPort
+// is empty Run falls back to port 9101. This covers the previously-untested
+// `metricsPort = "9101"` branch in Run (server.go). The test is skipped when
+// port 9101 is already in use so it does not flake in environments where the
+// port is occupied by another service.
+func TestServer_Run_DefaultMetricsPort(t *testing.T) {
+	// Check port availability before attempting to bind; skip rather than fail.
+	probe, err := net.Listen("tcp", "127.0.0.1:9101")
+	if err != nil {
+		t.Skipf("port 9101 not available, skipping default-metrics-port test: %v", err)
+	}
+	_ = probe.Close()
+
+	srv := NewServer(ServerConfig{
+		Port:            "0",    // OS-assigned main port
+		MetricsPort:     "",     // intentionally empty — exercises the "9101" default
+		WorkerCount:     1,
+		QueueSize:       5,
+		DrainTimeout:    time.Second,
+		ShutdownTimeout: 50 * time.Millisecond,
+	}, new(AlertMetrics), func(ctx context.Context, alert AlertPayload) {})
+
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		srv.Run(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	}()
+
+	// Verify the metrics server is reachable on the default port 9101.
+	deadline := time.Now().Add(2 * time.Second)
+	started := false
+	for time.Now().Before(deadline) {
+		resp, err2 := http.Get("http://127.0.0.1:9101/metrics")
+		if err2 == nil {
+			resp.Body.Close()
+			started = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !started {
+		t.Error("metrics server did not become reachable on default port 9101")
+	}
+
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatalf("send SIGTERM: %v", err)
+	}
+
+	select {
+	case <-runDone:
+		// Run returned cleanly — default metrics port path exercised.
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return within 10 seconds after SIGTERM")
+	}
+}
