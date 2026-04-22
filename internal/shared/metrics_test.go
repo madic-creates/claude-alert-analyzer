@@ -1,6 +1,7 @@
 package shared
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -275,6 +276,21 @@ func TestWithPrometheusMetrics_RecordsAPIErrors(t *testing.T) {
 
 	if !strings.Contains(body, `claude_api_errors_total{source="checkmk"} 1`) {
 		t.Errorf("expected claude_api_errors_total{source=\"checkmk\"} 1 in output, got:\n%s", body)
+	}
+}
+
+// TestBufferedResponseWriter_WriteHeader verifies that WriteHeader stores the
+// status code so that callers can inspect it after promhttp finishes writing.
+// In the normal success path promhttp never calls WriteHeader (it only calls
+// Write), so this method is exercised here directly to ensure the interface
+// contract is satisfied and the stored code is retrievable.
+func TestBufferedResponseWriter_WriteHeader(t *testing.T) {
+	var buf bytes.Buffer
+	brw := newBufferedResponseWriter(&buf)
+	brw.WriteHeader(http.StatusInternalServerError)
+	if brw.code != http.StatusInternalServerError {
+		t.Errorf("WriteHeader(%d) stored code %d, want %d",
+			http.StatusInternalServerError, brw.code, http.StatusInternalServerError)
 	}
 }
 
