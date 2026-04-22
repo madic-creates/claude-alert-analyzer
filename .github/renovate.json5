@@ -1,0 +1,51 @@
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  onboarding: false,
+  requireConfig: 'ignored',
+  extends: [
+    'config:recommended',
+  ],
+  assignees: [
+    'madic-creates',
+  ],
+  repositories: [
+    'madic-creates/claude-alert-analyzer',
+  ],
+  gitAuthor: 'Renovate Bot <bot@renovateapp.com>',
+  prConcurrentLimit: 0,
+  prHourlyLimit: 0,
+  platform: 'github',
+  automerge: true,
+  automergeType: 'branch',
+  ignoreTests: true,
+  major: {
+    automerge: false,
+  },
+  minor: {
+    automerge: true,
+  },
+  patch: {
+    automerge: true,
+  },
+  packageRules: [
+    {
+      // Keep k8s.io/* libraries on the same minor version — mixing them breaks the build.
+      matchManagers: [
+        'gomod',
+      ],
+      matchPackageNames: [
+        'k8s.io/api',
+        'k8s.io/apimachinery',
+        'k8s.io/client-go',
+      ],
+      groupName: 'k8s.io',
+    },
+  ],
+  minimumReleaseAge: '5 days',
+  // Apply the age check only when the datasource provides a release timestamp.
+  // Without this, Docker images that don't expose per-tag timestamps (e.g. many
+  // GHCR-hosted images) get stuck with pendingChecks=true and are filtered out
+  // by internalChecksFilter: 'strict', so no update PR is ever opened.
+  minimumReleaseAgeBehaviour: 'timestamp-optional',
+  internalChecksFilter: 'strict',
+}
