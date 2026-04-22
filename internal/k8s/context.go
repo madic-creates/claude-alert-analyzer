@@ -388,9 +388,16 @@ func GatherContext(ctx context.Context, prom *PrometheusClient, clientset kubern
 
 	events, podStatus, podLogs := GetKubeContext(ctx, clientset, alert, cfg)
 
+	var promMetrics string
+	select {
+	case promMetrics = <-promCh:
+	case <-promCtx.Done():
+		promMetrics = "(prometheus context gathering timed out)"
+	}
+
 	return shared.AnalysisContext{
 		Sections: []shared.ContextSection{
-			{Name: "Prometheus Metrics", Content: <-promCh},
+			{Name: "Prometheus Metrics", Content: promMetrics},
 			{Name: "Kubernetes Events", Content: events},
 			{Name: "Pod Status", Content: podStatus},
 			{Name: "Pod Logs", Content: podLogs},
