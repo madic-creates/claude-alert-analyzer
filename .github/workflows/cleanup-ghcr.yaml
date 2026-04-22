@@ -1,0 +1,74 @@
+---
+name: Cleanup old container images
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run — log what would be deleted, delete nothing"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "0 4 * * 0"  # Weekly, Sundays 04:00 UTC
+
+permissions:
+  packages: write
+
+concurrency:
+  group: cleanup-ghcr
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - claude-alert-kubernetes-analyzer
+          - claude-alert-checkmk-analyzer
+    steps:
+      - name: Dry run — list versions that would be deleted
+        if: inputs.dry_run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "/users/$OWNER/packages/container/$PACKAGE/versions" \
+            --jq '[.[] | {id, created_at, tags: (.metadata.container.tags // [])}] | sort_by(.created_at) | reverse' \
+            > versions.json
+
+          total=$(jq 'length' versions.json)
+          echo "### $PACKAGE — $total versions total"
+          echo ""
+          echo "Would delete — all untagged versions:"
+          jq -r '[.[] | select(.tags | length == 0)] | .[] | "  id=\(.id) created=\(.created_at)"' versions.json
+          echo ""
+          echo "Would delete — tagged versions beyond the 10 most recent:"
+          jq -r '[.[] | select(.tags | length > 0)] | .[10:] | .[] | "  id=\(.id) created=\(.created_at) tags=\(.tags | join(","))"' versions.json
+
+      # Step 1: remove untagged digests first, so step 2's "keep 10 most recent"
+      # counts only tagged versions.
+      - name: Delete all untagged versions
+        if: ${{ !inputs.dry_run }}
+        uses: actions/delete-package-versions@v5
+        with:
+          owner: ${{ github.repository_owner }}
+          package-name: ${{ matrix.package }}
+          package-type: container
+          delete-only-untagged-versions: 'true'
+          min-versions-to-keep: 0
+
+      # Step 2: keep the 10 most recent tagged versions. The version tagged
+      # 'latest' is always the newest push, so it is always in the protected
+      # top-10 and never deleted.
+      - name: Delete tagged versions beyond the 10 most recent
+        if: ${{ !inputs.dry_run }}
+        uses: actions/delete-package-versions@v5
+        with:
+          owner: ${{ github.repository_owner }}
+          package-name: ${{ matrix.package }}
+          package-type: container
+          min-versions-to-keep: 10
