@@ -1019,6 +1019,15 @@ func TestIsDenied_SedInPlaceBlocked(t *testing.T) {
 		{"sed", "-Ei", "s/foo/bar/", "/etc/hosts"},  // extended regex + in-place
 		{"sed", "-in", "s/foo/bar/", "/etc/hosts"},  // in-place + suppress (reversed order)
 		{"/usr/bin/sed", "-ni", "s/x/y/", "/tmp/f"}, // absolute path + combined
+		// BSD sed uses uppercase -I for in-place editing (FreeBSD, macOS).
+		{"sed", "-I", "s/foo/bar/", "/etc/hosts"},
+		{"sed", "-I.bak", "s/foo/bar/", "/etc/hosts"},
+		{"/usr/bin/sed", "-I", "s/x/y/", "/tmp/file"},
+		// Combined short flags that include 'I' (BSD in-place).
+		{"sed", "-nI", "s/foo/bar/", "/etc/hosts"}, // suppress + BSD in-place
+		{"sed", "-In", "s/foo/bar/", "/etc/hosts"}, // BSD in-place + suppress
+		// -I flag after the script (flag order should not matter).
+		{"sed", "s/foo/bar/", "/etc/hosts", "-I"},
 	}
 	for _, argv := range denied {
 		if !isDenied(DefaultDeniedCommands, argv) {
@@ -1057,6 +1066,10 @@ func TestIsDenied_SedInPlaceAlwaysChecked(t *testing.T) {
 		{"sed", "--in-place=.orig", "s/a/b/", "/etc/resolv.conf"},
 		{"sed", "-ni", "s/foo/bar/", "/etc/hosts"},
 		{"sed", "-Ei", "s/foo/bar/", "/etc/hosts"},
+		// BSD sed -I variants must also be blocked with a custom denylist.
+		{"sed", "-I", "s/foo/bar/", "/etc/hosts"},
+		{"sed", "-I.bak", "s/x/y/", "/tmp/file"},
+		{"sed", "-nI", "s/foo/bar/", "/etc/hosts"},
 	}
 	for _, argv := range denied {
 		if !isDenied(custom, argv) {

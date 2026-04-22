@@ -260,19 +260,20 @@ func isDenied(denied map[string]bool, argv []string) bool {
 	// edits files in-place without shell redirection, making it as destructive as
 	// cp/mv for overwriting files. Deny whenever an in-place flag is present,
 	// regardless of whether "sed" itself is in the denylist.
+	// BSD sed (FreeBSD, macOS) uses uppercase -I instead of -i for in-place editing;
+	// both forms are blocked so the guard holds on non-Linux hosts too.
 	if cmd == "sed" {
 		for _, arg := range argv[1:] {
-			if len(arg) >= 2 && arg[:2] == "-i" {
-				return true // -i or -i<backup-suffix>
+			if len(arg) >= 2 && (arg[:2] == "-i" || arg[:2] == "-I") {
+				return true // -i/-I or -i<backup-suffix>/-I<backup-suffix> (GNU/BSD)
 			}
 			if arg == "--in-place" || strings.HasPrefix(arg, "--in-place=") {
 				return true
 			}
-			// Combined short flags that include 'i' also enable in-place editing,
-			// e.g. -ni (suppress output + in-place) or -Ei (extended regex + in-place).
-			// 'i' is only used by GNU sed for in-place editing, so its presence
-			// anywhere in a combined short-flag group is sufficient to deny.
-			if len(arg) >= 2 && arg[0] == '-' && arg[1] != '-' && strings.ContainsRune(arg[1:], 'i') {
+			// Combined short flags that include 'i' (GNU) or 'I' (BSD) also enable
+			// in-place editing, e.g. -ni (suppress + in-place) or -nI (BSD equivalent).
+			if len(arg) >= 2 && arg[0] == '-' && arg[1] != '-' &&
+				(strings.ContainsRune(arg[1:], 'i') || strings.ContainsRune(arg[1:], 'I')) {
 				return true
 			}
 		}
