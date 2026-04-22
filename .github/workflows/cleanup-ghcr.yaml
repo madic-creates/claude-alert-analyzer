@@ -28,47 +28,60 @@ jobs:
           - claude-alert-kubernetes-analyzer
           - claude-alert-checkmk-analyzer
     steps:
-      - name: Dry run — list versions that would be deleted
-        if: inputs.dry_run
+      - name: Cleanup ${{ matrix.package }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OWNER: ${{ github.repository_owner }}
           PACKAGE: ${{ matrix.package }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          KEEP_TAGGED: "10"
         run: |
           set -euo pipefail
+
+          echo "### $PACKAGE"
           gh api --paginate "/users/$OWNER/packages/container/$PACKAGE/versions" \
             --jq '[.[] | {id, created_at, tags: (.metadata.container.tags // [])}] | sort_by(.created_at) | reverse' \
             > versions.json
 
           total=$(jq 'length' versions.json)
-          echo "### $PACKAGE — $total versions total"
-          echo ""
-          echo "Would delete — all untagged versions:"
-          jq -r '[.[] | select(.tags | length == 0)] | .[] | "  id=\(.id) created=\(.created_at)"' versions.json
-          echo ""
-          echo "Would delete — tagged versions beyond the 10 most recent:"
-          jq -r '[.[] | select(.tags | length > 0)] | .[10:] | .[] | "  id=\(.id) created=\(.created_at) tags=\(.tags | join(","))"' versions.json
+          echo "Total versions: $total"
 
-      # Step 1: remove untagged digests first, so step 2's "keep 10 most recent"
-      # counts only tagged versions.
-      - name: Delete all untagged versions
-        if: ${{ !inputs.dry_run }}
-        uses: actions/delete-package-versions@v5
-        with:
-          owner: ${{ github.repository_owner }}
-          package-name: ${{ matrix.package }}
-          package-type: container
-          delete-only-untagged-versions: 'true'
-          min-versions-to-keep: 0
+          # Candidates: all untagged + tagged beyond the KEEP_TAGGED most recent.
+          # 'latest' sits on the newest push, so it is always in the kept top-N.
+          jq -r --argjson keep "$KEEP_TAGGED" '
+            ([.[] | select(.tags | length == 0)]
+            + [.[] | select(.tags | length > 0)][$keep:])
+            | .[] | "\(.id)\t\(.created_at)\t\(.tags | join(","))"
+          ' versions.json > to_delete.tsv
 
-      # Step 2: keep the 10 most recent tagged versions. The version tagged
-      # 'latest' is always the newest push, so it is always in the protected
-      # top-10 and never deleted.
-      - name: Delete tagged versions beyond the 10 most recent
-        if: ${{ !inputs.dry_run }}
-        uses: actions/delete-package-versions@v5
-        with:
-          owner: ${{ github.repository_owner }}
-          package-name: ${{ matrix.package }}
-          package-type: container
-          min-versions-to-keep: 10
+          count=$(wc -l < to_delete.tsv | tr -d ' ')
+          echo "Would delete $count versions:"
+          while IFS=$'\t' read -r id created tags; do
+            [ -z "$id" ] && continue
+            printf '  id=%s created=%s tags=%s\n' "$id" "$created" "${tags:-<untagged>}"
+          done < to_delete.tsv
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "Dry run — nothing deleted."
+            exit 0
+          fi
+
+          deleted=0
+          failed=0
+          while IFS=$'\t' read -r id _ _; do
+            [ -z "$id" ] && continue
+            if gh api -X DELETE "/users/$OWNER/packages/container/$PACKAGE/versions/$id" --silent; then
+              deleted=$((deleted + 1))
+            else
+              failed=$((failed + 1))
+              echo "  failed to delete id=$id" >&2
+            fi
+            # Gentle pacing to stay below secondary rate limits on large backlogs.
+            sleep 0.2
+          done < to_delete.tsv
+
+          echo "Deleted: $deleted"
+          if [ "$failed" -gt 0 ]; then
+            echo "Failed: $failed" >&2
+            exit 1
+          fi
