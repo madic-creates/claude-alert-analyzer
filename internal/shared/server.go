@@ -158,12 +158,25 @@ func (s *Server) Run(webhookHandler http.HandlerFunc) {
 	slog.Info("shutting down...")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		slog.Error("HTTP server shutdown error", "error", err)
-	}
-	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
-		slog.Error("metrics server shutdown error", "error", err)
-	}
+	// Shut down both servers concurrently so each gets the full 30-second
+	// budget. Sequential shutdown would give the metrics server whatever time
+	// remained after the main server finished, which could be near zero if
+	// the main server was draining long-running connections.
+	var shutdownWg sync.WaitGroup
+	shutdownWg.Add(2)
+	go func() {
+		defer shutdownWg.Done()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			slog.Error("HTTP server shutdown error", "error", err)
+		}
+	}()
+	go func() {
+		defer shutdownWg.Done()
+		if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+			slog.Error("metrics server shutdown error", "error", err)
+		}
+	}()
+	shutdownWg.Wait()
 
 	close(s.queue)
 
