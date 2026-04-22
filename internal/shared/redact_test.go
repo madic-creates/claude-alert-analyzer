@@ -327,6 +327,18 @@ func TestTruncate_NeverExceedsMaxBytes(t *testing.T) {
 	}
 }
 
+func TestTruncate_ZeroMaxBytes(t *testing.T) {
+	if got := Truncate("hello", 0); got != "" {
+		t.Errorf("expected empty string for maxBytes=0, got %q", got)
+	}
+}
+
+func TestTruncate_NegativeMaxBytes(t *testing.T) {
+	if got := Truncate("hello", -1); got != "" {
+		t.Errorf("expected empty string for maxBytes=-1, got %q", got)
+	}
+}
+
 func TestTruncate_ExactBoundary(t *testing.T) {
 	// Truncating exactly at a multi-byte boundary should keep the character.
 	emoji := "🚀" // 4 bytes

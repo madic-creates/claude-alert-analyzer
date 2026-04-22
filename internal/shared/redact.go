@@ -80,6 +80,9 @@ func RedactSecrets(input string) string {
 const truncationMarker = "\n... [truncated]"
 
 func Truncate(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
 	if len(s) <= maxBytes {
 		return s
 	}
