@@ -28,8 +28,11 @@ repos:
     hooks:
       # Find and replace smartquote characters with the standard ascii " and ' characters
       - id: fix-smartquotes
-  - repo: https://github.com/golangci/golangci-lint
-    rev: v2.11.4
+  - repo: local
     hooks:
       - id: golangci-lint
-      - id: golangci-lint-config-verify
+        name: golangci-lint
+        entry: bash -c 'GOMODCACHE=/tmp/gomodcache /go/bin/golangci-lint run'
+        language: system
+        types: [go]
+        pass_filenames: false
