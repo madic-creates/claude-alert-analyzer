@@ -504,6 +504,32 @@ func TestIsDenied_EmptyCommand(t *testing.T) {
 	}
 }
 
+// TestIsDenied_WhitespaceOnlyArgv0 verifies that a whitespace-only argv[0]
+// (e.g. [" "] or ["\t\t"]) is denied unconditionally regardless of the
+// denylist contents. After TrimSpace, the normalized command name is "".
+// Without this guard, denied[""] == false so the empty name would slip past
+// the denylist and reach runSSHCommand, which would try to execute shellQuote
+// output like "' '" on the remote and produce a confusing "command not found"
+// in agent logs instead of a clear denial.
+func TestIsDenied_WhitespaceOnlyArgv0(t *testing.T) {
+	cases := [][]string{
+		{" "},           // single space
+		{"  "},          // multiple spaces
+		{"\t"},          // tab
+		{" \t "},        // mixed whitespace
+		{" ", "-h"},     // whitespace-only name with extra args
+	}
+	for _, argv := range cases {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected denied for whitespace-only argv[0]: %q", argv)
+		}
+		// Also deny with an empty denylist (no guardrails).
+		if !isDenied(map[string]bool{}, argv) {
+			t.Errorf("expected denied for whitespace-only argv[0] even with empty denylist: %q", argv)
+		}
+	}
+}
+
 // TestIsDenied_WhitespaceInArgv0 verifies that leading or trailing whitespace
 // in argv[0] cannot bypass the denylist. A hallucinating or adversarially-
 // prompted model might generate [" rm", "-rf", "/"] and without the TrimSpace
