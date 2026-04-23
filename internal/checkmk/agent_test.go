@@ -1447,6 +1447,24 @@ func TestDenyReason(t *testing.T) {
 		}
 	})
 
+	t.Run("sed in custom denylist without in-place flag uses generic message", func(t *testing.T) {
+		// When sed is blocked because it is in the custom SSH_DENIED_COMMANDS map
+		// (not because of a -i flag), denyReason must return the generic "not
+		// allowed" message rather than the in-place-specific one. The in-place
+		// message tells Claude "remove -i and retry", which would be wrong here
+		// because sed is completely disallowed and every retry wastes a tool-loop round.
+		msg := denyReason([]string{"sed", "-e", "s/foo/bar/", "/etc/file"})
+		if !strings.Contains(msg, "sed") {
+			t.Errorf("expected generic message to name the command; got: %s", msg)
+		}
+		if !strings.Contains(msg, "not allowed") {
+			t.Errorf("expected generic denied message; got: %s", msg)
+		}
+		if strings.Contains(msg, "-i") {
+			t.Errorf("expected message NOT to mention -i when no in-place flag is present; got: %s", msg)
+		}
+	})
+
 	t.Run("fully denied command uses generic message", func(t *testing.T) {
 		msg := denyReason([]string{"rm", "-rf", "/"})
 		if !strings.Contains(msg, "rm") {

@@ -331,7 +331,19 @@ func denyReason(argv []string) string {
 		}
 
 	case "sed":
-		return "Command denied: sed with -i/--in-place is not permitted; run sed without -i to write to stdout instead"
+		for _, arg := range argv[1:] {
+			if len(arg) >= 2 && (arg[:2] == "-i" || arg[:2] == "-I") {
+				return "Command denied: sed with -i/--in-place is not permitted; run sed without -i to write to stdout instead"
+			}
+			if arg == "--in-place" || strings.HasPrefix(arg, "--in-place=") {
+				return "Command denied: sed with -i/--in-place is not permitted; run sed without -i to write to stdout instead"
+			}
+			if len(arg) >= 2 && arg[0] == '-' && arg[1] != '-' &&
+				(strings.ContainsRune(arg[1:], 'i') || strings.ContainsRune(arg[1:], 'I')) {
+				return "Command denied: sed with -i/--in-place is not permitted; run sed without -i to write to stdout instead"
+			}
+		}
+		// sed is in the custom denylist without in-place flags — fall through to generic message.
 	}
 
 	return fmt.Sprintf("Command denied: %q is not allowed (destructive or privileged command)", cmd)
