@@ -118,8 +118,7 @@ func main() {
 		Metrics:      metrics,
 		SystemPrompt: systemPrompt,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
-			k8sAlert := alertPayloadToK8sAlert(alert)
-			return k8s.GatherContext(ctx, promClient, clientset, k8sAlert, cfg)
+			return k8s.GatherContext(ctx, promClient, clientset, k8s.AlertPayloadToAlert(alert), cfg)
 		},
 	}
 
@@ -141,21 +140,4 @@ func main() {
 
 	handler := k8s.HandleWebhook(cfg, cooldownMgr, srv.Enqueue, metrics)
 	srv.Run(handler)
-}
-
-func alertPayloadToK8sAlert(ap shared.AlertPayload) k8s.Alert {
-	alert := k8s.Alert{
-		Status:      ap.Fields["status"],
-		Labels:      make(map[string]string),
-		Annotations: make(map[string]string),
-		Fingerprint: ap.Fingerprint,
-	}
-	for key, v := range ap.Fields {
-		if strings.HasPrefix(key, "label:") {
-			alert.Labels[strings.TrimPrefix(key, "label:")] = v
-		} else if strings.HasPrefix(key, "annotation:") {
-			alert.Annotations[strings.TrimPrefix(key, "annotation:")] = v
-		}
-	}
-	return alert
 }
