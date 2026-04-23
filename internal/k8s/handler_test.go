@@ -623,3 +623,29 @@ func TestHandleWebhook_OversizedFingerprintSkipped(t *testing.T) {
 		t.Errorf("expected 0 enqueued for oversized fingerprint, got %d", enqueued.Load())
 	}
 }
+
+// TestHandleWebhook_InvalidFingerprintIncrementsMetric verifies that alerts
+// dropped for an empty or oversized fingerprint increment the
+// AlertsInvalidFingerprint counter so operators can detect malformed payloads
+// via Prometheus alerting rules.
+func TestHandleWebhook_InvalidFingerprintIncrementsMetric(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	metrics := new(shared.AlertMetrics)
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, metrics)
+
+	// One alert with empty fingerprint, one with oversized fingerprint.
+	oversizedFP := strings.Repeat("x", maxFingerprintLen+1)
+	alerts := []Alert{
+		{Fingerprint: "", Status: "firing", Labels: map[string]string{"alertname": "EmptyFP"}, Annotations: map[string]string{}, StartsAt: time.Now()},
+		{Fingerprint: oversizedFP, Status: "firing", Labels: map[string]string{"alertname": "OversizedFP"}, Annotations: map[string]string{}, StartsAt: time.Now()},
+	}
+	rr := postWebhook(t, handler, "test-secret", makeWebhook(alerts))
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+	if metrics.AlertsInvalidFingerprint.Load() != 2 {
+		t.Errorf("expected AlertsInvalidFingerprint=2, got %d", metrics.AlertsInvalidFingerprint.Load())
+	}
+}

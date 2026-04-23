@@ -36,6 +36,10 @@ type AlertMetrics struct {
 	ProcessingDurationSum atomic.Int64
 	// ProcessingDurationCount tracks total alerts processed (for avg calculation).
 	ProcessingDurationCount atomic.Int64
+	// AlertsInvalidFingerprint counts alerts dropped because their fingerprint
+	// was empty or exceeded maxFingerprintLen. These are silently skipped by the
+	// k8s webhook handler; this counter makes them visible to operators.
+	AlertsInvalidFingerprint atomic.Int64
 
 	// Prom holds the labeled Prometheus metrics. May be nil for tests.
 	Prom *PrometheusMetrics
@@ -114,6 +118,9 @@ func (m *AlertMetrics) MetricsHandler() http.HandlerFunc {
 		fmt.Fprintf(&b, "# HELP alert_analyzer_alerts_failed_total Alerts where analysis or publishing failed.\n")
 		fmt.Fprintf(&b, "# TYPE alert_analyzer_alerts_failed_total counter\n")
 		fmt.Fprintf(&b, "alert_analyzer_alerts_failed_total %d\n", m.AlertsFailed.Load())
+		fmt.Fprintf(&b, "# HELP alert_analyzer_alerts_invalid_fingerprint_total Alerts dropped due to empty or oversized fingerprint.\n")
+		fmt.Fprintf(&b, "# TYPE alert_analyzer_alerts_invalid_fingerprint_total counter\n")
+		fmt.Fprintf(&b, "alert_analyzer_alerts_invalid_fingerprint_total %d\n", m.AlertsInvalidFingerprint.Load())
 		fmt.Fprintf(&b, "# HELP alert_analyzer_processing_duration_seconds Processing time per alert.\n")
 		fmt.Fprintf(&b, "# TYPE alert_analyzer_processing_duration_seconds summary\n")
 		fmt.Fprintf(&b, "alert_analyzer_processing_duration_seconds_sum %f\n", float64(m.ProcessingDurationSum.Load())/1e6)

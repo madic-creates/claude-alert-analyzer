@@ -69,6 +69,9 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 		for _, alert := range payload.Alerts {
 			if len(alert.Fingerprint) == 0 || len(alert.Fingerprint) > maxFingerprintLen {
 				slog.Warn("skipping alert with invalid fingerprint", "alertname", alert.Labels["alertname"])
+				if metrics != nil {
+					metrics.AlertsInvalidFingerprint.Add(1)
+				}
 				continue
 			}
 
