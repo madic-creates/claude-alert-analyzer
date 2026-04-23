@@ -71,6 +71,7 @@ func TestMetricsHandler_AllMetricNamesPresent(t *testing.T) {
 		"alert_analyzer_alerts_cooldown_total",
 		"alert_analyzer_alerts_processed_total",
 		"alert_analyzer_alerts_failed_total",
+		"alert_analyzer_alerts_invalid_fingerprint_total",
 	}
 	for _, name := range names {
 		if !strings.Contains(body, name) {
@@ -105,6 +106,7 @@ func TestMetricsHandler_CounterValuesReflected(t *testing.T) {
 	m.AlertsCooldown.Add(4)
 	m.AlertsProcessed.Add(5)
 	m.AlertsFailed.Add(1)
+	m.AlertsInvalidFingerprint.Add(2)
 
 	req := httptest.NewRequest("GET", "/metrics", nil)
 	rr := httptest.NewRecorder()
@@ -118,6 +120,7 @@ func TestMetricsHandler_CounterValuesReflected(t *testing.T) {
 		"alert_analyzer_alerts_cooldown_total 4",
 		"alert_analyzer_alerts_processed_total 5",
 		"alert_analyzer_alerts_failed_total 1",
+		"alert_analyzer_alerts_invalid_fingerprint_total 2",
 	}
 	for _, want := range checks {
 		if !strings.Contains(body, want) {
