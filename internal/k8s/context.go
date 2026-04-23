@@ -396,7 +396,16 @@ func GatherContext(ctx context.Context, prom *PrometheusClient, clientset kubern
 	select {
 	case promMetrics = <-promCh:
 	case <-promCtx.Done():
-		promMetrics = "(prometheus context gathering timed out)"
+		// Prefer a result already buffered in the channel over the generic timeout
+		// sentinel. When the Prometheus goroutine finishes at the exact moment the
+		// context deadline expires, Go's select picks a case at random; draining the
+		// channel here ensures a specific diagnostic (e.g. "Prometheus returned 503")
+		// is used instead of the opaque "(prometheus context gathering timed out)".
+		select {
+		case promMetrics = <-promCh:
+		default:
+			promMetrics = "(prometheus context gathering timed out)"
+		}
 	}
 
 	return shared.AnalysisContext{
