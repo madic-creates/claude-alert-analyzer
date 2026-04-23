@@ -265,6 +265,31 @@ func TestShellQuote(t *testing.T) {
 	}
 }
 
+// TestRunSSHCommand_Timeout_PartialOutput verifies that when a command times out,
+// any output already written by the remote process before the deadline is returned
+// alongside the timeout error rather than being discarded. This allows the agentic
+// loop to surface partial diagnostic output (e.g. the first N log lines from a slow
+// journalctl call) instead of returning an opaque "Command failed: timeout" message.
+func TestRunSSHCommand_Timeout_PartialOutput(t *testing.T) {
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		// Write some output immediately, then hold the channel open so the
+		// timeout fires before the command "completes".
+		_, _ = io.WriteString(ch, "partial output line\n")
+		time.Sleep(10 * time.Second)
+	})
+
+	out, err := runSSHCommand(context.Background(), client, []string{"slow-cmd"}, 100*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !strings.Contains(err.Error(), "timeout") {
+		t.Errorf("expected timeout error, got: %v", err)
+	}
+	if !strings.Contains(out, "partial output line") {
+		t.Errorf("expected partial output to be returned on timeout, got: %q", out)
+	}
+}
+
 func TestRunSSHCommand_ContextCancelled(t *testing.T) {
 	client := startTestSSHServer(t, func(_ string, _ ssh.Channel) {
 		// Simulate a slow command that blocks until the context is cancelled.

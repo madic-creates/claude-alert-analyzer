@@ -189,7 +189,14 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 		return out, r.err
 	case <-timer.C:
 		session.Close()
-		return "", fmt.Errorf("timeout after %v", timeout)
+		// Return any output collected before the timeout so that slow commands
+		// (e.g. "journalctl -n 500" on a busy host) still provide diagnostic
+		// value. agent.go already handles (partial, error) returns by including
+		// the output in the tool result alongside the timeout message.
+		lw.mu.Lock()
+		partial := lw.w.String()
+		lw.mu.Unlock()
+		return partial, fmt.Errorf("timeout after %v", timeout)
 	case <-ctx.Done():
 		session.Close()
 		return "", fmt.Errorf("context cancelled: %w", ctx.Err())
