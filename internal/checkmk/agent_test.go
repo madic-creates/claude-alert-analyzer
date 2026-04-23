@@ -689,6 +689,39 @@ func TestParseCommandInput_EmptyElement(t *testing.T) {
 	}
 }
 
+// TestParseCommandInput_WhitespaceOnlyElement verifies that a whitespace-only
+// string in any position of the command array is rejected. A whitespace-only
+// argv[0] like " " passes the empty-string check but after filepath.Base +
+// TrimSpace normalises to "" — isDenied would deny it, but the error returned
+// by denyReason would be the confusing `Command denied: "" is not allowed`
+// rather than a clear validation message. Rejecting it in parseCommandInput
+// provides a clear, actionable error before the security layer is reached.
+func TestParseCommandInput_WhitespaceOnlyElement(t *testing.T) {
+	cases := []struct {
+		name  string
+		input []string
+	}{
+		{"space-only command name", []string{" ", "-h"}},
+		{"tab-only command name", []string{"\t"}},
+		{"mixed whitespace command name", []string{" \t "}},
+		{"space-only middle arg", []string{"df", " ", "-h"}},
+		{"space-only last arg", []string{"df", "-h", " "}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, _ := json.Marshal(map[string]any{"command": tc.input})
+			_, err := parseCommandInput(json.RawMessage(data))
+			if err == nil {
+				t.Errorf("expected error for whitespace-only element: %v", tc.input)
+				return
+			}
+			if !strings.Contains(err.Error(), "whitespace") {
+				t.Errorf("error should mention whitespace, got: %v", err)
+			}
+		})
+	}
+}
+
 // TestParseCommandInput_TooManyElements verifies that an oversized argv is
 // rejected before any work is done. An adversary (or hallucinating model)
 // returning thousands of array elements could cause OOM in shellQuote and

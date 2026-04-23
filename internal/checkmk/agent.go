@@ -371,6 +371,9 @@ func parseCommandInput(input json.RawMessage) ([]string, error) {
 		if arg == "" {
 			return nil, fmt.Errorf("argument %d is empty", i)
 		}
+		if strings.TrimSpace(arg) == "" {
+			return nil, fmt.Errorf("argument %d is whitespace-only", i)
+		}
 		if len(arg) > maxArgLen {
 			return nil, fmt.Errorf("argument %d exceeds maximum length of %d bytes", i, maxArgLen)
 		}
