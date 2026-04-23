@@ -1463,6 +1463,16 @@ func TestDenyReason(t *testing.T) {
 			t.Errorf("expected message to contain normalized command name; got: %s", msg)
 		}
 	})
+
+	t.Run("empty argv returns safe message without panicking", func(t *testing.T) {
+		msg := denyReason([]string{})
+		if msg == "" {
+			t.Error("expected non-empty message for empty argv")
+		}
+		if !strings.Contains(msg, "denied") {
+			t.Errorf("expected 'denied' in message for empty argv; got: %s", msg)
+		}
+	})
 }
 
 // TestIsDenied_BlocksProcessWrappers verifies that process execution wrappers

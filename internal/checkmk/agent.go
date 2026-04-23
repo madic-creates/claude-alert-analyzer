@@ -296,6 +296,9 @@ func isDenied(denied map[string]bool, argv []string) bool {
 // provides specific guidance so Claude can self-correct and try a permitted
 // alternative instead of abandoning the diagnostic approach entirely.
 func denyReason(argv []string) string {
+	if len(argv) == 0 {
+		return "Command denied: empty command"
+	}
 	cmd := strings.TrimSpace(filepath.Base(argv[0]))
 
 	switch cmd {
