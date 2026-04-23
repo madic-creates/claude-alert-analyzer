@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -283,6 +284,49 @@ func isDenied(denied map[string]bool, argv []string) bool {
 	return denied[cmd]
 }
 
+// denyReason returns a human-readable explanation for why argv was denied.
+// For commands that are only partially restricted (systemctl, find, sed) it
+// provides specific guidance so Claude can self-correct and try a permitted
+// alternative instead of abandoning the diagnostic approach entirely.
+func denyReason(argv []string) string {
+	cmd := strings.TrimSpace(filepath.Base(argv[0]))
+
+	switch cmd {
+	case "systemctl":
+		subcmd := ""
+		for _, arg := range argv[1:] {
+			if !strings.HasPrefix(arg, "-") {
+				subcmd = arg
+				break
+			}
+		}
+		allowed := make([]string, 0, len(systemctlReadOnly))
+		for sc := range systemctlReadOnly {
+			allowed = append(allowed, sc)
+		}
+		sort.Strings(allowed)
+		if subcmd != "" {
+			return fmt.Sprintf("Command denied: systemctl %s is not permitted; only read-only subcommands are allowed: %s", subcmd, strings.Join(allowed, ", "))
+		}
+		return fmt.Sprintf("Command denied: systemctl requires a read-only subcommand; allowed subcommands: %s", strings.Join(allowed, ", "))
+
+	case "find":
+		for _, arg := range argv[1:] {
+			if findExecFlags[arg] {
+				return fmt.Sprintf("Command denied: find %s is not permitted (exec flags can spawn arbitrary sub-processes); omit %s and redirect output instead", arg, arg)
+			}
+			if findDestructiveFlags[arg] {
+				return fmt.Sprintf("Command denied: find %s is not permitted (destructive flag); omit %s", arg, arg)
+			}
+		}
+
+	case "sed":
+		return "Command denied: sed with -i/--in-place is not permitted; run sed without -i to write to stdout instead"
+	}
+
+	return fmt.Sprintf("Command denied: %q is not allowed (destructive or privileged command)", cmd)
+}
+
 // maxArgvElements is the maximum number of elements accepted in the command
 // array from a Claude tool call. A legitimate diagnostic command rarely needs
 // more than a handful of arguments; an unbounded array could cause OOM in
@@ -378,7 +422,7 @@ func RunAgenticDiagnostics(
 
 		if isDenied(denied, argv) {
 			slog.Warn("denied command", "hostname", hostname, "command", shellQuote(argv))
-			return fmt.Sprintf("Command denied: %q is not allowed (destructive or privileged command)", argv[0]), nil
+			return denyReason(argv), nil
 		}
 
 		logCmd := shellQuote(argv)

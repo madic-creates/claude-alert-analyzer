@@ -1326,6 +1326,78 @@ func TestIsDenied_BlocksBusybox(t *testing.T) {
 	}
 }
 
+// TestDenyReason verifies that denyReason returns targeted, self-correcting
+// messages for partially-restricted commands (systemctl, find, sed) so that
+// Claude can identify a safe alternative rather than abandoning the diagnostic
+// approach. Fully-denied commands fall through to the generic message.
+func TestDenyReason(t *testing.T) {
+	t.Run("systemctl write subcommand names the subcommand and lists allowed ones", func(t *testing.T) {
+		msg := denyReason([]string{"systemctl", "restart", "nginx"})
+		if !strings.Contains(msg, "systemctl restart") {
+			t.Errorf("expected message to name the subcommand; got: %s", msg)
+		}
+		// Must list at least one known read-only subcommand.
+		if !strings.Contains(msg, "status") {
+			t.Errorf("expected message to list read-only subcommands; got: %s", msg)
+		}
+	})
+
+	t.Run("systemctl with flags before write subcommand still names the subcommand", func(t *testing.T) {
+		msg := denyReason([]string{"systemctl", "--no-pager", "stop", "sshd"})
+		if !strings.Contains(msg, "systemctl stop") {
+			t.Errorf("expected message to name 'stop'; got: %s", msg)
+		}
+	})
+
+	t.Run("systemctl no subcommand lists allowed subcommands", func(t *testing.T) {
+		msg := denyReason([]string{"systemctl"})
+		if !strings.Contains(msg, "status") {
+			t.Errorf("expected message to list read-only subcommands; got: %s", msg)
+		}
+	})
+
+	t.Run("find with exec flag names the flag and suggests alternative", func(t *testing.T) {
+		msg := denyReason([]string{"find", "/var/log", "-exec", "cat", "{}", ";"})
+		if !strings.Contains(msg, "-exec") {
+			t.Errorf("expected message to name the -exec flag; got: %s", msg)
+		}
+	})
+
+	t.Run("find with delete flag names the flag", func(t *testing.T) {
+		msg := denyReason([]string{"find", "/tmp", "-name", "*.tmp", "-delete"})
+		if !strings.Contains(msg, "-delete") {
+			t.Errorf("expected message to name the -delete flag; got: %s", msg)
+		}
+	})
+
+	t.Run("sed with -i flag mentions in-place and suggests stdout alternative", func(t *testing.T) {
+		msg := denyReason([]string{"sed", "-i", "s/foo/bar/", "/etc/hosts"})
+		if !strings.Contains(msg, "-i") {
+			t.Errorf("expected message to mention the -i flag; got: %s", msg)
+		}
+		if !strings.Contains(msg, "stdout") {
+			t.Errorf("expected message to suggest stdout alternative; got: %s", msg)
+		}
+	})
+
+	t.Run("fully denied command uses generic message", func(t *testing.T) {
+		msg := denyReason([]string{"rm", "-rf", "/"})
+		if !strings.Contains(msg, "rm") {
+			t.Errorf("expected generic message to include command name; got: %s", msg)
+		}
+		if !strings.Contains(msg, "not allowed") {
+			t.Errorf("expected generic denied message; got: %s", msg)
+		}
+	})
+
+	t.Run("absolute path normalized in generic message", func(t *testing.T) {
+		msg := denyReason([]string{"/bin/rm", "-rf", "/"})
+		if !strings.Contains(msg, "rm") {
+			t.Errorf("expected message to contain normalized command name; got: %s", msg)
+		}
+	})
+}
+
 // TestIsDenied_BlocksProcessWrappers verifies that process execution wrappers
 // are denied by DefaultDeniedCommands. These commands accept another command
 // as an argument and execute it as a child process, allowing any denied command
