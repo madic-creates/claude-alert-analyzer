@@ -62,6 +62,20 @@ Minimum required environment variables:
 
 The analyzer needs read access to cluster resources (events, pods, pod logs) — bind it to a ServiceAccount with `get`/`list`/`watch` on `events`, `pods`, and `pods/log` in the namespaces listed in `ALLOWED_NAMESPACES`.
 
+Example manifests (Deployment, ServiceAccount + RBAC, Service, Secret template, Kustomization) live in [`deploy/k8s-analyzer/`](deploy/k8s-analyzer/). To deploy:
+
+```bash
+# 1. Fill in secrets
+cp deploy/k8s-analyzer/secret.example.yaml deploy/k8s-analyzer/secret.yaml
+$EDITOR deploy/k8s-analyzer/secret.yaml
+# then uncomment `- secret.yaml` in deploy/k8s-analyzer/kustomization.yaml
+
+# 2. Apply
+kubectl apply -k deploy/k8s-analyzer/
+```
+
+The manifests target namespace `monitoring` and apply the same hardening as the Docker image (non-root UID 65534, read-only root FS, all capabilities dropped, `RuntimeDefault` seccomp). Review them before applying — in particular `ALLOWED_NAMESPACES`, `PROMETHEUS_URL`, and resource limits.
+
 ### 2. Configure Alertmanager
 
 Add a webhook receiver pointing at the analyzer's `/webhook` endpoint with the matching bearer token:
@@ -97,12 +111,73 @@ Deploy `ghcr.io/madic-creates/claude-alert-checkmk-analyzer:latest`:
 
 The SSH user (`SSH_USER`, default `nagios`) must be an **unprivileged** account. The analyzer enforces a command denylist on top of that as defense in depth.
 
-### 2. Install the notification script
-
-The script at `scripts/claude-analyzer-notify.sh` bridges CheckMK notifications to the analyzer webhook:
+Example — starting the analyzer with plain Docker:
 
 ```bash
-cp scripts/claude-analyzer-notify.sh \
+# Prepare SSH material (private key + known_hosts) in a local directory
+mkdir -p ./ssh
+cp /path/to/id_ed25519  ./ssh/id_ed25519
+cp /path/to/known_hosts ./ssh/known_hosts
+chmod 600 ./ssh/id_ed25519
+
+docker run -d \
+  --name checkmk-analyzer \
+  --restart unless-stopped \
+  --read-only \
+  --cap-drop ALL \
+  --user 65534:65534 \
+  -p 127.0.0.1:8080:8080 \
+  -p 127.0.0.1:9101:9101 \
+  -v "$(pwd)/ssh:/ssh:ro" \
+  -e WEBHOOK_SECRET="change-me" \
+  -e API_KEY="sk-ant-..." \
+  -e CHECKMK_API_URL="https://checkmk.example.com/mysite/check_mk/api/1.0/" \
+  -e CHECKMK_API_USER="automation" \
+  -e CHECKMK_API_SECRET="..." \
+  -e NTFY_PUBLISH_URL="https://ntfy.example.com" \
+  -e NTFY_PUBLISH_TOPIC="checkmk-analysis" \
+  ghcr.io/madic-creates/claude-alert-checkmk-analyzer:latest
+
+# Tail logs
+docker logs -f checkmk-analyzer
+
+# Smoke-test the health endpoint
+curl -sf http://127.0.0.1:8080/health
+```
+
+Or the equivalent with Docker Compose (`docker-compose.yaml`):
+
+```yaml
+services:
+  checkmk-analyzer:
+    image: ghcr.io/madic-creates/claude-alert-checkmk-analyzer:latest
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    user: "65534:65534"
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:9101:9101"
+    volumes:
+      - ./ssh:/ssh:ro
+    environment:
+      WEBHOOK_SECRET: "change-me"
+      API_KEY: "sk-ant-..."
+      CHECKMK_API_URL: "https://checkmk.example.com/mysite/check_mk/api/1.0/"
+      CHECKMK_API_USER: "automation"
+      CHECKMK_API_SECRET: "..."
+      NTFY_PUBLISH_URL: "https://ntfy.example.com"
+      NTFY_PUBLISH_TOPIC: "checkmk-analysis"
+```
+
+Start with `docker compose up -d`. See [Configuration](#configuration) for the full environment-variable reference.
+
+### 2. Install the notification script
+
+The script at `deploy/scripts/claude-analyzer-notify.sh` bridges CheckMK notifications to the analyzer webhook:
+
+```bash
+cp deploy/scripts/claude-analyzer-notify.sh \
   /omd/sites/<site>/local/share/check_mk/notifications/
 chmod +x /omd/sites/<site>/local/share/check_mk/notifications/claude-analyzer-notify.sh
 ```

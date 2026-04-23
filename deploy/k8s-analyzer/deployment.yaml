@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claude-alert-kubernetes-analyzer
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: claude-alert-kubernetes-analyzer
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: claude-alert-kubernetes-analyzer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: claude-alert-kubernetes-analyzer
+    spec:
+      serviceAccountName: claude-alert-kubernetes-analyzer
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: analyzer
+          image: ghcr.io/madic-creates/claude-alert-kubernetes-analyzer:latest
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 9101
+              name: metrics
+          envFrom:
+            - secretRef:
+                name: claude-alert-kubernetes-analyzer-env
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
