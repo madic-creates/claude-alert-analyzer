@@ -96,6 +96,7 @@ func TestRunAgenticDiagnostics_DeniedCommandBlocked(t *testing.T) {
 	}
 	if len(runner.toolOutputs) != 1 {
 		t.Fatalf("expected 1 tool output, got %d", len(runner.toolOutputs))
+		return
 	}
 	if !strings.Contains(runner.toolOutputs[0], "denied") {
 		t.Errorf("expected denial message in output, got: %q", runner.toolOutputs[0])
@@ -129,6 +130,7 @@ func TestRunAgenticDiagnostics_AllowedCommandExecuted(t *testing.T) {
 	}
 	if len(runner.toolOutputs) != 1 {
 		t.Fatalf("expected 1 tool output, got %d", len(runner.toolOutputs))
+		return
 	}
 	if !strings.Contains(runner.toolOutputs[0], "Filesystem") {
 		t.Errorf("expected SSH output in tool result, got: %q", runner.toolOutputs[0])
@@ -166,6 +168,7 @@ func TestRunAgenticDiagnostics_SpaceArgShellQuoted(t *testing.T) {
 	}
 	if len(runner.toolOutputs) != 1 {
 		t.Fatalf("expected 1 tool output, got %d", len(runner.toolOutputs))
+		return
 	}
 	// The argument with a space must be quoted so the prefix is unambiguous.
 	if !strings.Contains(runner.toolOutputs[0], "'out of memory'") {
@@ -197,6 +200,7 @@ func TestRunAgenticDiagnostics_UnknownToolReturnsError(t *testing.T) {
 	}
 	if len(runner.toolErrors) != 1 {
 		t.Fatalf("expected 1 tool error captured, got %d", len(runner.toolErrors))
+		return
 	}
 	if runner.toolErrors[0] == nil {
 		t.Error("expected error for unknown tool, got nil")
@@ -227,6 +231,7 @@ func TestRunAgenticDiagnostics_OutputRedacted(t *testing.T) {
 	}
 	if len(runner.toolOutputs) != 1 {
 		t.Fatalf("expected 1 tool output, got %d", len(runner.toolOutputs))
+		return
 	}
 	if strings.Contains(runner.toolOutputs[0], "supersecret123") {
 		t.Errorf("secret leaked in tool output: %q", runner.toolOutputs[0])
@@ -263,6 +268,7 @@ func TestRunAgenticDiagnostics_NonZeroExitIncludesOutput(t *testing.T) {
 	}
 	if len(runner.toolOutputs) != 1 {
 		t.Fatalf("expected 1 tool output, got %d", len(runner.toolOutputs))
+		return
 	}
 	// The output must contain the systemctl status text, not just an error message.
 	if !strings.Contains(runner.toolOutputs[0], "nginx.service") {
@@ -305,6 +311,7 @@ func TestRunAgenticDiagnostics_NonZeroExitNoOutput(t *testing.T) {
 	}
 	if len(runner.toolOutputs) != 1 {
 		t.Fatalf("expected 1 tool output, got %d", len(runner.toolOutputs))
+		return
 	}
 	// When there is no output the result must be the simple "Command failed: ..."
 	// message rather than the output-inclusive "$ cmd\n...\n[exited: ...]" format.
@@ -344,6 +351,7 @@ func TestRunAgenticDiagnostics_InvalidCommandInputReturnsError(t *testing.T) {
 	}
 	if len(runner.toolErrors) != 1 {
 		t.Fatalf("expected 1 tool error captured, got %d", len(runner.toolErrors))
+		return
 	}
 	if runner.toolErrors[0] == nil {
 		t.Error("expected error for empty command array, got nil")
