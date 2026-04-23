@@ -1298,6 +1298,40 @@ func TestQuery_MetricLabelsAreSorted(t *testing.T) {
 	}
 }
 
+// TestQuery_ResultsAreCappedAt50Lines verifies that when a Prometheus query returns
+// more than 50 time-series the output is truncated with a truncation marker so that
+// the Claude prompt does not grow unboundedly in clusters with many pods or alerts.
+func TestQuery_ResultsAreCappedAt50Lines(t *testing.T) {
+	// Build 60 results — 10 more than the maxPromResultLines cap.
+	results := make([]PromResult, 60)
+	for i := range results {
+		results[i] = PromResult{
+			Metric: map[string]string{"pod": fmt.Sprintf("pod-%d", i)},
+			Value:  [2]interface{}{1700000000, "1"},
+		}
+	}
+	srv := makePromServer(t, results)
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	alert := makeAlertWithLabels(map[string]string{})
+	result := prom.GetMetrics(context.Background(), alert)
+
+	// The result includes a section header ("## Active Firing Alerts") plus the
+	// capped query output. Verify truncation by checking for the marker string
+	// rather than a fixed line count, so the test is robust to header changes.
+	if !strings.Contains(result, "truncated") {
+		t.Errorf("expected truncation marker in result, got:\n%s", result)
+	}
+	if !strings.Contains(result, "10 more") {
+		t.Errorf("expected truncation marker to report 10 omitted results, got:\n%s", result)
+	}
+	// pod-50 through pod-59 should be absent — they fall beyond the 50-line cap.
+	if strings.Contains(result, "pod-50") {
+		t.Errorf("pod-50 should have been truncated but appears in result:\n%s", result)
+	}
+}
+
 // TestGatherContext_PrometheusResultPreferredWhenTimeoutRaces verifies that when
 // the Prometheus goroutine produces a result at the same instant the context
 // deadline expires, GatherContext returns the goroutine's result rather than the
