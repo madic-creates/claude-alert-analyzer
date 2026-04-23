@@ -75,6 +75,9 @@ func (n *NtfyPublisher) Publish(ctx context.Context, title, priority, body strin
 			select {
 			case <-ctx.Done():
 				timer.Stop()
+				if lastErr != nil {
+					return fmt.Errorf("%w; last publish error: %w", ctx.Err(), lastErr)
+				}
 				return ctx.Err()
 			case <-timer.C:
 			}

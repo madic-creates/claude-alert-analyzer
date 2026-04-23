@@ -404,7 +404,9 @@ func TestNtfyPublisher_Publish_DrainsBodyForConnectionReuse(t *testing.T) {
 }
 
 // TestNtfyPublisher_Publish_RetryContextCancelled verifies that a cancelled
-// context aborts retries before the next delay completes.
+// context aborts retries before the next delay completes and that the returned
+// error wraps both the context error and the last HTTP error so callers can
+// diagnose what originally caused the retries.
 func TestNtfyPublisher_Publish_RetryContextCancelled(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -422,5 +424,15 @@ func TestNtfyPublisher_Publish_RetryContextCancelled(t *testing.T) {
 	err := p.Publish(ctx, "t", "default", "body")
 	if err == nil {
 		t.Fatal("expected error when context cancelled during retry")
+	}
+	// The returned error must wrap the context cancellation so callers can
+	// distinguish shutdown-induced aborts from permanent publish failures.
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected error to wrap context.Canceled, got: %v", err)
+	}
+	// The last HTTP error from the failed attempt must also be present so
+	// operators can see why retries were happening in the first place.
+	if !strings.Contains(err.Error(), "503") {
+		t.Errorf("expected error to contain last HTTP status (503), got: %v", err)
 	}
 }
