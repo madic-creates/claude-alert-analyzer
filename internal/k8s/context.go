@@ -364,9 +364,42 @@ func GetKubeContext(ctx context.Context, clientset kubernetes.Interface, alert A
 
 	var wg sync.WaitGroup
 	wg.Add(3)
-	go func() { defer wg.Done(); events = getEvents(ctx, clientset, namespace) }()
-	go func() { defer wg.Done(); pods = getPodStatus(ctx, clientset, namespace) }()
-	go func() { defer wg.Done(); logs = getPodLogs(ctx, clientset, namespace, cfg) }()
+	go func() {
+		defer wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("events goroutine panicked",
+					"recover", r,
+					"stack", string(debug.Stack()))
+				events = fmt.Sprintf("(events context gathering panicked: %v)", r)
+			}
+		}()
+		events = getEvents(ctx, clientset, namespace)
+	}()
+	go func() {
+		defer wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("pod status goroutine panicked",
+					"recover", r,
+					"stack", string(debug.Stack()))
+				pods = fmt.Sprintf("(pod status context gathering panicked: %v)", r)
+			}
+		}()
+		pods = getPodStatus(ctx, clientset, namespace)
+	}()
+	go func() {
+		defer wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("pod logs goroutine panicked",
+					"recover", r,
+					"stack", string(debug.Stack()))
+				logs = fmt.Sprintf("(pod logs context gathering panicked: %v)", r)
+			}
+		}()
+		logs = getPodLogs(ctx, clientset, namespace, cfg)
+	}()
 	wg.Wait()
 	return
 }

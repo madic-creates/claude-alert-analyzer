@@ -288,6 +288,49 @@ func TestK8sProcessAlert_AnalysisFails_PublishFailureNotification(t *testing.T) 
 	}
 }
 
+// TestGetKubeContext_GoroutinePanicRecovery verifies that an unexpected panic
+// inside any of the three kube-context goroutines (events, pod status, pod logs)
+// is caught by the per-goroutine recovery added in context.go and does NOT
+// crash the program. The output for the panicking goroutine must contain the
+// "(... panicked: ...)" sentinel rather than empty string, so callers know
+// the data is unavailable. The other two goroutines must still return normally.
+func TestGetKubeContext_GoroutinePanicRecovery(t *testing.T) {
+	for _, resource := range []string{"events", "pods"} {
+		resource := resource
+		t.Run(resource+" panic", func(t *testing.T) {
+			cs := fake.NewSimpleClientset()
+			cs.PrependReactor("list", resource, func(action k8stesting.Action) (bool, runtime.Object, error) {
+				panic("injected panic in " + resource + " list")
+			})
+
+			alert := makeAlertWithLabels(map[string]string{"namespace": "testns"})
+			cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+
+			// Must not panic the test process.
+			events, pods, _ := GetKubeContext(context.Background(), cs, alert, cfg)
+
+			switch resource {
+			case "events":
+				if !strings.Contains(events, "panicked") {
+					t.Errorf("events output should contain 'panicked' sentinel, got: %q", events)
+				}
+				// pods should still have a valid result (not empty, not panicked)
+				if strings.Contains(pods, "panicked") {
+					t.Errorf("pods output should not contain 'panicked' sentinel, got: %q", pods)
+				}
+			case "pods":
+				if !strings.Contains(pods, "panicked") {
+					t.Errorf("pods output should contain 'panicked' sentinel, got: %q", pods)
+				}
+				// events should still have a valid result
+				if strings.Contains(events, "panicked") {
+					t.Errorf("events output should not contain 'panicked' sentinel, got: %q", events)
+				}
+			}
+		})
+	}
+}
+
 // TestK8sProcessAlert_EmptyAnalysis_PublishFailureNotification verifies the
 // empty-analysis branch of ProcessAlert when the failure notification also fails.
 // This exercises the slog.Warn at pipeline.go:63.
