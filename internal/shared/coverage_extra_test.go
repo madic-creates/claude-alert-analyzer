@@ -578,6 +578,58 @@ func TestServer_Run_MetricsShutdownError(t *testing.T) {
 	}
 }
 
+// TestServer_Run_DefaultDrainAndShutdownTimeouts verifies that when both
+// DrainTimeout and ShutdownTimeout are left at their zero values, Run applies
+// its built-in defaults (25 s drain, 30 s shutdown) and still shuts down
+// cleanly when a SIGTERM arrives. This covers the two previously-untested
+// `if … == 0` default-value branches in Run (server.go lines ~172 and ~209).
+// The test uses a fast-completing process func and sends SIGTERM immediately
+// after enqueuing one alert, so the drain completes in milliseconds even
+// though the default timeouts are generous.
+func TestServer_Run_DefaultDrainAndShutdownTimeouts(t *testing.T) {
+	var processed atomic.Int64
+	metrics := new(AlertMetrics)
+
+	srv := NewServer(ServerConfig{
+		Port:            "0",
+		MetricsPort:     "0",
+		WorkerCount:     1,
+		QueueSize:       5,
+		DrainTimeout:    0, // exercises `if drainTimeout == 0 { drainTimeout = 25*time.Second }`
+		ShutdownTimeout: 0, // exercises `if shutdownTimeout == 0 { shutdownTimeout = 30*time.Second }`
+	}, metrics, func(ctx context.Context, alert AlertPayload) {
+		processed.Add(1)
+	})
+
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		srv.Run(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+	}()
+
+	// Allow Run to start its HTTP servers and reach <-ctx.Done().
+	time.Sleep(50 * time.Millisecond)
+
+	srv.Enqueue(AlertPayload{Fingerprint: "default-timeout-fp"})
+
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatalf("send SIGTERM: %v", err)
+	}
+
+	select {
+	case <-runDone:
+		// Run returned cleanly — both default-timeout branches were exercised.
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return within 10 seconds of SIGTERM")
+	}
+
+	if processed.Load() != 1 {
+		t.Errorf("processed = %d after graceful shutdown, want 1", processed.Load())
+	}
+}
+
 // TestServer_Run_DefaultMetricsPort verifies that when ServerConfig.MetricsPort
 // is empty Run falls back to port 9101. This covers the previously-untested
 // `metricsPort = "9101"` branch in Run (server.go). The test is skipped when
