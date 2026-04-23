@@ -234,7 +234,7 @@ func getPodStatus(ctx context.Context, clientset kubernetes.Interface, namespace
 	// than requested (e.g. the fake client in tests ignores Limit).
 	items := podList.Items
 	if len(items) > maxPods {
-		items = items[len(items)-maxPods:]
+		items = items[:maxPods]
 	}
 	var lines []string
 	for _, p := range items {

@@ -469,6 +469,15 @@ func TestGetPodStatus_LimitBoundedOutput(t *testing.T) {
 	if pods == "(no pods)" {
 		t.Error("expected pod entries in output, got no-pods sentinel")
 	}
+	// The backstop must keep the FIRST maxPods pods (items[:maxPods]), not the
+	// last. This mirrors getPodLogs and matches the truncation note "more may
+	// exist" which implies the output starts from the beginning of the list.
+	if !strings.Contains(pods, "pod-000") {
+		t.Error("backstop must keep first pods (items[:maxPods]); pod-000 missing from output")
+	}
+	if strings.Contains(pods, fmt.Sprintf("pod-%03d", maxPods)) {
+		t.Errorf("backstop must not include pod beyond maxPods limit; pod-%03d must not appear", maxPods)
+	}
 }
 
 // TestGetPodStatus_NoTruncationMarkerWhenUnderLimit verifies that the truncation
