@@ -1447,6 +1447,39 @@ func TestDenyReason(t *testing.T) {
 		}
 	})
 
+	t.Run("sed with --in-place long flag mentions in-place and suggests stdout alternative", func(t *testing.T) {
+		msg := denyReason([]string{"sed", "--in-place", "s/foo/bar/", "/etc/hosts"})
+		if !strings.Contains(msg, "-i") {
+			t.Errorf("expected message to mention the -i flag; got: %s", msg)
+		}
+		if !strings.Contains(msg, "stdout") {
+			t.Errorf("expected message to suggest stdout alternative; got: %s", msg)
+		}
+	})
+
+	t.Run("sed with --in-place=suffix long flag mentions in-place and suggests stdout alternative", func(t *testing.T) {
+		msg := denyReason([]string{"sed", "--in-place=.bak", "s/foo/bar/", "/etc/hosts"})
+		if !strings.Contains(msg, "-i") {
+			t.Errorf("expected message to mention the -i flag; got: %s", msg)
+		}
+		if !strings.Contains(msg, "stdout") {
+			t.Errorf("expected message to suggest stdout alternative; got: %s", msg)
+		}
+	})
+
+	t.Run("sed with combined short flags containing i mentions in-place and suggests stdout alternative", func(t *testing.T) {
+		// -ni bundles -n (suppress default output) with -i (in-place edit).
+		// The third sed check in denyReason scans for 'i'/'I' inside any
+		// short-flag cluster to catch this form.
+		msg := denyReason([]string{"sed", "-ni", "s/foo/bar/", "/etc/hosts"})
+		if !strings.Contains(msg, "-i") {
+			t.Errorf("expected message to mention the -i flag; got: %s", msg)
+		}
+		if !strings.Contains(msg, "stdout") {
+			t.Errorf("expected message to suggest stdout alternative; got: %s", msg)
+		}
+	})
+
 	t.Run("sed in custom denylist without in-place flag uses generic message", func(t *testing.T) {
 		// When sed is blocked because it is in the custom SSH_DENIED_COMMANDS map
 		// (not because of a -i flag), denyReason must return the generic "not
