@@ -107,13 +107,13 @@ func (n *NtfyPublisher) Publish(ctx context.Context, title, priority, body strin
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096)) //nolint:errcheck
 		_ = resp.Body.Close()
 
-		if resp.StatusCode >= 500 {
-			// Server error — worth retrying.
+		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
+			// Server error or rate limit — worth retrying.
 			lastErr = fmt.Errorf("ntfy returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respSnippet)))
 			continue
 		}
 		if resp.StatusCode >= 300 {
-			// Client error (4xx) — retrying won't help.
+			// Other client error (4xx) — retrying won't help.
 			return fmt.Errorf("ntfy returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respSnippet)))
 		}
 		return nil

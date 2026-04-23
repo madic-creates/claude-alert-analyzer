@@ -309,6 +309,31 @@ func TestNtfyPublisher_Publish_ExhaustsRetries(t *testing.T) {
 	}
 }
 
+// TestNtfyPublisher_Publish_RetryOn429 verifies that a 429 Too Many Requests
+// response is retried, because rate limits are transient and retrying is the
+// correct recovery strategy.
+func TestNtfyPublisher_Publish_RetryOn429(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount < 3 {
+			w.WriteHeader(http.StatusTooManyRequests) // 429
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	p := &NtfyPublisher{HTTP: srv.Client(), URL: srv.URL, Topic: "alerts", RetryDelays: []time.Duration{0, 0}}
+	err := p.Publish(context.Background(), "t", "default", "body")
+	if err != nil {
+		t.Fatalf("expected success after retries on 429, got: %v", err)
+	}
+	if callCount != 3 {
+		t.Errorf("expected 3 attempts (2 rate-limited + 1 success), got %d", callCount)
+	}
+}
+
 // TestNtfyPublisher_Publish_NoRetryOn4xx verifies that 4xx errors are not retried.
 func TestNtfyPublisher_Publish_NoRetryOn4xx(t *testing.T) {
 	callCount := 0
