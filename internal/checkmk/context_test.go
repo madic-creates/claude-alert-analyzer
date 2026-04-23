@@ -87,6 +87,54 @@ func TestValidateAndDescribeHost_ServerError(t *testing.T) {
 	}
 }
 
+// TestValidateAndDescribeHost_ErrorBodyIncluded verifies that when CheckMK returns
+// a non-200 non-404 status, the error message includes a snippet from the response
+// body. This makes misconfiguration errors (wrong credentials, bad URL, server
+// failures) immediately diagnosable from logs without replaying the request.
+func TestValidateAndDescribeHost_ErrorBodyIncluded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"title":"Unauthorized","status":401,"detail":"Bearer token is invalid or expired"}`)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "automation", Secret: "wrongsecret"}
+	_, err := apiClient.ValidateAndDescribeHost(context.Background(), "host1", "1.2.3.4")
+	if err == nil {
+		t.Fatal("expected error for 401 response, got nil")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("error should mention HTTP status 401, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Bearer token is invalid") {
+		t.Errorf("error should include body snippet with auth detail, got: %v", err)
+	}
+}
+
+// TestValidateAndDescribeHost_ErrorBodyTruncated verifies that an oversized error
+// body is capped to 200 bytes in the error message to prevent log flooding.
+func TestValidateAndDescribeHost_ErrorBodyTruncated(t *testing.T) {
+	longBody := strings.Repeat("E", 500) // 500 bytes, well over the 200-byte cap
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, longBody)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "automation", Secret: "secret"}
+	_, err := apiClient.ValidateAndDescribeHost(context.Background(), "host1", "1.2.3.4")
+	if err == nil {
+		t.Fatal("expected error for 500 response, got nil")
+	}
+	// The error string must not contain the full 500-byte body.
+	if strings.Count(err.Error(), "E") >= 500 {
+		t.Errorf("error body was not truncated; full 500-byte body present in: %v", err)
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("error should mention HTTP status 500, got: %v", err)
+	}
+}
+
 func TestValidateAndDescribeHost_InvalidJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

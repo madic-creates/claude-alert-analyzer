@@ -140,7 +140,13 @@ func (c *APIClient) ValidateAndDescribeHost(ctx context.Context, hostname, hostA
 		return nil, fmt.Errorf("host %q not found in CheckMK", hostname)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("CheckMK API returned %d for host %q", resp.StatusCode, hostname)
+		// Include a redacted snippet of the body so operators can diagnose
+		// auth failures (401/403), gateway errors (502/503), or misconfigurations
+		// without having to replay the request manually. Mirrors the pattern
+		// used in sendRequest (claude.go) for non-200 API responses.
+		return nil, fmt.Errorf("CheckMK API returned %d for host %q: %s",
+			resp.StatusCode, hostname,
+			shared.Truncate(shared.RedactSecrets(strings.TrimSpace(string(body))), 200))
 	}
 
 	var hostResp checkmkHostResponse
