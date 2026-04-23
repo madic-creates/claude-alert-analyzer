@@ -205,7 +205,11 @@ func (s *Server) Run(webhookHandler http.HandlerFunc) {
 	// workers finish before the timeout. time.After leaks the underlying
 	// timer until it fires; with a 25-second DrainTimeout the leaked timer
 	// would remain alive after a clean shutdown where workers drain quickly.
-	drainTimer := time.NewTimer(s.cfg.DrainTimeout)
+	drainTimeout := s.cfg.DrainTimeout
+	if drainTimeout == 0 {
+		drainTimeout = 25 * time.Second
+	}
+	drainTimer := time.NewTimer(drainTimeout)
 	defer drainTimer.Stop()
 	select {
 	case <-done:
