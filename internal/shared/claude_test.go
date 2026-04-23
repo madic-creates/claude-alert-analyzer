@@ -246,7 +246,8 @@ func TestIsAnthropicURL(t *testing.T) {
 		{"https://notanthropic.com/v1/messages", false},
 		{"http://localhost:8080", false},
 		{"https://openrouter.ai/api/v1/chat/completions", false},
-		{"not-a-url", false}, // parse error → false
+		{"not-a-url", false},              // no host → false (url.Parse succeeds but host is empty)
+		{"http://example.com\x00", false}, // url.Parse fails on control characters → false
 	}
 	for _, tc := range cases {
 		got := isAnthropicURL(tc.rawURL)
