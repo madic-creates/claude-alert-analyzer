@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -395,6 +396,9 @@ func GatherContext(ctx context.Context, prom *PrometheusClient, clientset kubern
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
+				slog.Error("prometheus context goroutine panicked",
+					"recover", r,
+					"stack", string(debug.Stack()))
 				promCh <- fmt.Sprintf("(prometheus context gathering panicked: %v)", r)
 			}
 		}()
