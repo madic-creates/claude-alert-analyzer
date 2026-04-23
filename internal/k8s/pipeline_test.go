@@ -189,6 +189,40 @@ func TestProcessAlert_PublishFails_RecordsPrometheusCounter(t *testing.T) {
 	}
 }
 
+// TestProcessAlert_AnalysisFails_RecordsClaudeAPIErrorCounter verifies that
+// when Analyze returns an error and Prom is non-nil, the claude_api_errors_total
+// Prometheus counter is incremented. The counter is used to alert on sustained
+// Claude API outages; without this call the metric is permanently zero.
+func TestProcessAlert_AnalysisFails_RecordsClaudeAPIErrorCounter(t *testing.T) {
+	pub := &mockPublisher{}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+
+	deps := PipelineDeps{
+		Analyzer:     &mockAnalyzer{err: context.DeadlineExceeded},
+		Publishers:   []shared.Publisher{pub},
+		Cooldown:     shared.NewCooldownManager(),
+		Metrics:      metrics,
+		SystemPrompt: "test",
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "fp-claude-err",
+		Title:       "HighCPU",
+		Severity:    "critical",
+		Source:      "k8s",
+		Fields:      map[string]string{},
+	}
+	ProcessAlert(context.Background(), deps, alert)
+
+	got := testutil.ToFloat64(metrics.Prom.ClaudeAPIErrors.WithLabelValues("k8s"))
+	if got != 1 {
+		t.Errorf("claude_api_errors_total{source=\"k8s\"} = %v, want 1", got)
+	}
+}
+
 // TestProcessAlert_EmptyAnalysis verifies that when Analyze returns ("", nil) —
 // which can happen if Claude produces no text content blocks — the pipeline
 // treats it as a failure: cooldown is cleared and AlertsFailed is incremented.

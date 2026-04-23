@@ -70,6 +70,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 		analysis, err = RunAgenticDiagnostics(ctx, deps.SSHConfig, deps.ToolRunner, deps.SSHDialer, hostname, hostInfo.VerifiedIP, alertContext, deps.SSHConfig.MaxAgentRounds)
 		if err != nil {
 			slog.Error("agentic diagnostics failed", "error", err)
+			deps.Metrics.RecordClaudeAPIError(alert.Source)
 			if notifyErr := shared.PublishAll(ctx, deps.Publishers,
 				fmt.Sprintf("Analysis FAILED: %s", alert.Title), "5",
 				fmt.Sprintf("**Agentic diagnostics failed** for %s: %v\n\nManual investigation needed.", alert.Title, err)); notifyErr != nil {
@@ -84,6 +85,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 		analysis, err = deps.Analyzer.Analyze(ctx, StaticAnalysisSystemPrompt, alertContext)
 		if err != nil {
 			slog.Error("analysis failed", "error", err)
+			deps.Metrics.RecordClaudeAPIError(alert.Source)
 			if notifyErr := shared.PublishAll(ctx, deps.Publishers,
 				fmt.Sprintf("Analysis FAILED: %s", alert.Title), "5",
 				fmt.Sprintf("**Analysis failed** for %s: %v\n\nManual investigation needed.", alert.Title, err)); notifyErr != nil {

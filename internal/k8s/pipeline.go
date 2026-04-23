@@ -46,6 +46,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	analysis, err := deps.Analyzer.Analyze(ctx, deps.SystemPrompt, userPrompt)
 	if err != nil {
 		slog.Error("analysis failed", "alertname", alertname, "error", err)
+		deps.Metrics.RecordClaudeAPIError(alert.Source)
 		if notifyErr := shared.PublishAll(ctx, deps.Publishers,
 			fmt.Sprintf("Analysis FAILED: %s", alertname), "5",
 			fmt.Sprintf("**Analysis failed** for %s: %v\n\nManual investigation needed.", alertname, err)); notifyErr != nil {
