@@ -398,6 +398,16 @@ func parseCommandInput(input json.RawMessage) ([]string, error) {
 		if strings.ContainsRune(arg, '\n') || strings.ContainsRune(arg, '\r') {
 			return nil, fmt.Errorf("argument %d contains newline", i)
 		}
+		// Reject leading/trailing whitespace (spaces, tabs) that are not caught
+		// by the newline check above. A leading space in an argument like " -i"
+		// shifts byte positions and bypasses the sed -i denylist check that
+		// inspects arg[:2] for "-i"/"-I": " -i"[:2] is " -", not "-i". The
+		// newline check already closes this class of bypass for "\n-i"; this
+		// guard ensures the same invariant holds for spaces and tabs. No
+		// legitimate diagnostic command argument has surrounding whitespace.
+		if strings.TrimSpace(arg) != arg {
+			return nil, fmt.Errorf("argument %d has leading or trailing whitespace", i)
+		}
 		totalBytes += len(arg)
 	}
 	if totalBytes > maxTotalArgBytes {

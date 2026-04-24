@@ -857,6 +857,39 @@ func TestParseCommandInput_NewlineRejected(t *testing.T) {
 	}
 }
 
+// TestParseCommandInput_LeadingTrailingWhitespace verifies that arguments
+// with surrounding whitespace (spaces, tabs) are rejected. A leading space in
+// an argument like " -i" shifts byte positions and bypasses the sed -i denylist
+// check that inspects arg[:2] for "-i"/"-I": " -i"[:2] is " -", not "-i". The
+// existing newline check closes the same class of bypass for "\n-i"; this test
+// ensures the guard is equally tight for space and tab padding.
+func TestParseCommandInput_LeadingTrailingWhitespace(t *testing.T) {
+	cases := []struct {
+		name  string
+		input []string
+	}{
+		{"leading space in command name", []string{" sed", "s/x/y/", "file"}},
+		{"trailing space in command name", []string{"sed ", "s/x/y/", "file"}},
+		{"leading space bypassing sed -i check", []string{"sed", " -i", "s/x/y/", "file"}},
+		{"leading space bypassing --in-place check", []string{"sed", " --in-place", "s/x/y/", "file"}},
+		{"leading tab in argument", []string{"cat", "\t/etc/passwd"}},
+		{"trailing tab in argument", []string{"cat", "/etc/passwd\t"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, _ := json.Marshal(map[string]any{"command": tc.input})
+			_, err := parseCommandInput(json.RawMessage(data))
+			if err == nil {
+				t.Errorf("expected error for command with leading/trailing whitespace: %v", tc.input)
+				return
+			}
+			if !strings.Contains(err.Error(), "whitespace") {
+				t.Errorf("error should mention whitespace, got: %v", err)
+			}
+		})
+	}
+}
+
 func TestIsDenied_SystemctlFlagsBeforeSubcommand(t *testing.T) {
 	// Flags like --no-pager or --user before the subcommand are common in
 	// practice (Claude naturally adds --no-pager to suppress paging).
