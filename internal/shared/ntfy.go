@@ -75,10 +75,12 @@ func (n *NtfyPublisher) Publish(ctx context.Context, title, priority, body strin
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				if lastErr != nil {
-					return fmt.Errorf("%w; last publish error: %w", ctx.Err(), lastErr)
-				}
-				return ctx.Err()
+				// lastErr is always non-nil here: the for loop only continues
+				// (and thus reaches attempt > 0) via the two paths that assign
+				// lastErr — a failed HTTP.Do or a 5xx/429 response. Direct
+				// returns (request build error, non-retryable 4xx, success)
+				// exit the function without incrementing attempt.
+				return fmt.Errorf("%w; last publish error: %w", ctx.Err(), lastErr)
 			case <-timer.C:
 			}
 			slog.Warn("retrying ntfy publish", "attempt", attempt+1, "after", delay)
