@@ -130,7 +130,7 @@ type sshResult struct {
 
 // shellQuote joins argv into a single string safe for remote shell
 // interpretation. Each element is wrapped in single quotes, and any
-// embedded single quotes are escaped using the '\'' idiom (end the
+// embedded single quotes are escaped using the '\" idiom (end the
 // current single-quoted string, insert an escaped single quote, and
 // start a new single-quoted string).
 func shellQuote(argv []string) string {

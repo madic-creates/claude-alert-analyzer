@@ -240,7 +240,7 @@ func TestIsAnthropicURL(t *testing.T) {
 	}{
 		{"https://api.anthropic.com/v1/messages", true},
 		{"https://anthropic.com/v1/messages", true},
-		{"https://ANTHROPIC.COM/v1/messages", true},       // case-insensitive
+		{"https://ANTHROPIC.COM/v1/messages", true},         // case-insensitive
 		{"https://api.anthropic.com:443/v1/messages", true}, // explicit port
 		{"https://anthropic.com.proxy.example.com", false},  // subdomain-prefix false positive
 		{"https://notanthropic.com/v1/messages", false},

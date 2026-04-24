@@ -1266,28 +1266,28 @@ func TestGetEvents_EventTimeFallback(t *testing.T) {
 	cs.PrependReactor("list", "events", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		items := []corev1.Event{
 			{
-				ObjectMeta:    metav1.ObjectMeta{Name: "evt-A", Namespace: "default"},
-				Type:          corev1.EventTypeWarning,
-				Reason:        "OldStyle",
-				LastTimestamp: metav1.Time{Time: now.Add(-2 * time.Hour)},
-				Message:       "old-style-event",
+				ObjectMeta:     metav1.ObjectMeta{Name: "evt-A", Namespace: "default"},
+				Type:           corev1.EventTypeWarning,
+				Reason:         "OldStyle",
+				LastTimestamp:  metav1.Time{Time: now.Add(-2 * time.Hour)},
+				Message:        "old-style-event",
 				InvolvedObject: corev1.ObjectReference{Name: "pod-A"},
 			},
 			{
-				ObjectMeta:    metav1.ObjectMeta{Name: "evt-B", Namespace: "default"},
-				Type:          corev1.EventTypeWarning,
-				Reason:        "NewStyle",
-				EventTime:     metav1.MicroTime{Time: now.Add(-1 * time.Hour)},
-				Message:       "new-style-event",
+				ObjectMeta:     metav1.ObjectMeta{Name: "evt-B", Namespace: "default"},
+				Type:           corev1.EventTypeWarning,
+				Reason:         "NewStyle",
+				EventTime:      metav1.MicroTime{Time: now.Add(-1 * time.Hour)},
+				Message:        "new-style-event",
 				InvolvedObject: corev1.ObjectReference{Name: "pod-B"},
 			},
 			{
-				ObjectMeta:    metav1.ObjectMeta{Name: "evt-C", Namespace: "default"},
-				Type:          corev1.EventTypeWarning,
-				Reason:        "Both",
-				LastTimestamp: metav1.Time{Time: now.Add(-30 * time.Minute)},
-				EventTime:     metav1.MicroTime{Time: now.Add(-3 * time.Hour)}, // older; must be ignored
-				Message:       "both-fields-event",
+				ObjectMeta:     metav1.ObjectMeta{Name: "evt-C", Namespace: "default"},
+				Type:           corev1.EventTypeWarning,
+				Reason:         "Both",
+				LastTimestamp:  metav1.Time{Time: now.Add(-30 * time.Minute)},
+				EventTime:      metav1.MicroTime{Time: now.Add(-3 * time.Hour)}, // older; must be ignored
+				Message:        "both-fields-event",
 				InvolvedObject: corev1.ObjectReference{Name: "pod-C"},
 			},
 		}

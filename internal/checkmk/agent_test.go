@@ -513,11 +513,11 @@ func TestIsDenied_EmptyCommand(t *testing.T) {
 // in agent logs instead of a clear denial.
 func TestIsDenied_WhitespaceOnlyArgv0(t *testing.T) {
 	cases := [][]string{
-		{" "},           // single space
-		{"  "},          // multiple spaces
-		{"\t"},          // tab
-		{" \t "},        // mixed whitespace
-		{" ", "-h"},     // whitespace-only name with extra args
+		{" "},       // single space
+		{"  "},      // multiple spaces
+		{"\t"},      // tab
+		{" \t "},    // mixed whitespace
+		{" ", "-h"}, // whitespace-only name with extra args
 	}
 	for _, argv := range cases {
 		if !isDenied(DefaultDeniedCommands, argv) {
@@ -537,12 +537,12 @@ func TestIsDenied_WhitespaceOnlyArgv0(t *testing.T) {
 // the denied map, so the command would be silently allowed.
 func TestIsDenied_WhitespaceInArgv0(t *testing.T) {
 	denied := [][]string{
-		{" rm", "-rf", "/"},      // leading space on a map-blocked command
-		{"rm ", "-rf", "/"},      // trailing space
-		{" rm ", "-rf", "/"},     // both sides
-		{" sed", "-i", "s/x/y/", "/etc/hosts"}, // leading space + sed in-place
-		{"sed ", "-i", "s/x/y/", "/etc/hosts"}, // trailing space + sed in-place
-		{" systemctl", "restart", "nginx"},      // leading space + destructive systemctl
+		{" rm", "-rf", "/"},                      // leading space on a map-blocked command
+		{"rm ", "-rf", "/"},                      // trailing space
+		{" rm ", "-rf", "/"},                     // both sides
+		{" sed", "-i", "s/x/y/", "/etc/hosts"},   // leading space + sed in-place
+		{"sed ", "-i", "s/x/y/", "/etc/hosts"},   // trailing space + sed in-place
+		{" systemctl", "restart", "nginx"},       // leading space + destructive systemctl
 		{" find", "/", "-exec", "rm", "{}", ";"}, // leading space + find -exec
 	}
 	for _, argv := range denied {
@@ -553,10 +553,10 @@ func TestIsDenied_WhitespaceInArgv0(t *testing.T) {
 
 	// Non-destructive commands with whitespace in argv[0] must still be allowed.
 	allowed := [][]string{
-		{" df", "-h"},                             // leading space on allowed command
-		{" sed", "-n", "p"},                       // leading space, non-destructive sed
-		{" systemctl", "status", "nginx"},         // leading space, read-only systemctl
-		{" find", "/var/log", "-name", "*.log"},   // leading space, safe find
+		{" df", "-h"},                           // leading space on allowed command
+		{" sed", "-n", "p"},                     // leading space, non-destructive sed
+		{" systemctl", "status", "nginx"},       // leading space, read-only systemctl
+		{" find", "/var/log", "-name", "*.log"}, // leading space, safe find
 	}
 	for _, argv := range allowed {
 		if isDenied(DefaultDeniedCommands, argv) {

@@ -202,8 +202,8 @@ func TestNtfyPublisher_Name(t *testing.T) {
 
 // fakePublisher is a test implementation of Publisher.
 type fakePublisher struct {
-	name string
-	err  error
+	name  string
+	err   error
 	calls int
 }
 

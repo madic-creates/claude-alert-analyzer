@@ -8,23 +8,23 @@ import (
 
 func TestAlertPayloadToAlert(t *testing.T) {
 	tests := []struct {
-		name        string
-		payload     shared.AlertPayload
-		wantStatus  string
-		wantFP      string
-		wantLabels  map[string]string
-		wantAnnots  map[string]string
+		name       string
+		payload    shared.AlertPayload
+		wantStatus string
+		wantFP     string
+		wantLabels map[string]string
+		wantAnnots map[string]string
 	}{
 		{
 			name: "typical firing alert",
 			payload: shared.AlertPayload{
 				Fingerprint: "abc123",
 				Fields: map[string]string{
-					"status":                         "firing",
-					"label:alertname":                "HighCPU",
-					"label:namespace":                "monitoring",
-					"annotation:summary":             "CPU above 90%",
-					"annotation:runbook_url":         "https://runbooks.example.com/high-cpu",
+					"status":                 "firing",
+					"label:alertname":        "HighCPU",
+					"label:namespace":        "monitoring",
+					"annotation:summary":     "CPU above 90%",
+					"annotation:runbook_url": "https://runbooks.example.com/high-cpu",
 				},
 			},
 			wantStatus: "firing",
@@ -84,9 +84,9 @@ func TestAlertPayloadToAlert(t *testing.T) {
 			payload: shared.AlertPayload{
 				Fingerprint: "jkl",
 				Fields: map[string]string{
-					"status":          "firing",
-					"label:name":      "TestAlert",
-					"unrelated_field": "should be ignored",
+					"status":             "firing",
+					"label:name":         "TestAlert",
+					"unrelated_field":    "should be ignored",
 					"labelwithout_colon": "also ignored",
 				},
 			},

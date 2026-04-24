@@ -36,7 +36,7 @@ func TestRedactSecrets_BearerToken(t *testing.T) {
 // tell which field was redacted without exposing its value.
 func TestRedactSecrets_AuthorizationHeaderLabelPreserved(t *testing.T) {
 	cases := []struct {
-		name string
+		name  string
 		input string
 		want  string // substring that MUST appear in redacted output
 	}{
@@ -595,7 +595,7 @@ func TestTruncate_NegativeMaxBytes(t *testing.T) {
 
 func TestTruncate_ExactBoundary(t *testing.T) {
 	// Truncating exactly at a multi-byte boundary should keep the character.
-	emoji := "🚀" // 4 bytes
+	emoji := "🚀"                             // 4 bytes
 	input := strings.Repeat("x", 96) + emoji // 100 bytes total
 	result := Truncate(input, 100)
 	// No truncation needed — string fits exactly.

@@ -13,10 +13,10 @@ import (
 )
 
 type mockAnalyzer struct {
-	result              string
-	err                 error
-	capturedPrompt      string
-	capturedUserPrompt  string
+	result             string
+	err                error
+	capturedPrompt     string
+	capturedUserPrompt string
 }
 
 func (m *mockAnalyzer) Analyze(ctx context.Context, systemPrompt, userPrompt string) (string, error) {

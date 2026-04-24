@@ -164,9 +164,9 @@ var DefaultDeniedCommands = map[string]bool{
 	"nohup": true, "setsid": true,
 	"timeout": true, "watch": true,
 	"nice": true, "ionice": true,
-	"flock": true,
+	"flock":  true,
 	"strace": true, "ltrace": true,
-	"script": true,
+	"script":  true,
 	"nsenter": true, "unshare": true, "chroot": true,
 	"expect": true,
 }

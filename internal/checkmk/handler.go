@@ -62,7 +62,7 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "ACKNOWLEDGEMENT", state))
 				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "DOWNTIME START", state))
 				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "DOWNTIME END", state))
-			cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "CUSTOM", state))
+				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "CUSTOM", state))
 			}
 			slog.Info("skipping recovery, cleared alert cooldowns",
 				"hostname", notif.Hostname, "service", notif.ServiceDescription)

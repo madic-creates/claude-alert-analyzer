@@ -675,8 +675,8 @@ func TestServer_Run_DefaultMetricsPort(t *testing.T) {
 	_ = probe.Close()
 
 	srv := NewServer(ServerConfig{
-		Port:            "0",    // OS-assigned main port
-		MetricsPort:     "",     // intentionally empty — exercises the "9101" default
+		Port:            "0", // OS-assigned main port
+		MetricsPort:     "",  // intentionally empty — exercises the "9101" default
 		WorkerCount:     1,
 		QueueSize:       5,
 		DrainTimeout:    time.Second,
@@ -740,7 +740,7 @@ func TestServer_Run_MainListenAndServeFails(t *testing.T) {
 		metrics := new(AlertMetrics)
 		srv := NewServer(ServerConfig{
 			Port:        port, // occupied — causes ListenAndServe to fail
-			MetricsPort: "0", // OS-assigned, always succeeds
+			MetricsPort: "0",  // OS-assigned, always succeeds
 			WorkerCount: 1,
 			QueueSize:   1,
 		}, metrics, func(ctx context.Context, alert AlertPayload) {})
