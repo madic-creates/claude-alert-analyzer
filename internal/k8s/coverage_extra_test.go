@@ -77,6 +77,25 @@ func TestQuery_StatusWithNoErrorField(t *testing.T) {
 	}
 }
 
+// TestQuery_FailedToParseResponse verifies the "(failed to parse response)"
+// path in query(). This is triggered when the Prometheus API returns HTTP 200
+// but with a body that is not valid JSON (e.g. an HTML error page from a
+// misconfigured reverse proxy). The test serves a plain-text body so that
+// json.Unmarshal fails and the sentinel string is returned.
+func TestQuery_FailedToParseResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("<!DOCTYPE html><html><body>Bad Gateway</body></html>")) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	result := prom.query(context.Background(), "up")
+	if result != "(failed to parse response)" {
+		t.Errorf("expected '(failed to parse response)', got: %s", result)
+	}
+}
+
 // TestGetEvents_ZeroLastTimestamp verifies that when an event has a zero
 // LastTimestamp, the timestamp field in the output is an empty string rather
 // than the zero-time representation. This exercises the else branch at context.go
