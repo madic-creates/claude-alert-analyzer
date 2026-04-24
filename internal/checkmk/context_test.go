@@ -1161,3 +1161,73 @@ func TestSanitizeHostContext(t *testing.T) {
 		})
 	}
 }
+
+// TestGetHostServices_NonOKSortedBySeverity verifies that non-OK services are
+// returned in severity order (CRIT → WARN → UNKNOWN) regardless of the order
+// the CheckMK API returns them. This ensures that when truncation is applied,
+// the most critical entries always survive.
+func TestGetHostServices_NonOKSortedBySeverity(t *testing.T) {
+	// API returns services in WARN → CRIT → WARN → UNKNOWN order.
+	services := checkmkServicesResponse{
+		Value: []checkmkServiceEntry{
+			{Extensions: checkmkServiceExtensions{Description: "DiskUsage", State: 1, Output: "85% used"}},
+			{Extensions: checkmkServiceExtensions{Description: "CPULoad", State: 2, Output: "load critical"}},
+			{Extensions: checkmkServiceExtensions{Description: "Memory", State: 1, Output: "90% used"}},
+			{Extensions: checkmkServiceExtensions{Description: "Agent", State: 3, Output: "no data"}},
+			{Extensions: checkmkServiceExtensions{Description: "Uptime", State: 0, Output: "running fine"}},
+		},
+	}
+	body, _ := json.Marshal(services)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(body)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "u", Secret: "s"}
+	result := apiClient.GetHostServices(context.Background(), "myhost")
+
+	lines := strings.Split(result, "\n")
+
+	// Find positions of each service in the output.
+	indexOf := func(needle string) int {
+		for i, l := range lines {
+			if strings.Contains(l, needle) {
+				return i
+			}
+		}
+		return -1
+	}
+
+	critPos := indexOf("CPULoad")
+	warn1Pos := indexOf("DiskUsage")
+	warn2Pos := indexOf("Memory")
+	unknownPos := indexOf("Agent")
+	okPos := indexOf("Uptime")
+
+	if critPos == -1 || warn1Pos == -1 || warn2Pos == -1 || unknownPos == -1 || okPos == -1 {
+		t.Fatalf("not all services found in output:\n%s", result)
+	}
+
+	// CRIT must appear before both WARN services.
+	if critPos > warn1Pos {
+		t.Errorf("CRIT (pos %d) should appear before WARN DiskUsage (pos %d)", critPos, warn1Pos)
+	}
+	if critPos > warn2Pos {
+		t.Errorf("CRIT (pos %d) should appear before WARN Memory (pos %d)", critPos, warn2Pos)
+	}
+
+	// Both WARN services must appear before UNKNOWN.
+	if warn1Pos > unknownPos {
+		t.Errorf("WARN DiskUsage (pos %d) should appear before UNKNOWN (pos %d)", warn1Pos, unknownPos)
+	}
+	if warn2Pos > unknownPos {
+		t.Errorf("WARN Memory (pos %d) should appear before UNKNOWN (pos %d)", warn2Pos, unknownPos)
+	}
+
+	// UNKNOWN must appear before OK.
+	if unknownPos > okPos {
+		t.Errorf("UNKNOWN (pos %d) should appear before OK (pos %d)", unknownPos, okPos)
+	}
+}

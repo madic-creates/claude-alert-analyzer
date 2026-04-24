@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -170,6 +171,31 @@ func (c *APIClient) ValidateAndDescribeHost(ctx context.Context, hostname, hostA
 	return info, nil
 }
 
+// serviceEntry pairs a CheckMK state value with its formatted output line.
+// Used to sort non-OK services by severity before applying truncation.
+type serviceEntry struct {
+	state int
+	line  string
+}
+
+// nonOKPriority returns a sort key that orders CheckMK state values by
+// diagnostic importance. CRIT (2) sorts first, WARN (1) second, UNKNOWN (3)
+// third, and any other non-OK state last. When non-OK service count exceeds
+// maxServiceLines, sorting ensures the most critical entries survive truncation
+// regardless of the order the CheckMK API returns them.
+func nonOKPriority(state int) int {
+	switch state {
+	case 2:
+		return 0 // CRIT — highest priority
+	case 1:
+		return 1 // WARN
+	case 3:
+		return 2 // UNKNOWN
+	default:
+		return 3 // other non-OK state (stale, pending, …)
+	}
+}
+
 func (c *APIClient) GetHostServices(ctx context.Context, hostname string) string {
 	if !isValidHostname(hostname) {
 		return fmt.Sprintf("(invalid hostname %q)", hostname)
@@ -207,7 +233,8 @@ func (c *APIClient) GetHostServices(ctx context.Context, hostname string) string
 	// dropped. Separating by state here avoids a post-hoc substring search on
 	// the formatted line, which would misclassify a service whose description
 	// itself contains the literal text ": OK —".
-	var nonOKLines, okLines []string
+	var nonOKEntries []serviceEntry
+	var okLines []string
 	stateNames := map[int]string{0: "OK", 1: "WARN", 2: "CRIT", 3: "UNKNOWN"}
 	for _, svc := range svcResp.Value {
 		state := stateNames[svc.Extensions.State]
@@ -219,8 +246,18 @@ func (c *APIClient) GetHostServices(ctx context.Context, hostname string) string
 		if svc.Extensions.State == 0 {
 			okLines = append(okLines, line)
 		} else {
-			nonOKLines = append(nonOKLines, line)
+			nonOKEntries = append(nonOKEntries, serviceEntry{state: svc.Extensions.State, line: line})
 		}
+	}
+
+	// Sort non-OK entries by severity so that when truncation is needed, the
+	// most critical services are always preserved regardless of API return order.
+	sort.Slice(nonOKEntries, func(i, j int) bool {
+		return nonOKPriority(nonOKEntries[i].state) < nonOKPriority(nonOKEntries[j].state)
+	})
+	nonOKLines := make([]string, len(nonOKEntries))
+	for i, e := range nonOKEntries {
+		nonOKLines[i] = e.line
 	}
 
 	lines := append(nonOKLines, okLines...)
@@ -231,8 +268,9 @@ func (c *APIClient) GetHostServices(ctx context.Context, hostname string) string
 
 	// Cap the number of service lines injected into the Claude prompt.
 	// CheckMK hosts can have hundreds of monitored services; sending all of
-	// them consumes unnecessary tokens. Because nonOKLines precede okLines,
-	// truncation always drops the least diagnostically relevant (OK) entries.
+	// them consumes unnecessary tokens. Because nonOKLines are sorted by
+	// severity (CRIT → WARN → UNKNOWN) and precede okLines, truncation always
+	// drops the least diagnostically relevant entries first.
 	const maxServiceLines = 100
 	total := len(lines)
 	if total > maxServiceLines {
