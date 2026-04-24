@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -380,5 +381,54 @@ func TestK8sProcessAlert_EmptyAnalysis_PublishFailureNotification(t *testing.T) 
 
 	if metrics.AlertsFailed.Load() != 1 {
 		t.Errorf("AlertsFailed = %d, want 1", metrics.AlertsFailed.Load())
+	}
+}
+
+// TestGetEvents_EventTimeUsedWhenLastTimestampZero verifies that when an event
+// has a zero LastTimestamp but a non-zero EventTime (the Kubernetes 1.14+
+// canonical MicroTime field), the EventTime value is used for both sorting and
+// display. This covers the `return e.EventTime.Time` branch in the eventTime
+// helper (context.go) which was previously untested: the two existing timestamp
+// tests either set LastTimestamp (TestGetEvents_NonZeroLastTimestamp) or leave
+// both fields at zero (TestGetEvents_ZeroLastTimestamp). Kubernetes 1.14+
+// populates EventTime and may leave LastTimestamp unset, so without this path
+// the timestamp would silently appear as an empty string in the Claude prompt.
+func TestGetEvents_EventTimeUsedWhenLastTimestampZero(t *testing.T) {
+	evtTime := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+
+	cs := fake.NewSimpleClientset()
+	cs.PrependReactor("list", "events", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.EventList{Items: []corev1.Event{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "evt-microtime", Namespace: "testns"},
+				Type:       corev1.EventTypeWarning,
+				Reason:     "CrashLoopBackOff",
+				Message:    "container kept crashing",
+				InvolvedObject: corev1.ObjectReference{
+					Name: "crash-pod",
+				},
+				EventTime: metav1.MicroTime{Time: evtTime}, // Kubernetes 1.14+ style
+				// LastTimestamp intentionally left at zero value.
+			},
+		}}, nil
+	})
+
+	alert := makeAlertWithLabels(map[string]string{"namespace": "testns"})
+	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+
+	events, _, _ := GetKubeContext(context.Background(), cs, alert, cfg)
+	if events == "(no warning events)" {
+		t.Fatal("expected an event in output, got no-events sentinel")
+		return
+	}
+	if !strings.Contains(events, "CrashLoopBackOff") {
+		t.Errorf("expected CrashLoopBackOff reason in output, got: %q", events)
+	}
+	// The EventTime must appear as a formatted RFC3339 timestamp — not empty.
+	// If the eventTime helper returned zero instead of e.EventTime.Time, the
+	// !t.IsZero() guard would produce an empty ts and "2026-01-15" would not
+	// appear in the output.
+	if !strings.Contains(events, "2026-01-15") {
+		t.Errorf("expected EventTime date '2026-01-15' in output, got: %q", events)
 	}
 }
