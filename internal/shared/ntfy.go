@@ -24,10 +24,14 @@ type NtfyPublisher struct {
 }
 
 // NewNtfyPublisher creates an NtfyPublisher with default HTTP client and retry delays.
+// The URL is normalised to never end with "/" so that Publish constructs a valid
+// topic URL without a double slash (e.g. ntfy.example.com/topic rather than
+// ntfy.example.com//topic). This mirrors the normalisation done in
+// NewPrometheusClient.
 func NewNtfyPublisher(url, topic, token string) *NtfyPublisher {
 	return &NtfyPublisher{
 		HTTP:        &http.Client{Timeout: 10 * time.Second},
-		URL:         url,
+		URL:         strings.TrimRight(url, "/"),
 		Topic:       topic,
 		Token:       token,
 		RetryDelays: DefaultNtfyRetryDelays,

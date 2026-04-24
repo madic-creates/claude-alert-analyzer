@@ -97,3 +97,25 @@ func TestNewNtfyPublisher_HTTPClientIsNotDefault(t *testing.T) {
 		t.Error("publisher must not share http.DefaultClient — it has its own timeout")
 	}
 }
+
+// TestNewNtfyPublisher_NormalizesTrailingSlash verifies that NewNtfyPublisher
+// strips a trailing slash from the URL so that Publish constructs a valid
+// topic URL without a double slash (ntfy.example.com/topic rather than
+// ntfy.example.com//topic). Consistent with NewPrometheusClient which applies
+// the same normalisation via strings.TrimRight(url, "/").
+func TestNewNtfyPublisher_NormalizesTrailingSlash(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"https://ntfy.example.com/", "https://ntfy.example.com"},
+		{"https://ntfy.example.com///", "https://ntfy.example.com"},
+		{"https://ntfy.example.com", "https://ntfy.example.com"},
+	}
+	for _, tc := range cases {
+		p := NewNtfyPublisher(tc.input, "alerts", "tok")
+		if p.URL != tc.want {
+			t.Errorf("NewNtfyPublisher(%q).URL = %q, want %q", tc.input, p.URL, tc.want)
+		}
+	}
+}
