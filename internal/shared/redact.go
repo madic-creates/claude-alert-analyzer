@@ -22,9 +22,14 @@ var sensitivePatterns = []sensitivePattern{
 	// on the next whitespace-delimited word unredacted). Once "Bearer" is consumed
 	// by the generic pattern the token is no longer preceded by a scheme keyword
 	// and escapes all subsequent patterns.
+	// Group 1 captures the leading non-letter character (or start of string) and
+	// group 2 captures the keyword so both are preserved in the replacement —
+	// consistent with the keyword=value pattern which also keeps the key name.
+	// The auth scheme (Basic/Bearer) is intentionally dropped alongside the token
+	// to avoid leaking the authentication mechanism.
 	{
 		re:          regexp.MustCompile(`(?i)(^|[^a-zA-Z])(authorization)\s*:\s*(?:basic|bearer)\s+\S+`),
-		replacement: "${1}[REDACTED]",
+		replacement: "${1}${2}: [REDACTED]",
 	},
 	// JSON-style double-quoted key-value pairs: "password": "value". Monitoring
 	// output and API error responses are often JSON-formatted, where the key is

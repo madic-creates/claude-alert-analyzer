@@ -30,6 +30,47 @@ func TestRedactSecrets_BearerToken(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_AuthorizationHeaderLabelPreserved verifies that the
+// "Authorization" keyword is retained in the output after redaction, consistent
+// with the keyword=value pattern which preserves the key name so operators can
+// tell which field was redacted without exposing its value.
+func TestRedactSecrets_AuthorizationHeaderLabelPreserved(t *testing.T) {
+	cases := []struct {
+		name string
+		input string
+		want  string // substring that MUST appear in redacted output
+	}{
+		{
+			name:  "bearer token at start of line",
+			input: "Authorization: Bearer mytoken123",
+			want:  "Authorization: [REDACTED]",
+		},
+		{
+			name:  "basic auth at start of line",
+			input: "Authorization: Basic dXNlcjpwYXNz",
+			want:  "Authorization: [REDACTED]",
+		},
+		{
+			name:  "authorization header in curl command",
+			input: "curl -H 'Authorization: Bearer tok456' https://api.example.com",
+			want:  "Authorization: [REDACTED]",
+		},
+		{
+			name:  "lowercase keyword preserved as-is",
+			input: "authorization: bearer mytoken",
+			want:  "authorization: [REDACTED]",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if !strings.Contains(result, tc.want) {
+				t.Errorf("expected %q in redacted output:\n  input:  %s\n  output: %s", tc.want, tc.input, result)
+			}
+		})
+	}
+}
+
 // TestRedactSecrets_BearerTokenShort verifies that a bearer token in an HTTP
 // Authorization header is fully redacted even when the token is shorter than
 // 20 characters and carries no known vendor prefix (e.g. sk-ant-, ghp_).
