@@ -15,6 +15,11 @@ func TestRedactSecrets_Password(t *testing.T) {
 	if strings.Contains(result, "secret123") {
 		t.Errorf("secret not redacted: %s", result)
 	}
+	// The keyword name must be preserved so operators can identify which field
+	// was redacted. Only the value is replaced, not the key=separator pair.
+	if !strings.Contains(result, "password=") {
+		t.Errorf("keyword name should be preserved in output, got: %s", result)
+	}
 }
 
 func TestRedactSecrets_BearerToken(t *testing.T) {
@@ -359,22 +364,28 @@ func TestRedactSecrets_NoFalsePositiveKeySuffix(t *testing.T) {
 // the keyword is preceded by an underscore.
 func TestRedactSecrets_UnderscorePrefixedKeywords(t *testing.T) {
 	cases := []struct {
-		name  string
-		input string
-		want  string // substring that must NOT appear in the result
+		name        string
+		input       string
+		mustNotHave string // substring that must NOT appear in the result
+		mustHave    string // substring that MUST appear in the result
 	}{
-		{"api_key", "api_key=s3cr3t-value", "s3cr3t-value"},
-		{"API_KEY", "API_KEY=s3cr3t-value", "s3cr3t-value"},
-		{"cache_token", "cache_token=session-xyz", "session-xyz"},
+		{"api_key", "api_key=s3cr3t-value", "s3cr3t-value", "api_key="},
+		{"API_KEY", "API_KEY=s3cr3t-value", "s3cr3t-value", "API_KEY="},
+		{"cache_token", "cache_token=session-xyz", "session-xyz", "cache_token="},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			result := RedactSecrets(tc.input)
-			if strings.Contains(result, tc.want) {
-				t.Errorf("%q: secret %q not redacted; got %q", tc.input, tc.want, result)
+			if strings.Contains(result, tc.mustNotHave) {
+				t.Errorf("%q: secret %q not redacted; got %q", tc.input, tc.mustNotHave, result)
 			}
 			if !strings.Contains(result, "[REDACTED]") {
 				t.Errorf("%q: expected [REDACTED] in result, got %q", tc.input, result)
+			}
+			// Keyword name and separator must be preserved so the field identity is
+			// visible in logs and alerts sent to Claude for root-cause analysis.
+			if !strings.Contains(result, tc.mustHave) {
+				t.Errorf("%q: expected keyword %q preserved in result, got %q", tc.input, tc.mustHave, result)
 			}
 		})
 	}

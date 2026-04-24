@@ -42,11 +42,17 @@ var sensitivePatterns = []sensitivePattern{
 	// Keyword=value pairs: require the keyword not to be immediately preceded by
 	// a letter so that words ending in a keyword suffix (e.g. "monkey", "donkey",
 	// "hockey" which all end in "key") are not partially redacted. The leading
-	// non-letter character (group 1) is preserved in the replacement.
+	// non-letter character (group 1) and the keyword name (group 2) are preserved
+	// in the replacement; only the value after the separator is redacted.
 	// Underscore is not a letter, so _key / api_key / API_KEY still match.
+	// The separator (group 3) is captured and preserved so that
+	// "api_key=secret" → "api_key=[REDACTED]" rather than "api_[REDACTED]",
+	// making redacted output more informative for operators while still hiding
+	// the sensitive value. This is consistent with the JSON key-value pattern
+	// above, which also preserves the key name in its replacement.
 	{
-		re:          regexp.MustCompile(`(?i)(^|[^a-zA-Z])(password|passwd|secret|token|key|authorization|bearer)\s*[=:]\s*\S+`),
-		replacement: "${1}[REDACTED]",
+		re:          regexp.MustCompile(`(?i)(^|[^a-zA-Z])(password|passwd|secret|token|key|authorization|bearer)(\s*[=:]\s*)\S+`),
+		replacement: "${1}${2}${3}[REDACTED]",
 	},
 	{
 		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|ghp_|gho_|github_pat_|xox[bpas]-)\S+`),
