@@ -140,11 +140,18 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 	}
 }
 
+// fingerprint hashes the supplied parts using length-prefixed encoding so that
+// no two distinct part sequences can produce the same SHA-256 input. A null-byte
+// separator between parts is insufficient: fingerprint("a\x00","b") and
+// fingerprint("a","\x00b") both yield the byte sequence a\x00\x00b\x00 when the
+// null at the end of the first part merges with the separator. Length-prefixed
+// encoding (e.g. "2:a\x001:b" vs "1:a2:\x00b") is unambiguous regardless of
+// the byte content of each part.
 func fingerprint(parts ...string) string {
 	h := sha256.New()
 	for _, p := range parts {
+		fmt.Fprintf(h, "%d:", len(p))
 		h.Write([]byte(p))
-		h.Write([]byte{0})
 	}
 	return fmt.Sprintf("%x", h.Sum(nil))
 }

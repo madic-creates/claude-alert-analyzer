@@ -786,6 +786,24 @@ func TestCheckmkHandleWebhook_RecoveryClearsCustomCooldown(t *testing.T) {
 	}
 }
 
+// TestFingerprint_NullByteInPartNoCollision verifies that a null byte embedded
+// inside a part value does not collide with the separator between two other parts.
+// With the old null-byte-separator scheme, fingerprint("a\x00","b") and
+// fingerprint("a","\x00b") both hash the byte sequence a\x00\x00b\x00 because
+// the null at the end of "a\x00" merges with the separator null. CheckMK field
+// values are operator-supplied strings decoded from JSON (which passes \u0000 as
+// a literal null byte), so this collision is reachable in practice. A crafted
+// webhook could force two distinct alerts to share a cooldown fingerprint,
+// causing one to be silently suppressed.
+func TestFingerprint_NullByteInPartNoCollision(t *testing.T) {
+	// "a\x00" + "b" vs "a" + "\x00b" — same raw bytes without length prefixes.
+	fp1 := fingerprint("a\x00", "b", "", "")
+	fp2 := fingerprint("a", "\x00b", "", "")
+	if fp1 == fp2 {
+		t.Errorf("null byte in part caused fingerprint collision: %s", fp1)
+	}
+}
+
 func TestFingerprint_NullByteSeparatorPreventsPrefixCollisions(t *testing.T) {
 	cases := [][2][4]string{
 		// hostname boundary shift: "host1"+"" vs "host"+"1"
