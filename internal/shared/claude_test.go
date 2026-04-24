@@ -1068,38 +1068,23 @@ func TestSendRequest_ErrorCounterIncrementedOnHTTPFailure(t *testing.T) {
 // a []ContentBlock. The type assertion fails and the else-branch appends a new user
 // turn as a fallback before issuing the summary request.
 func TestRunToolLoop_FallbackWhenNoToolRoundsOccurred(t *testing.T) {
-	var callCount atomic.Int32
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{
-			"content": [{"type": "text", "text": "fallback analysis"}],
-			"stop_reason": "end_turn",
-			"usage": {"input_tokens": 50, "output_tokens": 10}
-		}`)
-	}))
-	defer srv.Close()
-
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
+	client := &ClaudeClient{HTTP: http.DefaultClient, BaseURL: "http://unused", APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	// maxRounds=0: the for loop never executes, so messages[0].Content stays as
-	// the initial string. The forced-summary code cannot type-assert it to
-	// []ContentBlock, so the else-branch fires and appends a separate user turn.
-	result, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 0,
+	// maxRounds=0: RunToolLoop must return an error immediately without making
+	// any API calls. Previously the for loop silently skipped and the
+	// forced-summary path appended a second consecutive user message, which the
+	// Anthropic API rejects with 400 "roles must alternate".
+	_, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 0,
 		func(_ string, _ json.RawMessage) (string, error) {
 			t.Fatal("tool handler must not be called when maxRounds=0")
 			return "", nil
 		})
 
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatal("expected error for maxRounds=0, got nil")
 	}
-	if result != "fallback analysis" {
-		t.Errorf("result = %q, want %q", result, "fallback analysis")
-	}
-	if calls := callCount.Load(); calls != 1 {
-		t.Errorf("expected 1 API call (forced summary), got %d", calls)
+	if !strings.Contains(err.Error(), "maxRounds") {
+		t.Errorf("error should mention 'maxRounds', got: %v", err)
 	}
 }

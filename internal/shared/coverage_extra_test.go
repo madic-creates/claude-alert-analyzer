@@ -169,6 +169,34 @@ func TestRunToolLoop_ForcedSummaryEmptyContent(t *testing.T) {
 	}
 }
 
+// TestRunToolLoop_ZeroMaxRounds verifies that RunToolLoop returns an error
+// immediately when maxRounds <= 0, rather than silently skipping the tool loop
+// and falling into the forced-summary path with only the initial string-content
+// user message. Without this guard the type assertion
+// messages[lastIdx].Content.([]ContentBlock) fails for the string initial
+// prompt and the else-fallback appends a second consecutive user message,
+// which the Anthropic API rejects with 400 "roles must alternate". The guard
+// fails fast and prevents that invalid API request.
+func TestRunToolLoop_ZeroMaxRounds(t *testing.T) {
+	client := &ClaudeClient{HTTP: http.DefaultClient, BaseURL: "http://unused", APIKey: "test", Model: "test"}
+	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+
+	for _, rounds := range []int{0, -1, -100} {
+		_, err := client.RunToolLoop(
+			t.Context(),
+			"system", "user prompt", tools, rounds,
+			func(name string, input json.RawMessage) (string, error) { return "", nil },
+		)
+		if err == nil {
+			t.Errorf("maxRounds=%d: expected error, got nil", rounds)
+			continue
+		}
+		if !strings.Contains(err.Error(), "maxRounds") {
+			t.Errorf("maxRounds=%d: error should mention 'maxRounds', got: %v", rounds, err)
+		}
+	}
+}
+
 // TestSendRequest_CreateRequestError verifies that sendRequest returns a "create
 // request: ..." error when http.NewRequestWithContext fails due to an invalid
 // BaseURL (e.g. a null byte injected by a misconfigured environment variable).

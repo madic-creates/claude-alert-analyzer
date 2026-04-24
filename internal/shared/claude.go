@@ -149,6 +149,10 @@ func (c *ClaudeClient) Analyze(ctx context.Context, systemPrompt, userPrompt str
 // RunToolLoop runs a multi-turn Claude conversation with tool use.
 // handleTool is called for each tool_use block. After maxRounds of tool calls,
 // a final request without tools forces Claude to produce a text response.
+// maxRounds must be at least 1; passing 0 or negative returns an error
+// immediately to prevent the forced-summary logic from constructing two
+// consecutive user messages (which the Anthropic API rejects with 400
+// "roles must alternate").
 func (c *ClaudeClient) RunToolLoop(
 	ctx context.Context,
 	systemPrompt string,
@@ -157,6 +161,9 @@ func (c *ClaudeClient) RunToolLoop(
 	maxRounds int,
 	handleTool func(name string, input json.RawMessage) (string, error),
 ) (string, error) {
+	if maxRounds <= 0 {
+		return "", fmt.Errorf("maxRounds must be at least 1, got %d", maxRounds)
+	}
 	messages := []ToolMessage{{Role: "user", Content: userPrompt}}
 
 	var totalInput, totalOutput int
