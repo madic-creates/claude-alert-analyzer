@@ -147,14 +147,38 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 		memCh := make(chan string, 1)
 		restartsCh := make(chan string, 1)
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("cpu query goroutine panicked",
+						"recover", r,
+						"stack", string(debug.Stack()))
+					cpuCh <- fmt.Sprintf("(cpu query goroutine panicked: %v)", r)
+				}
+			}()
 			cpuCh <- p.query(ctx,
 				fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace="%s"}[5m])) by (pod)`, namespace))
 		}()
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("memory query goroutine panicked",
+						"recover", r,
+						"stack", string(debug.Stack()))
+					memCh <- fmt.Sprintf("(memory query goroutine panicked: %v)", r)
+				}
+			}()
 			memCh <- p.query(ctx,
 				fmt.Sprintf(`sum(container_memory_working_set_bytes{namespace="%s"}) by (pod)`, namespace))
 		}()
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("restarts query goroutine panicked",
+						"recover", r,
+						"stack", string(debug.Stack()))
+					restartsCh <- fmt.Sprintf("(restarts query goroutine panicked: %v)", r)
+				}
+			}()
 			restartsCh <- p.query(ctx,
 				fmt.Sprintf(`sum(kube_pod_container_status_restarts_total{namespace="%s"}) by (pod)`, namespace))
 		}()

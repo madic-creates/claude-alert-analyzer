@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -986,6 +987,70 @@ func TestGatherContext_PrometheusPanic(t *testing.T) {
 	promContent := actx.Sections[0].Content
 	if !strings.Contains(promContent, "panicked") {
 		t.Errorf("expected panic sentinel in Prometheus section, got: %q", promContent)
+	}
+}
+
+// namespacePanicTransport is an http.RoundTripper that panics on requests
+// containing a namespace label selector but returns a valid empty Prometheus
+// response for all other requests. It is used to test that the namespace-scoped
+// goroutines in GetMetrics recover from panics without deadlocking.
+type namespacePanicTransport struct {
+	okBody []byte
+}
+
+func newNamespacePanicTransport(t *testing.T) namespacePanicTransport {
+	t.Helper()
+	resp := PromQueryResponse{Status: "success"}
+	resp.Data.ResultType = "vector"
+	body, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal prom response: %v", err)
+	}
+	return namespacePanicTransport{okBody: body}
+}
+
+func (tr namespacePanicTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if strings.Contains(r.URL.RawQuery, "namespace%3D") || strings.Contains(r.URL.RawQuery, "namespace=") {
+		panic("simulated namespace query panic")
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(string(tr.okBody))),
+	}, nil
+}
+
+// TestGetMetrics_NamespaceGoroutinePanic verifies that a panic inside a
+// namespace-scoped query goroutine is recovered and a sentinel value is sent
+// to the result channel, preventing the caller from deadlocking on the channel
+// receive. The ALERTS query succeeds so that all three namespace goroutines are
+// launched before any panic occurs — this exercises the recovery path that the
+// existing TestGatherContext_PrometheusPanic test does not reach (that test
+// panics on the synchronous ALERTS query before any namespace goroutine starts).
+func TestGetMetrics_NamespaceGoroutinePanic(t *testing.T) {
+	alert := makeAlertWithLabels(map[string]string{"alertname": "Test", "namespace": "prod"})
+	prom := &PrometheusClient{
+		HTTP: &http.Client{Transport: newNamespacePanicTransport(t)},
+		URL:  "http://127.0.0.1:9999",
+	}
+
+	done := make(chan string, 1)
+	go func() {
+		done <- prom.GetMetrics(context.Background(), alert)
+	}()
+
+	var result string
+	select {
+	case result = <-done:
+		// success: did not deadlock
+	case <-time.After(5 * time.Second):
+		t.Fatal("GetMetrics deadlocked after namespace query goroutine panic")
+	}
+
+	for _, sentinel := range []string{"cpu query goroutine panicked", "memory query goroutine panicked", "restarts query goroutine panicked"} {
+		if !strings.Contains(result, sentinel) {
+			t.Errorf("expected %q in GetMetrics result, got: %q", sentinel, result)
+		}
 	}
 }
 
