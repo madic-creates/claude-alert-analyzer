@@ -749,6 +749,43 @@ func TestCheckmkHandleWebhook_RecoveryClearsOKStateCooldown(t *testing.T) {
 	}
 }
 
+// TestCheckmkHandleWebhook_RecoveryClearsCustomCooldown verifies that a RECOVERY
+// notification clears cooldown entries set by CUSTOM notifications. Without this
+// fix a CUSTOM alert that enters cooldown would never be cleared by a RECOVERY,
+// causing the next CUSTOM notification within the TTL window to be silently
+// suppressed even though the service has already recovered.
+func TestCheckmkHandleWebhook_RecoveryClearsCustomCooldown(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cfg.CooldownSeconds = 60 // long TTL so cooldown is still active on second attempt
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	}, nil)
+
+	// CUSTOM notification: queued and sets a cooldown keyed on "CUSTOM".
+	custom := makeNotification("host1", "Disk", "CRITICAL", "CUSTOM")
+	postCheckmkWebhook(t, handler, "test-secret", custom)
+	if enqueued.Load() != 1 {
+		t.Fatalf("expected 1 enqueued after CUSTOM, got %d", enqueued.Load())
+	}
+
+	// RECOVERY: must clear the CUSTOM cooldown.
+	recovery := makeNotification("host1", "Disk", "OK", "RECOVERY")
+	postCheckmkWebhook(t, handler, "test-secret", recovery)
+	if enqueued.Load() != 1 {
+		t.Errorf("RECOVERY should not be enqueued, still expect 1, got %d", enqueued.Load())
+	}
+
+	// Second CUSTOM within original TTL window: must be enqueued because the
+	// RECOVERY cleared the CUSTOM cooldown. Without the fix this would be suppressed.
+	postCheckmkWebhook(t, handler, "test-secret", custom)
+	if enqueued.Load() != 2 {
+		t.Errorf("expected 2 enqueued after second CUSTOM (cooldown cleared by RECOVERY), got %d", enqueued.Load())
+	}
+}
+
 func TestFingerprint_NullByteSeparatorPreventsPrefixCollisions(t *testing.T) {
 	cases := [][2][4]string{
 		// hostname boundary shift: "host1"+"" vs "host"+"1"
