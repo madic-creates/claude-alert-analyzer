@@ -909,6 +909,14 @@ func TestParseCommandInput_ControlCharacterRejected(t *testing.T) {
 		{"ETX (0x03) in command name", []string{"\x03rm", "-rf", "/"}},
 		{"VT (0x0b) embedded in argument", []string{"grep", "foo\x0bbar", "/etc/passwd"}},
 		{"FF (0x0c) embedded in argument", []string{"grep", "foo\x0cbar", "/var/log/syslog"}},
+		// Tab (0x09) in the middle of an argument must be rejected. TrimSpace only
+		// catches leading/trailing whitespace; a tab embedded between non-whitespace
+		// characters passes TrimSpace unchanged. An argument like "-ex\tec" (tab
+		// in the middle of "-exec") would defeat exact-match denylist lookups such
+		// as findExecFlags ("-ex\tec" != "-exec"), silently bypassing the guard.
+		{"tab embedded mid-word in find exec flag defeats denylist lookup", []string{"find", "/tmp", "-ex\tec", "rm", "-rf", "{}", ";"}},
+		{"tab embedded in middle of argument", []string{"grep", "fo\to", "/etc/passwd"}},
+		{"tab between dash and flag letter bypasses sed in-place check", []string{"sed", "-\ti", "s/x/y/", "file"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

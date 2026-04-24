@@ -408,15 +408,17 @@ func parseCommandInput(input json.RawMessage) ([]string, error) {
 		if strings.TrimSpace(arg) != arg {
 			return nil, fmt.Errorf("argument %d has leading or trailing whitespace", i)
 		}
-		// Reject control characters not caught by the checks above. Characters
-		// 0x01–0x08, 0x0b, 0x0c, 0x0e–0x1f, and 0x7f (DEL) are never valid in
-		// diagnostic command arguments and can bypass position-based denylist
-		// guards: for example, "\x01-i" passed as an argument to sed has
-		// arg[:2] == "\x01-" instead of "-i", defeating the in-place write check
-		// in isDenied without being caught by the leading-whitespace check (since
-		// bytes like 0x01 are not considered whitespace by strings.TrimSpace).
+		// Reject control characters not caught by the checks above. All
+		// characters 0x01–0x1f (except \n, \r, and \x00 which are already
+		// rejected above) and 0x7f (DEL) are never valid in diagnostic command
+		// arguments. This includes tab (0x09): the TrimSpace check above only
+		// rejects leading/trailing tabs, so a tab embedded in the middle of an
+		// argument — e.g. "-exec\t" — would pass TrimSpace unchanged and
+		// silently defeat exact-match denylist lookups such as findExecFlags
+		// (which stores "-exec", not "-exec\t"). Rejecting all control
+		// characters here closes that gap uniformly.
 		for _, r := range arg {
-			if (r < 0x20 && r != '\t' && r != '\n' && r != '\r' && r != '\x00') || r == 0x7f {
+			if (r < 0x20 && r != '\n' && r != '\r' && r != '\x00') || r == 0x7f {
 				return nil, fmt.Errorf("argument %d contains control character 0x%02x", i, r)
 			}
 		}
