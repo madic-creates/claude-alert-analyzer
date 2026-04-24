@@ -496,3 +496,62 @@ func TestGetHostServices_ReadBodyError(t *testing.T) {
 		t.Errorf("expected '(failed to read response)', got: %s", result)
 	}
 }
+
+// TestGetHostServices_OtherStateSortsLastAmongNonOK verifies that non-OK services
+// with a state outside the standard CheckMK values (0–3) — such as state 4 (STALE)
+// — sort after UNKNOWN (state 3) in the output. This covers the default branch of
+// nonOKPriority, which returns sort priority 3 for any unrecognised state. The
+// existing TestGetHostServices_UnknownState uses a single non-OK service so
+// sort.Slice never invokes the comparator and the default branch goes uncovered;
+// with at least two non-OK services the comparator is called for every pair.
+func TestGetHostServices_OtherStateSortsLastAmongNonOK(t *testing.T) {
+	services := checkmkServicesResponse{
+		Value: []checkmkServiceEntry{
+			// Return in worst-first order so the test would trivially pass without sorting.
+			// The correct sorted order must be CRIT → UNKNOWN → STALE(4).
+			{Extensions: checkmkServiceExtensions{Description: "StaleService", State: 4, Output: "stale data"}},
+			{Extensions: checkmkServiceExtensions{Description: "UnknownService", State: 3, Output: "no data"}},
+			{Extensions: checkmkServiceExtensions{Description: "CritService", State: 2, Output: "down"}},
+		},
+	}
+	body, err := json.Marshal(services)
+	if err != nil {
+		t.Fatalf("marshal services: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "u", Secret: "s"}
+	result := apiClient.GetHostServices(context.Background(), "myhost")
+
+	lines := strings.Split(result, "\n")
+	indexOf := func(needle string) int {
+		for i, l := range lines {
+			if strings.Contains(l, needle) {
+				return i
+			}
+		}
+		return -1
+	}
+
+	critPos := indexOf("CritService")
+	unknownPos := indexOf("UnknownService")
+	stalePos := indexOf("StaleService")
+
+	if critPos == -1 || unknownPos == -1 || stalePos == -1 {
+		t.Fatalf("not all services found in output:\n%s", result)
+	}
+
+	// CRIT must appear before UNKNOWN.
+	if critPos > unknownPos {
+		t.Errorf("CRIT (line %d) should appear before UNKNOWN (line %d)", critPos, unknownPos)
+	}
+	// UNKNOWN must appear before the STALE (other) service.
+	if unknownPos > stalePos {
+		t.Errorf("UNKNOWN (line %d) should appear before STALE state=4 (line %d)", unknownPos, stalePos)
+	}
+}
