@@ -123,6 +123,57 @@ func TestRedactSecrets_BearerTokenShort(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_NonBearerAuthSchemes verifies that Authorization headers
+// using schemes other than Basic/Bearer (e.g. Token, ApiKey, Digest) are fully
+// redacted. Previously only Basic and Bearer were matched by the first pattern;
+// other schemes fell through to the keyword=value pattern which only consumed
+// the scheme word, leaving the actual credential on the next token unredacted
+// (e.g. "Authorization: Token mysecret" → "Authorization: [REDACTED] mysecret").
+func TestRedactSecrets_NonBearerAuthSchemes(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		leak  string // substring that must NOT appear in result
+	}{
+		{
+			name:  "Token scheme",
+			input: "Authorization: Token mysecrettoken123",
+			leak:  "mysecrettoken123",
+		},
+		{
+			name:  "ApiKey scheme",
+			input: "Authorization: ApiKey abc-def-ghi-jkl",
+			leak:  "abc-def-ghi-jkl",
+		},
+		{
+			name:  "Digest scheme partial credentials",
+			input: `Authorization: Digest username="alice", realm="example.com", response="deadbeef"`,
+			leak:  "deadbeef",
+		},
+		{
+			name:  "Token scheme in log line",
+			input: `request failed: status=401 header="Authorization: Token secret99"`,
+			leak:  "secret99",
+		},
+		{
+			name:  "case-insensitive token scheme",
+			input: "authorization: token MYTOKEN456",
+			leak:  "MYTOKEN456",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("credential leaked in output:\n  input:  %s\n  output: %s\n  leaked: %s", tc.input, result, tc.leak)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
 func TestRedactSecrets_PrivateKey(t *testing.T) {
 	input := "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----"
 	result := RedactSecrets(input)

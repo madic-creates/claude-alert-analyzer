@@ -15,20 +15,21 @@ type sensitivePattern struct {
 // Patterns must be ordered so that more specific matches (e.g. DB URLs) run
 // before broader ones (e.g. the email pattern) to avoid partial redactions.
 var sensitivePatterns = []sensitivePattern{
-	// HTTP Authorization headers with a scheme (Basic or Bearer) followed by
-	// credentials. This must run BEFORE the generic keyword=value pattern below
-	// because that pattern only captures the first non-whitespace word after the
-	// colon (e.g. it redacts "Authorization: Bearer" but leaves the actual token
-	// on the next whitespace-delimited word unredacted). Once "Bearer" is consumed
-	// by the generic pattern the token is no longer preceded by a scheme keyword
-	// and escapes all subsequent patterns.
+	// HTTP Authorization headers: redact everything after "Authorization:" to
+	// end-of-line regardless of the auth scheme (Basic, Bearer, Token, ApiKey,
+	// Digest, AWS4-HMAC-SHA256, …). This must run BEFORE the generic
+	// keyword=value pattern below because that pattern only captures the first
+	// non-whitespace word after the colon as the value — e.g. for
+	// "Authorization: Token mysecret" it would replace "Token" and leave
+	// "mysecret" unredacted. By consuming everything up to end-of-line we
+	// prevent partial redactions like "Authorization: [REDACTED] mysecret"
+	// that expose the actual credential after the scheme word is replaced.
 	// Group 1 captures the leading non-letter character (or start of string) and
-	// group 2 captures the keyword so both are preserved in the replacement —
-	// consistent with the keyword=value pattern which also keeps the key name.
-	// The auth scheme (Basic/Bearer) is intentionally dropped alongside the token
-	// to avoid leaking the authentication mechanism.
+	// group 2 captures the keyword so both are preserved in the replacement.
+	// The auth scheme is intentionally dropped alongside the credential to avoid
+	// leaking the authentication mechanism.
 	{
-		re:          regexp.MustCompile(`(?i)(^|[^a-zA-Z])(authorization)\s*:\s*(?:basic|bearer)\s+\S+`),
+		re:          regexp.MustCompile(`(?i)(^|[^a-zA-Z])(authorization)\s*:\s*\S[^\n\r]*`),
 		replacement: "${1}${2}: [REDACTED]",
 	},
 	// JSON-style double-quoted key-value pairs: "password": "value". Monitoring
