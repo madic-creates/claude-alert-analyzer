@@ -384,6 +384,33 @@ func TestK8sProcessAlert_EmptyAnalysis_PublishFailureNotification(t *testing.T) 
 	}
 }
 
+// TestGetPodStatus_ListError verifies that when the Kubernetes Pods List call
+// fails, getPodStatus returns the "(failed: ...)" sentinel rather than panicking
+// or returning an empty string. This covers the error path at context.go:279,
+// the getPodStatus analogue of TestGetEvents_ListError and
+// TestGetKubeContext_PodLogsAPIError — both peer context-gathering functions
+// have their list-error paths explicitly asserted; this test fills the same
+// coverage gap for getPodStatus.
+// Using an empty AllowedNamespaces ensures getPodLogs returns early without
+// calling Pods().List(), so the reactor is triggered solely by getPodStatus.
+func TestGetPodStatus_ListError(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("etcd unavailable")
+	})
+
+	alert := makeAlertWithLabels(map[string]string{"namespace": "testns"})
+	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+
+	_, pods, _ := GetKubeContext(context.Background(), cs, alert, cfg)
+	if !strings.Contains(pods, "failed") {
+		t.Errorf("expected '(failed: ...)' for pods list error, got: %q", pods)
+	}
+	if !strings.Contains(pods, "etcd unavailable") {
+		t.Errorf("expected error detail in pods output, got: %q", pods)
+	}
+}
+
 // TestGetEvents_EventTimeUsedWhenLastTimestampZero verifies that when an event
 // has a zero LastTimestamp but a non-zero EventTime (the Kubernetes 1.14+
 // canonical MicroTime field), the EventTime value is used for both sorting and
