@@ -140,16 +140,28 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	}
 
 	if namespace != "" {
+		// Run the three namespace-scoped queries concurrently so that a slow
+		// Prometheus doesn't cause them to exhaust the promCtx budget
+		// sequentially (3 × per-query HTTP timeout vs. 1 ×).
+		cpuCh := make(chan string, 1)
+		memCh := make(chan string, 1)
+		restartsCh := make(chan string, 1)
+		go func() {
+			cpuCh <- p.query(ctx,
+				fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace="%s"}[5m])) by (pod)`, namespace))
+		}()
+		go func() {
+			memCh <- p.query(ctx,
+				fmt.Sprintf(`sum(container_memory_working_set_bytes{namespace="%s"}) by (pod)`, namespace))
+		}()
+		go func() {
+			restartsCh <- p.query(ctx,
+				fmt.Sprintf(`sum(kube_pod_container_status_restarts_total{namespace="%s"}) by (pod)`, namespace))
+		}()
 		sections = append(sections,
-			fmt.Sprintf("\n## CPU Usage (%s)", namespace),
-			p.query(ctx,
-				fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace="%s"}[5m])) by (pod)`, namespace)),
-			fmt.Sprintf("\n## Memory Usage (%s)", namespace),
-			p.query(ctx,
-				fmt.Sprintf(`sum(container_memory_working_set_bytes{namespace="%s"}) by (pod)`, namespace)),
-			fmt.Sprintf("\n## Pod Restarts (%s)", namespace),
-			p.query(ctx,
-				fmt.Sprintf(`sum(kube_pod_container_status_restarts_total{namespace="%s"}) by (pod)`, namespace)),
+			fmt.Sprintf("\n## CPU Usage (%s)", namespace), <-cpuCh,
+			fmt.Sprintf("\n## Memory Usage (%s)", namespace), <-memCh,
+			fmt.Sprintf("\n## Pod Restarts (%s)", namespace), <-restartsCh,
 		)
 	}
 
