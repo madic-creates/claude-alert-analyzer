@@ -59,8 +59,14 @@ var sensitivePatterns = []sensitivePattern{
 		re:          regexp.MustCompile(`(?i)(^|[^a-zA-Z])(password|passwd|secret|token|key|authorization|bearer)(\s*[=:]\s*)\S+`),
 		replacement: "${1}${2}${3}[REDACTED]",
 	},
+	// Stripe secret keys (sk_live_/sk_test_) and restricted keys
+	// (rk_live_/rk_test_) use underscores as separators, so they do not match
+	// the sk- (hyphen) prefix above. They commonly appear in application error
+	// logs when a Stripe API call fails (e.g. "invalid API key: sk_live_xxx"),
+	// which CheckMK service checks and Kubernetes pod logs then capture and feed
+	// into Claude's context.
 	{
-		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|ghp_|gho_|github_pat_|xox[bpas]-)\S+`),
+		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|github_pat_|xox[bpas]-)\S+`),
 		replacement: "[REDACTED]",
 	},
 	{

@@ -365,6 +365,56 @@ func TestRedactSecrets_JSONKeyValueNoFalsePositive(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_StripeAPIKeys verifies that Stripe secret keys and
+// restricted keys are redacted. Stripe uses underscore separators
+// (sk_live_/sk_test_/rk_live_/rk_test_) rather than hyphens, so they are not
+// caught by the sk- prefix pattern. They frequently appear in application logs
+// when a Stripe API call fails, e.g. "invalid API key provided: sk_live_xxx".
+func TestRedactSecrets_StripeAPIKeys(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "live secret key inline",
+			input: "Stripe error: invalid API key provided: sk_live_FAKE",
+			leak:  "sk_live_FAKE",
+		},
+		{
+			name:  "test secret key inline",
+			input: "stripe charge failed with key sk_test_FAKE",
+			leak:  "sk_test_FAKE",
+		},
+		{
+			name:  "live restricted key",
+			input: "authentication error for rk_live_FAKE",
+			leak:  "rk_live_FAKE",
+		},
+		{
+			name:  "test restricted key",
+			input: "auth failed: rk_test_FAKE",
+			leak:  "rk_test_FAKE",
+		},
+		{
+			name:  "live key in env assignment",
+			input: "STRIPE_SECRET_KEY=sk_live_FAKE",
+			leak:  "sk_live_FAKE",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("Stripe key leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
 func TestRedactSecrets_NoFalsePositive(t *testing.T) {
 	input := "CPU load is 4.5 at 12:00"
 	result := RedactSecrets(input)
