@@ -890,6 +890,41 @@ func TestParseCommandInput_LeadingTrailingWhitespace(t *testing.T) {
 	}
 }
 
+// TestParseCommandInput_ControlCharacterRejected verifies that arguments
+// containing control characters other than those already caught by the null
+// byte and newline checks are rejected. A non-whitespace control character at
+// the start of an argument shifts byte positions and can bypass
+// position-based denylist checks: for example, "\x01-i" passed to sed has
+// arg[:2] == "\x01-" instead of "-i", defeating the in-place write guard in
+// isDenied without being caught by the leading-whitespace check (bytes like
+// 0x01 are not considered whitespace by strings.TrimSpace).
+func TestParseCommandInput_ControlCharacterRejected(t *testing.T) {
+	cases := []struct {
+		name  string
+		input []string
+	}{
+		{"SOH (0x01) bypasses sed -i guard", []string{"sed", "\x01-i", "s/x/y/", "file"}},
+		{"BEL (0x07) in argument", []string{"cat", "\x07/etc/passwd"}},
+		{"DEL (0x7f) in argument", []string{"ls", "\x7f-la"}},
+		{"ETX (0x03) in command name", []string{"\x03rm", "-rf", "/"}},
+		{"VT (0x0b) embedded in argument", []string{"grep", "foo\x0bbar", "/etc/passwd"}},
+		{"FF (0x0c) embedded in argument", []string{"grep", "foo\x0cbar", "/var/log/syslog"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, _ := json.Marshal(map[string]any{"command": tc.input})
+			_, err := parseCommandInput(json.RawMessage(data))
+			if err == nil {
+				t.Errorf("expected error for command with control character: %v", tc.input)
+				return
+			}
+			if !strings.Contains(err.Error(), "control character") {
+				t.Errorf("error should mention control character, got: %v", err)
+			}
+		})
+	}
+}
+
 func TestIsDenied_SystemctlFlagsBeforeSubcommand(t *testing.T) {
 	// Flags like --no-pager or --user before the subcommand are common in
 	// practice (Claude naturally adds --no-pager to suppress paging).
