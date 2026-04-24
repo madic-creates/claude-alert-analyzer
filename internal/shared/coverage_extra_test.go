@@ -3,11 +3,14 @@ package shared
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -683,5 +686,98 @@ func TestServer_Run_DefaultMetricsPort(t *testing.T) {
 		// Run returned cleanly — default metrics port path exercised.
 	case <-time.After(10 * time.Second):
 		t.Fatal("Run did not return within 10 seconds after SIGTERM")
+	}
+}
+
+// TestServer_Run_MainListenAndServeFails verifies that when the main HTTP server
+// cannot bind its port (e.g. the port is already in use), Run logs "server
+// failed" and the process exits with code 1. This exercises the previously-
+// untested slog.Error + os.Exit(1) block inside the main server goroutine
+// (server.go). Tested via Go's subprocess pattern because os.Exit(1) would
+// abort the entire test run if called in the test process itself.
+func TestServer_Run_MainListenAndServeFails(t *testing.T) {
+	const envKey = "TEST_LISTEN_FAIL_MAIN"
+	if os.Getenv(envKey) == "1" {
+		// Subprocess: occupy a port so that the server's ListenAndServe fails.
+		l, err := net.Listen("tcp", ":0")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "setup: net.Listen failed:", err)
+			os.Exit(2)
+		}
+		port := strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
+		// Keep l open so the port remains occupied when ListenAndServe runs.
+		// os.Exit below closes all file descriptors; defer is skipped by os.Exit.
+		_ = l
+
+		metrics := new(AlertMetrics)
+		srv := NewServer(ServerConfig{
+			Port:        port, // occupied — causes ListenAndServe to fail
+			MetricsPort: "0", // OS-assigned, always succeeds
+			WorkerCount: 1,
+			QueueSize:   1,
+		}, metrics, func(ctx context.Context, alert AlertPayload) {})
+
+		srv.Run(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		// os.Exit(1) fires inside Run before reaching here.
+		os.Exit(0) // signals that the expected exit did not occur
+		return
+	}
+
+	var stderr strings.Builder
+	cmd := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$")
+	cmd.Env = append(os.Environ(), envKey+"=1")
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected subprocess to exit with an error, got: %v\nstderr: %s", err, stderr.String())
+	}
+	if exitErr.ExitCode() != 1 {
+		t.Errorf("subprocess exit code = %d, want 1\nstderr: %s", exitErr.ExitCode(), stderr.String())
+	}
+}
+
+// TestServer_Run_MetricsListenAndServeFails verifies that when the metrics HTTP
+// server cannot bind its port, Run logs "metrics server failed" and the process
+// exits with code 1. This exercises the previously-untested slog.Error +
+// os.Exit(1) block inside the metrics server goroutine (server.go). Tested via
+// subprocess for the same reason as TestServer_Run_MainListenAndServeFails.
+func TestServer_Run_MetricsListenAndServeFails(t *testing.T) {
+	const envKey = "TEST_LISTEN_FAIL_METRICS"
+	if os.Getenv(envKey) == "1" {
+		l, err := net.Listen("tcp", ":0")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "setup: net.Listen failed:", err)
+			os.Exit(2)
+		}
+		port := strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
+		_ = l
+
+		metrics := new(AlertMetrics)
+		srv := NewServer(ServerConfig{
+			Port:        "0",  // OS-assigned, always succeeds
+			MetricsPort: port, // occupied — causes metrics ListenAndServe to fail
+			WorkerCount: 1,
+			QueueSize:   1,
+		}, metrics, func(ctx context.Context, alert AlertPayload) {})
+
+		srv.Run(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		os.Exit(0)
+		return
+	}
+
+	var stderr strings.Builder
+	cmd := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$")
+	cmd.Env = append(os.Environ(), envKey+"=1")
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected subprocess to exit with an error, got: %v\nstderr: %s", err, stderr.String())
+	}
+	if exitErr.ExitCode() != 1 {
+		t.Errorf("subprocess exit code = %d, want 1\nstderr: %s", exitErr.ExitCode(), stderr.String())
 	}
 }
