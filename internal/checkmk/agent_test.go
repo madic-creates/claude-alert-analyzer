@@ -1470,6 +1470,41 @@ func TestDenyReason(t *testing.T) {
 		}
 	})
 
+	t.Run("find with fprint write-to-file flag names the flag and mentions destructive", func(t *testing.T) {
+		// -fprint writes output to a named file (truncating it first); it is a
+		// write operation that belongs to findDestructiveFlags alongside -delete.
+		// denyReason must mention -fprint and describe it as a destructive flag so
+		// Claude understands why it was blocked. Without an explicit test for -fprint
+		// (and its siblings -fprint0, -fprintf, -fls) the "destructive flag" message
+		// path could regress silently while -exec tests continued to pass.
+		msg := denyReason([]string{"find", "/var/log", "-name", "*.log", "-fprint", "out.txt"})
+		if !strings.Contains(msg, "-fprint") {
+			t.Errorf("expected message to name the -fprint flag; got: %s", msg)
+		}
+		if !strings.Contains(msg, "destructive") {
+			t.Errorf("expected message to describe flag as destructive; got: %s", msg)
+		}
+	})
+
+	t.Run("find in custom denylist without exec/destructive flags uses generic message", func(t *testing.T) {
+		// When find is blocked because it appears in the operator's custom
+		// SSH_DENIED_COMMANDS map (not because of -exec/-delete/-fprint etc.),
+		// denyReason must return the generic "not allowed" message rather than a
+		// flag-specific one. A flag-specific message would mislead Claude into
+		// believing it can retry without the flag, wasting a tool-loop round.
+		// This mirrors the analogous "sed in custom denylist" sub-test above.
+		msg := denyReason([]string{"find", "/var/log", "-name", "*.log", "-type", "f"})
+		if !strings.Contains(msg, "find") {
+			t.Errorf("expected generic message to name the command; got: %s", msg)
+		}
+		if !strings.Contains(msg, "not allowed") {
+			t.Errorf("expected generic denied message; got: %s", msg)
+		}
+		if strings.Contains(msg, "exec") {
+			t.Errorf("expected message NOT to mention exec flags when none are present; got: %s", msg)
+		}
+	})
+
 	t.Run("sed with -i flag mentions in-place and suggests stdout alternative", func(t *testing.T) {
 		msg := denyReason([]string{"sed", "-i", "s/foo/bar/", "/etc/hosts"})
 		if !strings.Contains(msg, "-i") {
