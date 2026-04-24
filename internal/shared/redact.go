@@ -94,8 +94,15 @@ var sensitivePatterns = []sensitivePattern{
 		re:          regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
 		replacement: "[REDACTED]",
 	},
+	// Email addresses: the domain section (between @ and the final dot) must
+	// contain at least one letter so that systemd template unit names of the
+	// form "user@<uid>.service" (e.g. "user@1000.service", "polkitd@0.service")
+	// are not incorrectly redacted. Real email hostnames always contain at
+	// least one letter; UID-based systemd instance identifiers are purely
+	// numeric and must not be suppressed, as they are essential diagnostic
+	// context in systemd journal output fed to Claude for root-cause analysis.
 	{
-		re:          regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`),
+		re:          regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]*[A-Za-z][A-Za-z0-9.-]*\.[A-Za-z]{2,}`),
 		replacement: "[REDACTED]",
 	},
 }

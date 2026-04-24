@@ -362,6 +362,60 @@ func TestRedactSecrets_EmailNoFalsePositive_IPv4(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_EmailNoFalsePositive_SystemdUnits verifies that systemd
+// template unit instance names of the form "name@<uid>.service" are NOT
+// redacted. The email regex previously matched these because the UID (e.g.
+// "1000") satisfies [A-Za-z0-9.-]+ and "service" satisfies [A-Za-z]{2,}.
+// These strings are critical diagnostic context: systemd logs frequently
+// include lines such as "user@1000.service: Main process exited" or
+// "Started polkitd@0.service", and redacting them strips the unit identity
+// from the output that Claude uses for root-cause analysis.
+func TestRedactSecrets_EmailNoFalsePositive_SystemdUnits(t *testing.T) {
+	cases := []string{
+		// Numeric UID instance — the most common form: systemd creates one
+		// user@<uid>.service per logged-in user.
+		"user@1000.service: Main process exited, code=exited, status=1/FAILURE",
+		"Started user@1000.service - User Manager for UID 1000.",
+		// Single-digit UID (system users such as polkitd use low UIDs).
+		"polkitd@0.service loaded active running",
+		// Multi-digit numeric instance in a log prefix.
+		"systemd[1]: user@500.service: Deactivated successfully.",
+	}
+	for _, input := range cases {
+		result := RedactSecrets(input)
+		if result != input {
+			t.Errorf("false positive: systemd unit name was redacted\n  input:  %s\n  output: %s", input, result)
+		}
+	}
+}
+
+// TestRedactSecrets_EmailStillRedactedAfterSystemdFix verifies that real email
+// addresses continue to be redacted after the systemd false-positive fix.
+// The updated regex still matches addresses whose domain section contains at
+// least one letter, which covers all valid email hostnames.
+func TestRedactSecrets_EmailStillRedactedAfterSystemdFix(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"simple address", "contact admin@example.com for support"},
+		{"internal domain", "alert sent to ops@monitoring.internal"},
+		{"subdomain address", "cert owner is user@mail.corp.example.org"},
+		{"alphanumeric domain", "notify alert1@host2.example.com immediately"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if result == tc.input {
+				t.Errorf("expected email to be redacted in %q, got unchanged output", tc.input)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker, got: %s", result)
+			}
+		})
+	}
+}
+
 // TestRedactSecrets_JSONKeyValue verifies that JSON-formatted secrets with
 // double-quoted keys and string values are redacted. The generic keyword=value
 // pattern cannot match this form because the closing double quote after the
