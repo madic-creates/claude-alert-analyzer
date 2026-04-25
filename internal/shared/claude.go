@@ -88,17 +88,21 @@ func (c *ClaudeClient) sendRequest(ctx context.Context, body any) ([]byte, error
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned %d: %s", resp.StatusCode, Truncate(RedactSecrets(string(respBody)), 300))
-	}
-
-	// Measure the full round-trip latency: from sending the request to
-	// completing the response body read. HTTP.Do returns after headers are
-	// received, not after the body is read — recording elapsed before
-	// io.ReadAll would capture only header latency, significantly
-	// undercounting the true API call duration for large responses.
+	// Measure the full round-trip latency for all completed round-trips,
+	// including non-200 responses. HTTP.Do returns after headers are received,
+	// not after the body is read — recording elapsed before io.ReadAll would
+	// capture only header latency, significantly undercounting true API call
+	// duration for large responses. Recording on error responses (e.g. 429,
+	// 500) lets operators correlate latency with error spikes and answer
+	// questions like "are rate-limit errors fast (typical) or slow (overloaded
+	// upstream)?". The claude_api_errors_total counter already tracks which
+	// calls failed; the histogram captures how long they took.
 	if c.durationHistogram != nil {
 		c.durationHistogram.Observe(time.Since(start).Seconds())
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API returned %d: %s", resp.StatusCode, Truncate(RedactSecrets(string(respBody)), 300))
 	}
 	return respBody, nil
 }

@@ -922,6 +922,50 @@ func TestSendRequest_DurationHistogramObservedOnSuccess(t *testing.T) {
 	}
 }
 
+// TestSendRequest_DurationHistogramObservedOnNonOK verifies that the
+// durationHistogram is observed even when the Claude API returns a non-200
+// status code (e.g. 429 rate limit, 500 server error). Recording latency for
+// failed round-trips lets operators correlate error spikes with latency changes
+// — e.g. distinguishing a fast 429 (normal back-pressure) from a slow 500
+// (upstream overload). Before this fix, only successful calls contributed to
+// claude_api_duration_seconds, making error latency invisible.
+func TestSendRequest_DurationHistogramObservedOnNonOK(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprint(w, `{"error":{"type":"rate_limit_error","message":"too many requests"}}`)
+	}))
+	defer srv.Close()
+
+	hist := prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name: "test_sendrequest_nonok_duration_seconds",
+		Help: "test histogram for non-OK responses",
+	})
+	client := &ClaudeClient{
+		HTTP:              srv.Client(),
+		BaseURL:           srv.URL,
+		APIKey:            "test-key",
+		Model:             "test",
+		durationHistogram: hist,
+	}
+	_, err := client.sendRequest(context.Background(), map[string]string{"k": "v"})
+	if err == nil {
+		t.Fatal("expected error for 429 response, got nil")
+	}
+
+	var m dto.Metric
+	if err := hist.Write(&m); err != nil {
+		t.Fatalf("read histogram: %v", err)
+	}
+	if m.Histogram.GetSampleCount() != 1 {
+		t.Errorf("expected 1 histogram observation for failed round-trip, got %d; "+
+			"latency must be recorded even when the API returns a non-200 status",
+			m.Histogram.GetSampleCount())
+	}
+	if m.Histogram.GetSampleSum() <= 0 {
+		t.Errorf("expected positive duration sum for failed round-trip, got %f", m.Histogram.GetSampleSum())
+	}
+}
+
 // TestSendRequest_MarshalFailure verifies that sendRequest returns a clear
 // "marshal request" error when the request body cannot be marshalled to JSON.
 // This protects future callers that may pass non-serialisable types (channels,
