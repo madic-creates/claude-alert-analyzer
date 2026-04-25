@@ -403,6 +403,10 @@ func TestGetPodLogs_FetchBoundedToMaxLogPods(t *testing.T) {
 	if count == 0 {
 		t.Error("expected at least one pod log entry in output")
 	}
+	// The truncation notice must appear when the API returns exactly maxLogPods pods.
+	if !strings.Contains(result, "more may exist") {
+		t.Errorf("expected truncation notice in output when pod list is capped at maxLogPods, got: %q", result)
+	}
 }
 
 func TestGetKubeContext_Events_WarningEventListed(t *testing.T) {

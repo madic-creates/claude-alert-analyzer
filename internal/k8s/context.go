@@ -397,6 +397,12 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace s
 			logLines = append(logLines, fmt.Sprintf("--- %s ---\n%s", p.Name, truncated))
 		}
 	}
+	// When the API returned exactly maxLogPods pods, the server-side Limit was
+	// hit and more failing pods may exist. Append a note so Claude knows the log
+	// collection may be incomplete — mirroring the truncation note in getPodStatus.
+	if limit == maxLogPods {
+		logLines = append(logLines, fmt.Sprintf("... [logs shown for first %d failing pods; more may exist]", maxLogPods))
+	}
 	return strings.Join(logLines, "\n\n")
 }
 
