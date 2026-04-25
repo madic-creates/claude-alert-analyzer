@@ -576,6 +576,49 @@ func TestRedactSecrets_GitHubAppTokens(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_GitHubFineGrainedPAT verifies that GitHub fine-grained
+// personal access tokens (github_pat_ prefix, introduced 2022) are redacted.
+// These tokens appear in application error logs when GitHub API calls fail
+// (e.g. "403 Forbidden: github_pat_xxx") and would reach Claude's context
+// unredacted without the github_pat_ entry in the prefix pattern. The redact.go
+// comment explicitly names github_pat_ as a token format requiring coverage;
+// this test verifies the regex entry works end-to-end and will catch any
+// accidental removal or corruption of that alternation.
+func TestRedactSecrets_GitHubFineGrainedPAT(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "token in authentication failure log",
+			input: "authentication failed for github_pat_11ABCDEFG0xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+			leak:  "github_pat_11ABCDEFG0xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+		},
+		{
+			name:  "token in API error response",
+			input: "GitHub API 403 Forbidden: github_pat_11FAKE000000000000000000000000000000000000000",
+			leak:  "github_pat_11FAKE000000000000000000000000000000000000000",
+		},
+		{
+			name:  "token in parenthesised log context",
+			input: `[2024-01-15] POST /repos/owner/repo/issues: 403 (token=github_pat_11FAKEFAKE)`,
+			leak:  "github_pat_11FAKEFAKE",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("GitHub fine-grained PAT leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
 // TestRedactSecrets_SlackTokens verifies that all Slack token prefix variants
 // are redacted. xoxb- (bot), xoxp- (user/legacy), xoxa- (app-level), and
 // xoxs- (workspace) were covered by the original xox[bpas]- pattern.
