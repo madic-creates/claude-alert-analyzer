@@ -169,6 +169,7 @@ func TestMetricsHandler_WithPrometheusMetrics_IncludesLabeledMetrics(t *testing.
 	m.RecordAnalyzed("k8s", "critical")
 	m.RecordCooldown("k8s")
 	m.SetQueueDepth("k8s", 3)
+	m.Prom.ClaudeAPIDuration.WithLabelValues("k8s").Observe(1.5)
 	m.RecordClaudeAPIError("k8s")
 	m.RecordNtfyPublishError("k8s")
 
@@ -239,8 +240,8 @@ func TestWithPrometheusMetrics_RecordsCallDuration(t *testing.T) {
 	m.MetricsHandler()(rr, req)
 	body := rr.Body.String()
 
-	if !strings.Contains(body, "claude_api_duration_seconds_count 1") {
-		t.Errorf("expected claude_api_duration_seconds_count 1 in output, got:\n%s", body)
+	if !strings.Contains(body, `claude_api_duration_seconds_count{source="k8s"} 1`) {
+		t.Errorf("expected claude_api_duration_seconds_count{source=\"k8s\"} 1 in output, got:\n%s", body)
 	}
 	// Verify that at least one custom bucket boundary (120 s) is present. The
 	// default prometheus.DefBuckets cap at 10 s and would not contain "le=\"120\"";

@@ -31,7 +31,7 @@ type ClaudeClient struct {
 	Model   string
 
 	// durationHistogram records Claude API call latency. May be nil.
-	durationHistogram prometheus.Histogram
+	durationHistogram prometheus.Observer
 }
 
 // NewClaudeClient creates a ClaudeClient from a BaseConfig with a
@@ -49,7 +49,7 @@ func NewClaudeClient(cfg BaseConfig) *ClaudeClient {
 // each API call is timed. Call this after NewClaudeClient.
 func (c *ClaudeClient) WithPrometheusMetrics(m *AlertMetrics, source string) *ClaudeClient {
 	if m != nil && m.Prom != nil {
-		c.durationHistogram = m.Prom.ClaudeAPIDuration
+		c.durationHistogram = m.Prom.ClaudeAPIDuration.WithLabelValues(source)
 	}
 	return c
 }

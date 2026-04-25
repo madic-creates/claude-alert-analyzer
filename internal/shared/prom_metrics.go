@@ -16,8 +16,8 @@ type PrometheusMetrics struct {
 	AlertsCooldown *prometheus.CounterVec
 	// QueueDepth is a gauge tracking the current number of alerts waiting in the work queue.
 	QueueDepth *prometheus.GaugeVec
-	// ClaudeAPIDuration is a histogram of Claude API call latency in seconds.
-	ClaudeAPIDuration prometheus.Histogram
+	// ClaudeAPIDuration is a histogram of Claude API call latency in seconds, labeled by source.
+	ClaudeAPIDuration *prometheus.HistogramVec
 	// ClaudeAPIErrors counts Claude API errors, labeled by source.
 	ClaudeAPIErrors *prometheus.CounterVec
 	// NtfyPublishErrors counts ntfy publish failures, labeled by source.
@@ -51,11 +51,11 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 	// bucket and make the histogram useless for percentile estimation.
 	claudeAPIBuckets := []float64{1, 5, 10, 20, 30, 45, 60, 90, 120}
 
-	claudeAPIDuration := prometheus.NewHistogram(prometheus.HistogramOpts{
+	claudeAPIDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "claude_api_duration_seconds",
-		Help:    "Latency of Claude API calls in seconds.",
+		Help:    "Latency of Claude API calls in seconds, by source.",
 		Buckets: claudeAPIBuckets,
-	})
+	}, []string{"source"})
 
 	claudeAPIErrors := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "claude_api_errors_total",
