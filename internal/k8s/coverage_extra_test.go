@@ -240,6 +240,50 @@ func TestGetPodLogs_NoLogsOnGetLogsError(t *testing.T) {
 	}
 }
 
+// TestGetEvents_MessageRedacted verifies that Kubernetes event messages are
+// passed through RedactSecrets before being included in the gathered context.
+// Pod logs are already redacted in getPodLogs; event messages were not, creating
+// an inconsistency where credentials appearing in event messages (e.g. registry
+// auth tokens in image pull errors, or passwords in init container startup
+// failures) would reach the Claude API unredacted. A common real-world example:
+// when a pod fails to pull its image due to a registry auth error, the container
+// runtime includes the credential in the error message that Kubernetes surfaces
+// as a Warning event.
+func TestGetEvents_MessageRedacted(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	cs.PrependReactor("list", "events", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.EventList{Items: []corev1.Event{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "pull-fail", Namespace: "testns"},
+				Type:       corev1.EventTypeWarning,
+				Reason:     "Failed",
+				Message:    "Failed to pull image: registry auth failed, token=ghp_SECRETTOKEN123",
+				InvolvedObject: corev1.ObjectReference{
+					Name: "web-pod",
+				},
+			},
+		}}, nil
+	})
+
+	alert := makeAlertWithLabels(map[string]string{"namespace": "testns"})
+	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+
+	events, _, _ := GetKubeContext(context.Background(), cs, alert, cfg)
+	if strings.Contains(events, "ghp_SECRETTOKEN123") {
+		t.Errorf("event message secret leaked into context: %q", events)
+	}
+	if !strings.Contains(events, "[REDACTED]") {
+		t.Errorf("expected [REDACTED] marker in events output, got: %q", events)
+	}
+	// The non-secret parts of the event (reason, object name) must still be present.
+	if !strings.Contains(events, "Failed") {
+		t.Errorf("expected reason 'Failed' preserved in events output, got: %q", events)
+	}
+	if !strings.Contains(events, "web-pod") {
+		t.Errorf("expected involved object 'web-pod' preserved in events output, got: %q", events)
+	}
+}
+
 // TestK8sHandleWebhook_BodyReadError verifies that when the request body read
 // fails for a reason other than exceeding the size limit (e.g. a closed
 // connection), the handler returns 400 Bad Request. This covers the "bad
