@@ -47,15 +47,15 @@ func loadConfig() checkmk.Config {
 	// SSH_DENIED_COMMANDS: not set = default denylist, empty = no guardrails, value = custom list
 	var sshDeniedCommands map[string]bool
 	if val, ok := os.LookupEnv("SSH_DENIED_COMMANDS"); ok {
-		if val == "" {
-			slog.Warn("SSH_DENIED_COMMANDS is empty — all commands are allowed, no denylist active")
-		}
 		sshDeniedCommands = make(map[string]bool)
 		for _, cmd := range strings.Split(val, ",") {
 			cmd = strings.TrimSpace(cmd)
 			if cmd != "" {
 				sshDeniedCommands[cmd] = true
 			}
+		}
+		if len(sshDeniedCommands) == 0 {
+			slog.Warn("SSH_DENIED_COMMANDS is set but resolved to empty — all commands are allowed, no denylist active")
 		}
 	}
 
