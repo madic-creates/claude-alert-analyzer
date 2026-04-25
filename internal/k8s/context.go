@@ -129,10 +129,6 @@ func (p *PrometheusClient) query(ctx context.Context, queryStr string) string {
 func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	namespace := alert.Labels["namespace"]
 	alertname := alert.Labels["alertname"]
-	var sections []string
-
-	sections = append(sections, "## Active Firing Alerts")
-	sections = append(sections, p.query(ctx, `ALERTS{alertstate="firing"}`))
 
 	if namespace != "" && !isValidNamespace(namespace) {
 		slog.Warn("dropping namespace-scoped Prometheus queries: invalid namespace label", "namespace", namespace)
@@ -140,7 +136,7 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	}
 
 	// Determine the alertname-specific query before launching goroutines so it
-	// can run concurrently with the namespace queries when both apply.
+	// can run concurrently with the namespace and firing-alerts queries.
 	lower := strings.ToLower(alertname)
 	var alertnameSectionName, alertnameQueryStr string
 	switch {
@@ -161,12 +157,31 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 		alertnameQueryStr = `kube_node_status_condition{condition="Ready"}`
 	}
 
+	// Launch the global firing-alerts query concurrently so it overlaps with
+	// namespace and alertname queries. Previously this was a synchronous call
+	// that blocked up to one full HTTP timeout (10 s) before the namespace
+	// goroutines were even started. Worst-case latency drops from ~20 s
+	// (serial ALERTS + parallel namespace queries) to ~10 s (all in parallel).
+	firingCh := make(chan string, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("firing alerts goroutine panicked",
+					"recover", r,
+					"stack", string(debug.Stack()))
+				firingCh <- fmt.Sprintf("(firing alerts goroutine panicked: %v)", r)
+			}
+		}()
+		firingCh <- p.query(ctx, `ALERTS{alertstate="firing"}`)
+	}()
+
+	var sections []string
+
 	if namespace != "" {
-		// Run the namespace-scoped queries concurrently. When an alertname-specific
-		// query also applies, run it in a fourth goroutine so it overlaps with the
-		// namespace queries instead of waiting for all three to complete first.
-		// Worst-case latency drops from 2× HTTP timeout (namespace then alertname)
-		// to 1× HTTP timeout (all four queries in parallel).
+		// Run the namespace-scoped queries concurrently with each other and with
+		// the firing-alerts goroutine above. When an alertname-specific query also
+		// applies, run it in a fourth goroutine so it overlaps with the namespace
+		// queries instead of waiting for all three to complete first.
 		cpuCh := make(chan string, 1)
 		memCh := make(chan string, 1)
 		restartsCh := make(chan string, 1)
@@ -224,6 +239,7 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 		}
 
 		sections = append(sections,
+			"## Active Firing Alerts", <-firingCh,
 			fmt.Sprintf("\n## CPU Usage (%s)", namespace), <-cpuCh,
 			fmt.Sprintf("\n## Memory Usage (%s)", namespace), <-memCh,
 			fmt.Sprintf("\n## Pod Restarts (%s)", namespace), <-restartsCh,
@@ -231,8 +247,11 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 		if alertnameCh != nil {
 			sections = append(sections, alertnameSectionName, <-alertnameCh)
 		}
-	} else if alertnameQueryStr != "" {
-		sections = append(sections, alertnameSectionName, p.query(ctx, alertnameQueryStr))
+	} else {
+		sections = append(sections, "## Active Firing Alerts", <-firingCh)
+		if alertnameQueryStr != "" {
+			sections = append(sections, alertnameSectionName, p.query(ctx, alertnameQueryStr))
+		}
 	}
 
 	return strings.Join(sections, "\n")

@@ -994,6 +994,66 @@ func TestGatherContext_PrometheusPanic(t *testing.T) {
 	}
 }
 
+// firingAlertsPanicTransport panics on requests for the global ALERTS metric
+// but returns a valid empty Prometheus response for all other requests (e.g.
+// namespace-scoped queries). It is used to verify that the firing-alerts
+// goroutine in GetMetrics recovers from panics without deadlocking.
+type firingAlertsPanicTransport struct {
+	okBody []byte
+}
+
+func newFiringAlertsPanicTransport(t *testing.T) firingAlertsPanicTransport {
+	t.Helper()
+	resp := PromQueryResponse{Status: "success"}
+	resp.Data.ResultType = "vector"
+	body, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal prom response: %v", err)
+	}
+	return firingAlertsPanicTransport{okBody: body}
+}
+
+func (tr firingAlertsPanicTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if strings.Contains(r.URL.RawQuery, "ALERTS") {
+		panic("simulated firing alerts transport panic")
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(string(tr.okBody))),
+	}, nil
+}
+
+// TestGetMetrics_FiringAlertsGoroutinePanic verifies that a panic inside the
+// firing-alerts goroutine is recovered and a sentinel value is sent to firingCh,
+// preventing the caller from deadlocking on the channel receive. Namespace-scoped
+// queries succeed so only the firing-alerts path is exercised.
+func TestGetMetrics_FiringAlertsGoroutinePanic(t *testing.T) {
+	alert := makeAlertWithLabels(map[string]string{"alertname": "Test", "namespace": "prod"})
+	prom := &PrometheusClient{
+		HTTP: &http.Client{Transport: newFiringAlertsPanicTransport(t)},
+		URL:  "http://127.0.0.1:9999",
+	}
+
+	done := make(chan string, 1)
+	go func() {
+		done <- prom.GetMetrics(context.Background(), alert)
+	}()
+
+	var result string
+	select {
+	case result = <-done:
+		// success: did not deadlock
+	case <-time.After(5 * time.Second):
+		t.Fatal("GetMetrics deadlocked after firing alerts goroutine panic")
+		return
+	}
+
+	if !strings.Contains(result, "firing alerts goroutine panicked") {
+		t.Errorf("expected firing alerts panic sentinel in GetMetrics result, got: %q", result)
+	}
+}
+
 // namespacePanicTransport is an http.RoundTripper that panics on requests
 // containing a namespace label selector but returns a valid empty Prometheus
 // response for all other requests. It is used to test that the namespace-scoped
@@ -1028,9 +1088,9 @@ func (tr namespacePanicTransport) RoundTrip(r *http.Request) (*http.Response, er
 // namespace-scoped query goroutine is recovered and a sentinel value is sent
 // to the result channel, preventing the caller from deadlocking on the channel
 // receive. The ALERTS query succeeds so that all three namespace goroutines are
-// launched before any panic occurs — this exercises the recovery path that the
-// existing TestGatherContext_PrometheusPanic test does not reach (that test
-// panics on the synchronous ALERTS query before any namespace goroutine starts).
+// launched before any panic occurs — this exercises the recovery path that
+// TestGetMetrics_FiringAlertsGoroutinePanic does not reach (that test panics
+// only on the firing-alerts goroutine, not the namespace-scoped goroutines).
 func TestGetMetrics_NamespaceGoroutinePanic(t *testing.T) {
 	alert := makeAlertWithLabels(map[string]string{"alertname": "Test", "namespace": "prod"})
 	prom := &PrometheusClient{
