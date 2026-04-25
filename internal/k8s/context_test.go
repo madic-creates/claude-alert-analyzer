@@ -1054,6 +1054,69 @@ func TestGetMetrics_NamespaceGoroutinePanic(t *testing.T) {
 	}
 }
 
+// alertnamePanicTransport is an http.RoundTripper that panics on requests whose
+// query contains the CrashLoopBackOff alertname-specific PromQL pattern but returns
+// a valid empty Prometheus response for all other requests (ALERTS, namespace-scoped
+// queries). It is used to verify that the alertname goroutine in GetMetrics recovers
+// from panics without deadlocking.
+type alertnamePanicTransport struct {
+	okBody []byte
+}
+
+func newAlertnamePanicTransport(t *testing.T) alertnamePanicTransport {
+	t.Helper()
+	resp := PromQueryResponse{Status: "success"}
+	resp.Data.ResultType = "vector"
+	body, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal prom response: %v", err)
+	}
+	return alertnamePanicTransport{okBody: body}
+}
+
+func (tr alertnamePanicTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if strings.Contains(r.URL.RawQuery, "CrashLoopBackOff") {
+		panic("simulated alertname query panic")
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(string(tr.okBody))),
+	}, nil
+}
+
+// TestGetMetrics_AlertnameGoroutinePanic verifies that a panic inside the
+// alertname-specific query goroutine is recovered and a sentinel value is sent
+// to the result channel, preventing a deadlock. The alert carries both a namespace
+// and a "crashloop" alertname so the alertname query runs as a fourth goroutine
+// concurrently with the three namespace goroutines — the concurrent code path
+// introduced to eliminate sequential latency between the two query groups.
+func TestGetMetrics_AlertnameGoroutinePanic(t *testing.T) {
+	alert := makeAlertWithLabels(map[string]string{
+		"alertname": "PodCrashLoopBackOff",
+		"namespace": "prod",
+	})
+	prom := &PrometheusClient{
+		HTTP: &http.Client{Transport: newAlertnamePanicTransport(t)},
+		URL:  "http://127.0.0.1:9999",
+	}
+
+	done := make(chan string, 1)
+	go func() { done <- prom.GetMetrics(context.Background(), alert) }()
+
+	var result string
+	select {
+	case result = <-done:
+		// success: did not deadlock
+	case <-time.After(5 * time.Second):
+		t.Fatal("GetMetrics deadlocked after alertname query goroutine panic")
+	}
+
+	if !strings.Contains(result, "alertname query goroutine panicked") {
+		t.Errorf("expected alertname panic sentinel in GetMetrics result, got: %q", result)
+	}
+}
+
 // TestGetKubeContext_RespectsDeadlineFromConfig verifies that GetKubeContext derives
 // a child context with a deadline bounded by cfg.KubeAPITimeout. The test passes an
 // already-cancelled parent context and confirms that all three output strings carry

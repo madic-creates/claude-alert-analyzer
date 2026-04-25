@@ -139,10 +139,34 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 		namespace = ""
 	}
 
+	// Determine the alertname-specific query before launching goroutines so it
+	// can run concurrently with the namespace queries when both apply.
+	lower := strings.ToLower(alertname)
+	var alertnameSectionName, alertnameQueryStr string
+	switch {
+	case strings.Contains(lower, "crashloop"):
+		alertnameSectionName = "\n## CrashLoop Details"
+		alertnameQueryStr = `kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"}`
+	case strings.Contains(lower, "memory") || strings.Contains(lower, "oom"):
+		alertnameSectionName = "\n## Top Memory Consumers"
+		alertnameQueryStr = `topk(5, sum(container_memory_working_set_bytes) by (namespace, pod))`
+	case strings.Contains(lower, "cpu"):
+		alertnameSectionName = "\n## Top CPU Consumers"
+		alertnameQueryStr = `topk(5, sum(rate(container_cpu_usage_seconds_total[5m])) by (namespace, pod))`
+	case strings.Contains(lower, "disk") || strings.Contains(lower, "volume") || strings.Contains(lower, "storage"):
+		alertnameSectionName = "\n## PVC Usage"
+		alertnameQueryStr = `(kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes) > 0.8`
+	case strings.Contains(lower, "node"):
+		alertnameSectionName = "\n## Node Conditions"
+		alertnameQueryStr = `kube_node_status_condition{condition="Ready"}`
+	}
+
 	if namespace != "" {
-		// Run the three namespace-scoped queries concurrently so that a slow
-		// Prometheus doesn't cause them to exhaust the promCtx budget
-		// sequentially (3 × per-query HTTP timeout vs. 1 ×).
+		// Run the namespace-scoped queries concurrently. When an alertname-specific
+		// query also applies, run it in a fourth goroutine so it overlaps with the
+		// namespace queries instead of waiting for all three to complete first.
+		// Worst-case latency drops from 2× HTTP timeout (namespace then alertname)
+		// to 1× HTTP timeout (all four queries in parallel).
 		cpuCh := make(chan string, 1)
 		memCh := make(chan string, 1)
 		restartsCh := make(chan string, 1)
@@ -182,30 +206,33 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 			restartsCh <- p.query(ctx,
 				fmt.Sprintf(`sum(kube_pod_container_status_restarts_total{namespace="%s"}) by (pod)`, namespace))
 		}()
+
+		var alertnameCh chan string
+		if alertnameQueryStr != "" {
+			alertnameCh = make(chan string, 1)
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Error("alertname query goroutine panicked",
+							"recover", r,
+							"stack", string(debug.Stack()))
+						alertnameCh <- fmt.Sprintf("(alertname query goroutine panicked: %v)", r)
+					}
+				}()
+				alertnameCh <- p.query(ctx, alertnameQueryStr)
+			}()
+		}
+
 		sections = append(sections,
 			fmt.Sprintf("\n## CPU Usage (%s)", namespace), <-cpuCh,
 			fmt.Sprintf("\n## Memory Usage (%s)", namespace), <-memCh,
 			fmt.Sprintf("\n## Pod Restarts (%s)", namespace), <-restartsCh,
 		)
-	}
-
-	lower := strings.ToLower(alertname)
-	switch {
-	case strings.Contains(lower, "crashloop"):
-		sections = append(sections, "\n## CrashLoop Details",
-			p.query(ctx, `kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"}`))
-	case strings.Contains(lower, "memory") || strings.Contains(lower, "oom"):
-		sections = append(sections, "\n## Top Memory Consumers",
-			p.query(ctx, `topk(5, sum(container_memory_working_set_bytes) by (namespace, pod))`))
-	case strings.Contains(lower, "cpu"):
-		sections = append(sections, "\n## Top CPU Consumers",
-			p.query(ctx, `topk(5, sum(rate(container_cpu_usage_seconds_total[5m])) by (namespace, pod))`))
-	case strings.Contains(lower, "disk") || strings.Contains(lower, "volume") || strings.Contains(lower, "storage"):
-		sections = append(sections, "\n## PVC Usage",
-			p.query(ctx, `(kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes) > 0.8`))
-	case strings.Contains(lower, "node"):
-		sections = append(sections, "\n## Node Conditions",
-			p.query(ctx, `kube_node_status_condition{condition="Ready"}`))
+		if alertnameCh != nil {
+			sections = append(sections, alertnameSectionName, <-alertnameCh)
+		}
+	} else if alertnameQueryStr != "" {
+		sections = append(sections, alertnameSectionName, p.query(ctx, alertnameQueryStr))
 	}
 
 	return strings.Join(sections, "\n")
