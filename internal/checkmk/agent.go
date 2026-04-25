@@ -432,26 +432,27 @@ func parseCommandInput(input json.RawMessage) ([]string, error) {
 		if strings.TrimSpace(arg) != arg {
 			return nil, fmt.Errorf("argument %d has leading or trailing whitespace", i)
 		}
-		// Reject control characters not caught by the checks above. All
-		// characters 0x01–0x1f (except \n, \r, and \x00 which are already
-		// rejected above) and 0x7f (DEL) are never valid in diagnostic command
-		// arguments. This includes tab (0x09): the TrimSpace check above only
-		// rejects leading/trailing tabs, so a tab embedded in the middle of an
-		// argument — e.g. "-exec\t" — would pass TrimSpace unchanged and
-		// silently defeat exact-match denylist lookups such as findExecFlags
-		// (which stores "-exec", not "-exec\t"). Rejecting all control
-		// characters here closes that gap uniformly.
+		// Reject the full C0 control range (0x00–0x1f) and DEL (0x7f). No
+		// legitimate diagnostic command argument contains any of these bytes.
+		// The null-byte, newline, and carriage-return checks above already
+		// reject 0x00, 0x0a, and 0x0d individually; keeping this check
+		// unconditional for the entire C0/DEL range adds defense in depth —
+		// if those earlier checks were ever reordered or removed, this loop
+		// still closes the bypass. It also catches tab (0x09): TrimSpace
+		// rejects leading/trailing tabs but not a tab embedded mid-argument,
+		// so "-exec\t" would pass TrimSpace unchanged and silently defeat
+		// exact-match denylist lookups (findExecFlags stores "-exec", not
+		// "-exec\t").
 		//
 		// C1 Unicode control characters (U+0080–U+009F) are also rejected.
 		// Although they are multi-byte in UTF-8, they are valid Unicode code
 		// points and JSON decodes them transparently (e.g. "\u0080"). Appending
 		// a C1 character to a flag name — e.g. "-exec\u0080" — produces a
-		// string that passes every check above yet defeats the exact-match
-		// denylist lookups in isDenied: findExecFlags["-exec\u0080"] is false
-		// because the map stores "-exec". Blocking U+0080–U+009F closes this
-		// bypass without affecting any legitimate diagnostic command argument.
+		// string that defeats exact-match denylist lookups in isDenied because
+		// the map stores "-exec", not "-exec\u0080". Blocking U+0080–U+009F
+		// closes this bypass without affecting any legitimate command argument.
 		for _, r := range arg {
-			if (r < 0x20 && r != '\n' && r != '\r' && r != '\x00') || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
 				return nil, fmt.Errorf("argument %d contains control character 0x%02x", i, r)
 			}
 		}
