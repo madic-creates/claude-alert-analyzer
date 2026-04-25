@@ -933,6 +933,45 @@ func TestParseCommandInput_ControlCharacterRejected(t *testing.T) {
 	}
 }
 
+// TestParseCommandInput_C1ControlCharacterRejected verifies that C1 Unicode
+// control characters (U+0080–U+009F) are rejected. These code points are
+// decoded transparently by JSON (e.g. the JSON escape "\u0080" produces a
+// one-rune Go string U+0080) and pass all C0/DEL checks in the current
+// implementation. Appending a C1 character to a denylist keyword defeats
+// exact-match lookups: findExecFlags["-exec\u0080"] is false because the map
+// stores "-exec", allowing find with an exec flag to slip through.
+func TestParseCommandInput_C1ControlCharacterRejected(t *testing.T) {
+	cases := []struct {
+		name  string
+		input []string
+	}{
+		// Appending U+0080 (PAD) to "-exec" defeats findExecFlags exact-match.
+		{"C1 PAD appended to -exec bypasses find exec denylist", []string{"find", "/tmp", "-exec\u0080", "rm", "{}", ";"}},
+		// U+0085 (NEL, Next Line) is a C1 control that could be used to inject
+		// a newline-like character that bypasses the ASCII newline check (0x0a).
+		{"C1 NEL (U+0085) in argument", []string{"cat", "/etc/pass\u0085wd"}},
+		// U+009F (APC) at the start of an argument shifts byte positions.
+		{"C1 APC (U+009F) at start of argument shifts sed -i check", []string{"sed", "\u009f-i", "s/x/y/", "file"}},
+		// U+0080 in the command name itself.
+		{"C1 PAD in command name", []string{"r\u0080m", "-rf", "/"}},
+		// C1 character embedded in middle of a normal flag.
+		{"C1 CSI (U+009B) embedded mid-flag", []string{"ls", "-l\u009b-a"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, _ := json.Marshal(map[string]any{"command": tc.input})
+			_, err := parseCommandInput(json.RawMessage(data))
+			if err == nil {
+				t.Errorf("expected error for command with C1 control character: %v", tc.input)
+				return
+			}
+			if !strings.Contains(err.Error(), "control character") {
+				t.Errorf("error should mention control character, got: %v", err)
+			}
+		})
+	}
+}
+
 func TestIsDenied_SystemctlFlagsBeforeSubcommand(t *testing.T) {
 	// Flags like --no-pager or --user before the subcommand are common in
 	// practice (Claude naturally adds --no-pager to suppress paging).

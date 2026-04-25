@@ -417,8 +417,17 @@ func parseCommandInput(input json.RawMessage) ([]string, error) {
 		// silently defeat exact-match denylist lookups such as findExecFlags
 		// (which stores "-exec", not "-exec\t"). Rejecting all control
 		// characters here closes that gap uniformly.
+		//
+		// C1 Unicode control characters (U+0080–U+009F) are also rejected.
+		// Although they are multi-byte in UTF-8, they are valid Unicode code
+		// points and JSON decodes them transparently (e.g. "\u0080"). Appending
+		// a C1 character to a flag name — e.g. "-exec\u0080" — produces a
+		// string that passes every check above yet defeats the exact-match
+		// denylist lookups in isDenied: findExecFlags["-exec\u0080"] is false
+		// because the map stores "-exec". Blocking U+0080–U+009F closes this
+		// bypass without affecting any legitimate diagnostic command argument.
 		for _, r := range arg {
-			if (r < 0x20 && r != '\n' && r != '\r' && r != '\x00') || r == 0x7f {
+			if (r < 0x20 && r != '\n' && r != '\r' && r != '\x00') || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
 				return nil, fmt.Errorf("argument %d contains control character 0x%02x", i, r)
 			}
 		}
