@@ -49,7 +49,7 @@ func loadConfig() checkmk.Config {
 	if val, ok := os.LookupEnv("SSH_DENIED_COMMANDS"); ok {
 		sshDeniedCommands = make(map[string]bool)
 		for _, cmd := range strings.Split(val, ",") {
-			cmd = strings.TrimSpace(cmd)
+			cmd = strings.ToLower(strings.TrimSpace(cmd))
 			if cmd != "" {
 				sshDeniedCommands[cmd] = true
 			}

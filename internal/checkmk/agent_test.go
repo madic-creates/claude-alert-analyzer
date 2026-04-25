@@ -1919,3 +1919,32 @@ func TestIsDenied_BlocksSSHAndFileTransferClients(t *testing.T) {
 		}
 	}
 }
+
+// TestIsDenied_CustomDeniedCommandsCaseInsensitive verifies that isDenied
+// matches argv[0] case-insensitively against the denylist. This mirrors
+// the normalization in loadConfig(): SSH_DENIED_COMMANDS values are
+// lowercased before storage, so lookups must also use lowercase keys.
+func TestIsDenied_CustomDeniedCommandsCaseInsensitive(t *testing.T) {
+	// Simulate what loadConfig() does after the fix: store entries lowercase.
+	customDenied := map[string]bool{
+		"badtool": true,
+	}
+
+	tests := []struct {
+		argv    []string
+		want    bool
+		comment string
+	}{
+		{[]string{"badtool", "--arg"}, true, "lowercase argv matches lowercase key"},
+		{[]string{"BADTOOL", "--arg"}, true, "uppercase argv still matched after isDenied normalizes"},
+		{[]string{"BadTool", "--arg"}, true, "mixed-case argv still matched after isDenied normalizes"},
+		{[]string{"goodtool", "--arg"}, false, "unlisted command must be allowed"},
+	}
+
+	for _, tc := range tests {
+		got := isDenied(customDenied, tc.argv)
+		if got != tc.want {
+			t.Errorf("isDenied(%v) = %v, want %v (%s)", tc.argv, got, tc.want, tc.comment)
+		}
+	}
+}
