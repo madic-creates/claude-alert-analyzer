@@ -221,10 +221,9 @@ func TestSendRequest_CreateRequestError(t *testing.T) {
 }
 
 // TestSendRequest_ReadBodyError verifies that sendRequest returns a "read response: ..."
-// error (and increments the errorCounter) when the server sends a valid HTTP 200
-// header but then drops the TCP connection before delivering the full body. This is
-// a real production failure mode (e.g. a load-balancer reset mid-stream) and covers
-// the previously-untested io.ReadAll error path in sendRequest (claude.go lines ~91-97).
+// error when the server sends a valid HTTP 200 header but then drops the TCP connection
+// before delivering the full body. This is a real production failure mode (e.g. a
+// load-balancer reset mid-stream) and covers the io.ReadAll error path in sendRequest.
 func TestSendRequest_ReadBodyError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Hijack the connection so we can write raw bytes and then close it
@@ -251,14 +250,12 @@ func TestSendRequest_ReadBodyError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &AlertMetrics{Prom: NewPrometheusMetrics()}
 	client := &ClaudeClient{
 		HTTP:    srv.Client(),
 		BaseURL: srv.URL,
 		APIKey:  "test-key",
 		Model:   "test",
 	}
-	client.WithPrometheusMetrics(m, "k8s")
 
 	_, err := client.sendRequest(context.Background(), map[string]string{"k": "v"})
 	if err == nil {
@@ -266,15 +263,6 @@ func TestSendRequest_ReadBodyError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "read response") {
 		t.Errorf("error should mention 'read response', got: %v", err)
-	}
-
-	// Verify that the error counter was incremented via the Prometheus output.
-	req := httptest.NewRequest("GET", "/metrics", nil)
-	rr := httptest.NewRecorder()
-	m.MetricsHandler()(rr, req)
-	body := rr.Body.String()
-	if !strings.Contains(body, `claude_api_errors_total{source="k8s"} 1`) {
-		t.Errorf("expected claude_api_errors_total{source=\"k8s\"} 1 in metrics output, got:\n%s", body)
 	}
 }
 

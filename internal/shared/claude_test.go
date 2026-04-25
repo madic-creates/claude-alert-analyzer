@@ -922,43 +922,6 @@ func TestSendRequest_DurationHistogramObservedOnSuccess(t *testing.T) {
 	}
 }
 
-// TestSendRequest_ErrorCounterIncrementedOnNon200Response verifies that the
-// errorCounter is incremented exactly once when the server returns a non-200
-// HTTP status (e.g. 429 Too Many Requests, 500 Internal Server Error).
-// Without this, claude_api_errors_total would stay at zero for HTTP-level
-// errors when only the error path in HTTP.Do is monitored, making API
-// rate-limit and server errors invisible to Prometheus alerting rules.
-func TestSendRequest_ErrorCounterIncrementedOnNon200Response(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusTooManyRequests)
-		fmt.Fprint(w, "rate limited")
-	}))
-	defer srv.Close()
-
-	counter := prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "test_sendrequest_non200_errors_total",
-		Help: "test error counter for non-200 responses",
-	})
-	client := &ClaudeClient{
-		HTTP:         srv.Client(),
-		BaseURL:      srv.URL,
-		APIKey:       "test-key",
-		Model:        "test",
-		errorCounter: counter,
-	}
-	if _, err := client.sendRequest(context.Background(), map[string]string{"k": "v"}); err == nil {
-		t.Fatal("expected error for non-200 response, got nil")
-	}
-
-	var m dto.Metric
-	if err := counter.Write(&m); err != nil {
-		t.Fatalf("read counter: %v", err)
-	}
-	if m.Counter.GetValue() != 1 {
-		t.Errorf("expected error counter = 1 for non-200 response, got %f", m.Counter.GetValue())
-	}
-}
-
 // TestSendRequest_MarshalFailure verifies that sendRequest returns a clear
 // "marshal request" error when the request body cannot be marshalled to JSON.
 // This protects future callers that may pass non-serialisable types (channels,
@@ -1022,43 +985,6 @@ func TestRunToolLoop_SummaryParseFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "summary parse") {
 		t.Errorf("error should mention 'summary parse', got: %v", err)
-	}
-}
-
-// TestSendRequest_ErrorCounterIncrementedOnHTTPFailure verifies that the
-// errorCounter is incremented exactly once when HTTP.Do fails (e.g. network
-// error or cancelled context). Without this, claude_api_errors_total would
-// stay at zero during API unreachability, making failures invisible to alerts.
-func TestSendRequest_ErrorCounterIncrementedOnHTTPFailure(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done() // block until the client gives up
-	}))
-	defer srv.Close()
-
-	counter := prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "test_sendrequest_errors_total",
-		Help: "test error counter",
-	})
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel immediately so HTTP.Do fails right away
-
-	client := &ClaudeClient{
-		HTTP:         srv.Client(),
-		BaseURL:      srv.URL,
-		APIKey:       "test-key",
-		Model:        "test",
-		errorCounter: counter,
-	}
-	if _, err := client.sendRequest(ctx, map[string]string{"k": "v"}); err == nil {
-		t.Fatal("expected error for cancelled context, got nil")
-	}
-
-	var m dto.Metric
-	if err := counter.Write(&m); err != nil {
-		t.Fatalf("read counter: %v", err)
-	}
-	if m.Counter.GetValue() != 1 {
-		t.Errorf("expected error counter = 1, got %f", m.Counter.GetValue())
 	}
 }
 

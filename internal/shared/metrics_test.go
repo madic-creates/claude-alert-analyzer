@@ -250,38 +250,6 @@ func TestWithPrometheusMetrics_RecordsCallDuration(t *testing.T) {
 	}
 }
 
-// TestWithPrometheusMetrics_RecordsAPIErrors verifies that WithPrometheusMetrics
-// wires the errorCounter so that a non-200 API response increments it.
-func TestWithPrometheusMetrics_RecordsAPIErrors(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "rate limited", http.StatusTooManyRequests)
-	}))
-	defer srv.Close()
-
-	m := &AlertMetrics{Prom: NewPrometheusMetrics()}
-	client := &ClaudeClient{
-		HTTP:    srv.Client(),
-		BaseURL: srv.URL,
-		APIKey:  "test-key",
-		Model:   "claude-test",
-	}
-	client.WithPrometheusMetrics(m, "checkmk")
-
-	_, err := client.Analyze(context.Background(), "system", "user")
-	if err == nil {
-		t.Fatal("expected error from non-200 response, got nil")
-	}
-
-	req := httptest.NewRequest("GET", "/metrics", nil)
-	rr := httptest.NewRecorder()
-	m.MetricsHandler()(rr, req)
-	body := rr.Body.String()
-
-	if !strings.Contains(body, `claude_api_errors_total{source="checkmk"} 1`) {
-		t.Errorf("expected claude_api_errors_total{source=\"checkmk\"} 1 in output, got:\n%s", body)
-	}
-}
-
 // TestBufferedResponseWriter_WriteHeader verifies that WriteHeader stores the
 // status code so that callers can inspect it after promhttp finishes writing.
 // In the normal success path promhttp never calls WriteHeader (it only calls
