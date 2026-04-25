@@ -1284,3 +1284,41 @@ func TestGetHostServices_NonOKSortedBySeverity(t *testing.T) {
 		t.Errorf("UNKNOWN (pos %d) should appear before OK (pos %d)", unknownPos, okPos)
 	}
 }
+
+// TestNonOKPriority verifies that nonOKPriority maps CheckMK state values to
+// the correct sort keys. The function must return strictly increasing values in
+// the order CRIT < WARN < UNKNOWN < other so that sort.Slice produces a
+// deterministic severity-first ordering when used as the less-function key.
+func TestNonOKPriority(t *testing.T) {
+	tests := []struct {
+		name  string
+		state int
+		want  int
+	}{
+		{name: "CRIT (state=2) is highest priority", state: 2, want: 0},
+		{name: "WARN (state=1) is second priority", state: 1, want: 1},
+		{name: "UNKNOWN (state=3) is third priority", state: 3, want: 2},
+		{name: "OK (state=0) falls to default", state: 0, want: 3},
+		{name: "arbitrary non-standard state falls to default", state: 99, want: 3},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := nonOKPriority(tc.state)
+			if got != tc.want {
+				t.Errorf("nonOKPriority(%d) = %d, want %d", tc.state, got, tc.want)
+			}
+		})
+	}
+
+	// Verify the strict ordering invariant: CRIT < WARN < UNKNOWN < other.
+	if nonOKPriority(2) >= nonOKPriority(1) {
+		t.Errorf("CRIT priority (%d) must be less than WARN priority (%d)", nonOKPriority(2), nonOKPriority(1))
+	}
+	if nonOKPriority(1) >= nonOKPriority(3) {
+		t.Errorf("WARN priority (%d) must be less than UNKNOWN priority (%d)", nonOKPriority(1), nonOKPriority(3))
+	}
+	if nonOKPriority(3) >= nonOKPriority(0) {
+		t.Errorf("UNKNOWN priority (%d) must be less than default priority (%d)", nonOKPriority(3), nonOKPriority(0))
+	}
+}
