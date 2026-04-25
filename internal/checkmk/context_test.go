@@ -1144,6 +1144,18 @@ func TestSanitizeHostContext(t *testing.T) {
 			want:  "abc",
 		},
 		{
+			// C1 Unicode control characters (U+0080–U+009F) are multi-byte in
+			// UTF-8 but are valid Unicode code points that unicode.IsControl
+			// classifies as control characters. They must be stripped to prevent
+			// a malicious operator from injecting invisible direction-override or
+			// other C1 sequences into the Claude prompt via the ai_context field.
+			// U+0080 = PAD (Padding Character), U+0085 = NEL (Next Line),
+			// U+009F = APC (Application Program Command).
+			name:  "C1 Unicode control characters stripped",
+			input: "status\u0080ok\u0085end\u009f",
+			want:  "statusokend",
+		},
+		{
 			name:  "only control chars becomes empty",
 			input: "\x00\x01\x02\x03",
 			want:  "",
