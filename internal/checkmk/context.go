@@ -220,7 +220,12 @@ func (c *APIClient) GetHostServices(ctx context.Context, hostname string) string
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Sprintf("(CheckMK API returned %d)", resp.StatusCode)
+		// Include a redacted snippet so operators can diagnose auth failures
+		// (401/403), gateway errors (502/503), or misconfigurations without
+		// replaying the request. Mirrors the same pattern in ValidateAndDescribeHost.
+		// The body has already been read above to drain the connection for reuse.
+		return fmt.Sprintf("(CheckMK API returned %d: %s)", resp.StatusCode,
+			shared.Truncate(shared.RedactSecrets(strings.TrimSpace(string(body))), 200))
 	}
 
 	var svcResp checkmkServicesResponse

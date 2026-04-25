@@ -577,6 +577,47 @@ func TestGetHostServices_NonOKStatus(t *testing.T) {
 	}
 }
 
+// TestGetHostServices_NonOKStatusIncludesBodySnippet verifies that a non-200
+// response includes a snippet of the response body so operators can diagnose
+// auth failures or gateway errors without replaying the request.
+func TestGetHostServices_NonOKStatusIncludesBodySnippet(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"title": "Unauthorized", "detail": "Wrong credentials supplied"}`)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "auto", Secret: "secret"}
+	result := apiClient.GetHostServices(context.Background(), "host1")
+
+	if !strings.Contains(result, "401") {
+		t.Errorf("expected HTTP 401 in result, got: %s", result)
+	}
+	if !strings.Contains(result, "Unauthorized") {
+		t.Errorf("expected body snippet in result, got: %s", result)
+	}
+}
+
+// TestGetHostServices_NonOKStatusRedactsBody verifies that secrets in a non-200
+// response body are redacted before they appear in the analysis context.
+func TestGetHostServices_NonOKStatusRedactsBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `error: token=supersecrettoken`)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "auto", Secret: "secret"}
+	result := apiClient.GetHostServices(context.Background(), "host1")
+
+	if strings.Contains(result, "supersecrettoken") {
+		t.Errorf("response body secret leaked into result: %s", result)
+	}
+	if !strings.Contains(result, "[REDACTED]") {
+		t.Errorf("expected redacted token in result, got: %s", result)
+	}
+}
+
 // TestGetHostServices_InvalidJSON verifies that a malformed response is reported.
 func TestGetHostServices_InvalidJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
