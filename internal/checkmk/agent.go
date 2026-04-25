@@ -293,6 +293,20 @@ func isDenied(denied map[string]bool, argv []string) bool {
 		return denied[cmd]
 	}
 
+	// Deny versioned interpreter and tool variants (e.g. python3.11, ruby2.7,
+	// perl5.36, node20). Strip a trailing version suffix (any combination of
+	// digits and dots) and check the resulting base name against the denylist.
+	// This closes the gap between "python3" (in the denylist) and "python3.11"
+	// (not in the denylist by exact name but functionally equivalent).
+	// TrimRight removes only the rightmost sequence of cutset characters, so:
+	//   - "python3.11" → base "python"   (denied["python"] = true  → deny)
+	//   - "md5sum"     → base "md5sum"   (base == cmd, skipped → exact-match path)
+	//   - "ip6tables"  → base "ip6tables" (trailing 's', not stripped → exact-match)
+	base := strings.TrimRight(cmd, "0123456789.")
+	if base != cmd && base != "" && denied[base] {
+		return true
+	}
+
 	return denied[cmd]
 }
 

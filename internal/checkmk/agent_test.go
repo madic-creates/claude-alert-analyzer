@@ -435,6 +435,46 @@ func TestIsDenied_BlocksShellInterpreterBypass(t *testing.T) {
 	}
 }
 
+// TestIsDenied_BlocksVersionedInterpreters verifies that versioned interpreter
+// binaries (e.g. python3.11, ruby3.2, perl5.36, node20) are denied even though
+// only their unversioned base names (python, python3, ruby, perl, node) are
+// listed in the denylist. On many Linux distributions the interpreter binary is
+// installed under a versioned name (python3.11 alongside a python3 symlink), so
+// a prompt-injection or hallucinatory model could bypass the denylist by using
+// the versioned name directly.
+func TestIsDenied_BlocksVersionedInterpreters(t *testing.T) {
+	denied := [][]string{
+		{"python3.11", "-c", "import os; os.system('rm -rf /')"},
+		{"python3.12", "-c", "import os; os.system('rm -rf /')"},
+		{"python2.7", "-c", "import os; os.system('shutdown now')"},
+		{"ruby3.2", "-e", "system('reboot')"},
+		{"ruby2.7", "-e", "system('dd if=/dev/zero of=/dev/sda')"},
+		{"perl5.36", "-e", "system('kill -9 1')"},
+		{"perl5.38", "-e", "system('rm -rf /')"},
+		{"node20", "-e", "require('child_process').exec('rm -rf /')"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("versioned interpreter bypass not blocked: %v", argv)
+		}
+	}
+
+	// Ensure commands with digits that are NOT versioned interpreter names
+	// continue to be allowed. bzip2 → base "bzip" (not denied); md5sum → base
+	// "md5sum" unchanged (ends in 'm', not stripped); both must remain allowed.
+	allowed := [][]string{
+		{"md5sum", "/etc/passwd"},
+		{"sha256sum", "/etc/shadow"},
+		{"lz4", "-d", "archive.lz4"},
+		{"bzip2", "-d", "file.bz2"},
+	}
+	for _, argv := range allowed {
+		if isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("command with digit(s) incorrectly blocked: %v", argv)
+		}
+	}
+}
+
 func TestIsDenied_AllowsReadOnlyCommands(t *testing.T) {
 	allowed := [][]string{
 		{"df", "-h"},
