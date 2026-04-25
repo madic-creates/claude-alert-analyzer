@@ -512,6 +512,11 @@ func TestIsDenied_SystemctlSpecialCases(t *testing.T) {
 		{"systemctl", "is-failed", "nginx"},
 		{"systemctl", "list-timers"},
 		{"systemctl", "cat", "nginx.service"},
+		// Uppercase and mixed-case read-only subcommands must also be allowed.
+		{"systemctl", "STATUS", "nginx"},
+		{"systemctl", "Show", "sshd"},
+		{"systemctl", "LIST-UNITS", "--failed"},
+		{"systemctl", "Is-Active", "docker"},
 	}
 	for _, argv := range allowed {
 		if isDenied(DefaultDeniedCommands, argv) {
@@ -527,6 +532,10 @@ func TestIsDenied_SystemctlSpecialCases(t *testing.T) {
 		{"systemctl", "disable", "bar"},
 		{"systemctl", "mask", "firewalld"},
 		{"systemctl", "daemon-reload"},
+		// Uppercase destructive subcommands must still be denied.
+		{"systemctl", "RESTART", "nginx"},
+		{"systemctl", "START", "docker"},
+		{"systemctl", "STOP", "sshd"},
 	}
 	for _, argv := range denied {
 		if !isDenied(DefaultDeniedCommands, argv) {
@@ -1615,6 +1624,16 @@ func TestDenyReason(t *testing.T) {
 		msg := denyReason([]string{"systemctl", "--no-pager", "stop", "sshd"})
 		if !strings.Contains(msg, "systemctl stop") {
 			t.Errorf("expected message to name 'stop'; got: %s", msg)
+		}
+	})
+
+	t.Run("systemctl uppercase write subcommand is lowercased in message", func(t *testing.T) {
+		msg := denyReason([]string{"systemctl", "RESTART", "nginx"})
+		if !strings.Contains(msg, "systemctl restart") {
+			t.Errorf("expected lowercase 'restart' in message; got: %s", msg)
+		}
+		if strings.Contains(msg, "RESTART") {
+			t.Errorf("expected message NOT to contain uppercase 'RESTART'; got: %s", msg)
 		}
 	})
 

@@ -251,6 +251,7 @@ func isDenied(denied map[string]bool, argv []string) bool {
 		if subcmd == "" {
 			return true // no subcommand found — deny
 		}
+		subcmd = strings.ToLower(subcmd)
 		return !systemctlReadOnly[subcmd]
 	}
 
@@ -337,6 +338,7 @@ func denyReason(argv []string) string {
 			allowed = append(allowed, sc)
 		}
 		sort.Strings(allowed)
+		subcmd = strings.ToLower(subcmd)
 		if subcmd != "" {
 			return fmt.Sprintf("Command denied: systemctl %s is not permitted; only read-only subcommands are allowed: %s", subcmd, strings.Join(allowed, ", "))
 		}
