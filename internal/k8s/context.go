@@ -248,9 +248,30 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 			sections = append(sections, alertnameSectionName, <-alertnameCh)
 		}
 	} else {
-		sections = append(sections, "## Active Firing Alerts", <-firingCh)
+		// No namespace: run the alertname-specific query concurrently with the
+		// firing-alerts query (which was already launched as a goroutine above)
+		// so both complete in parallel. Previously the alertname query ran
+		// serially after <-firingCh, doubling worst-case latency for node-level
+		// alerts (no namespace label) that match an alertname-specific branch
+		// such as "node" → kube_node_status_condition.
+		var alertnameCh chan string
 		if alertnameQueryStr != "" {
-			sections = append(sections, alertnameSectionName, p.query(ctx, alertnameQueryStr))
+			alertnameCh = make(chan string, 1)
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Error("alertname query goroutine panicked",
+							"recover", r,
+							"stack", string(debug.Stack()))
+						alertnameCh <- fmt.Sprintf("(alertname query goroutine panicked: %v)", r)
+					}
+				}()
+				alertnameCh <- p.query(ctx, alertnameQueryStr)
+			}()
+		}
+		sections = append(sections, "## Active Firing Alerts", <-firingCh)
+		if alertnameCh != nil {
+			sections = append(sections, alertnameSectionName, <-alertnameCh)
 		}
 	}
 

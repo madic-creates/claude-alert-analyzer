@@ -1582,3 +1582,32 @@ func TestGatherContext_PrometheusResultPreferredWhenTimeoutRaces(t *testing.T) {
 	// environment throughput varies. The key guarantee is no panic or deadlock.
 	t.Logf("timeouts: %d/%d", timeouts, iterations)
 }
+
+// TestGetMetrics_NoNamespace_AlertnameQueryRunsConcurrently verifies that when an
+// alert has no namespace label but its alertname matches an alertname-specific branch
+// (e.g. "NodeNotReady" → node condition query), both the firing-alerts query and the
+// alertname-specific query are started and their results appear in the output.
+// This guards against the previous serial execution where the alertname query ran
+// only after <-firingCh completed, doubling worst-case latency.
+func TestGetMetrics_NoNamespace_AlertnameQueryRunsConcurrently(t *testing.T) {
+	srv := makePromServer(t, []PromResult{
+		{
+			Metric: map[string]string{"condition": "Ready", "node": "node-1", "status": "true"},
+			Value:  [2]interface{}{1234567890.0, "1"},
+		},
+	})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	// "NodeNotReady" contains "node" — triggers the node condition query.
+	alert := makeAlertWithLabels(map[string]string{"alertname": "NodeNotReady"})
+
+	result := prom.GetMetrics(context.Background(), alert)
+
+	if !strings.Contains(result, "Active Firing Alerts") {
+		t.Errorf("expected 'Active Firing Alerts' section, got: %q", result)
+	}
+	if !strings.Contains(result, "Node Conditions") {
+		t.Errorf("expected 'Node Conditions' section for node alertname, got: %q", result)
+	}
+}
