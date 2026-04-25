@@ -520,6 +520,62 @@ func TestRedactSecrets_StripeAPIKeys(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_GitHubAppTokens verifies that GitHub App token formats are
+// redacted. The existing pattern covered classic PATs (ghp_) and OAuth tokens
+// (gho_), but missed the three additional GitHub App token formats:
+//   - ghs_ — server-to-server installation tokens issued by GitHub Apps,
+//     commonly mounted as Kubernetes secrets and leaked into pod logs when an
+//     API call fails (e.g. "invalid token ghs_XXXX").
+//   - ghu_ — user-to-server tokens issued by GitHub Apps during OAuth flows.
+//   - ghr_ — refresh tokens used to renew ghu_ tokens.
+//
+// All three appear in application error logs and would reach Claude's context
+// unredacted without this fix.
+func TestRedactSecrets_GitHubAppTokens(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "ghs_ installation token inline",
+			input: "GitHub App error: invalid token ghs_FAKEFAKEFAKEFAKEFAKEFAKEFAKE",
+			leak:  "ghs_FAKEFAKEFAKEFAKEFAKEFAKEFAKE",
+		},
+		{
+			name:  "ghs_ token in env assignment",
+			input: "GITHUB_TOKEN=ghs_FAKEFAKEFAKEFAKEFAKEFAKEFAKE",
+			leak:  "ghs_FAKEFAKEFAKEFAKEFAKEFAKEFAKE",
+		},
+		{
+			name:  "ghu_ user-to-server token",
+			input: "authentication failed for token ghu_FAKEFAKEFAKEFAKEFAKEFAKEFAKE",
+			leak:  "ghu_FAKEFAKEFAKEFAKEFAKEFAKEFAKE",
+		},
+		{
+			name:  "ghr_ refresh token",
+			input: "token refresh error: ghr_FAKEFAKEFAKEFAKEFAKEFAKEFAKE expired",
+			leak:  "ghr_FAKEFAKEFAKEFAKEFAKEFAKEFAKE",
+		},
+		{
+			name:  "ghs_ token in log with surrounding context",
+			input: `[2024-01-15] POST /repos/owner/repo/issues: 401 Unauthorized (token=ghs_FAKEFAKEFAKE)`,
+			leak:  "ghs_FAKEFAKEFAKE",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("GitHub App token leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
 func TestRedactSecrets_NoFalsePositive(t *testing.T) {
 	input := "CPU load is 4.5 at 12:00"
 	result := RedactSecrets(input)

@@ -66,8 +66,15 @@ var sensitivePatterns = []sensitivePattern{
 	// logs when a Stripe API call fails (e.g. "invalid API key: sk_live_xxx"),
 	// which CheckMK service checks and Kubernetes pod logs then capture and feed
 	// into Claude's context.
+	// GitHub token prefixes: ghp_ (classic PATs), gho_ (OAuth), ghs_ (GitHub
+	// App server-to-server installation tokens), ghu_ (user-to-server tokens),
+	// ghr_ (refresh tokens), github_pat_ (fine-grained PATs). All five gh*_
+	// short-prefix forms appear in application logs when GitHub API calls fail
+	// (e.g. authentication errors, expired installation tokens). ghs_ tokens
+	// are commonly found in Kubernetes pod logs for deployments that use GitHub
+	// App credentials via mounted secrets.
 	{
-		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|github_pat_|xox[bpas]-)\S+`),
+		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|xox[bpas]-)\S+`),
 		replacement: "[REDACTED]",
 	},
 	{
