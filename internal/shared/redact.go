@@ -73,8 +73,12 @@ var sensitivePatterns = []sensitivePattern{
 	// (e.g. authentication errors, expired installation tokens). ghs_ tokens
 	// are commonly found in Kubernetes pod logs for deployments that use GitHub
 	// App credentials via mounted secrets.
+	// Slack token prefixes: xoxb- (bot), xoxp- (user/legacy), xoxa- (app-level),
+	// xoxs- (workspace), xoxe- (Enterprise Grid), xoxr- (refresh). The original
+	// xox[bpas]- pattern missed xoxe- and xoxr-, both of which are valid Slack
+	// API credentials that appear in application logs on auth failures.
 	{
-		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|xox[bpas]-)\S+`),
+		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|xox[bpaers]-)\S+`),
 		replacement: "[REDACTED]",
 	},
 	{

@@ -576,6 +576,61 @@ func TestRedactSecrets_GitHubAppTokens(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_SlackTokens verifies that all Slack token prefix variants
+// are redacted. xoxb- (bot), xoxp- (user/legacy), xoxa- (app-level), and
+// xoxs- (workspace) were covered by the original xox[bpas]- pattern.
+// xoxe- (Enterprise Grid) and xoxr- (refresh) were missing and would leak
+// into Claude's context when Slack API calls failed and logged the token.
+func TestRedactSecrets_SlackTokens(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "xoxb bot token",
+			input: "Slack error: invalid token xoxb-FAKETESTTOKEN",
+			leak:  "xoxb-FAKETESTTOKEN",
+		},
+		{
+			name:  "xoxp user token",
+			input: "auth failed for xoxp-FAKETESTTOKEN",
+			leak:  "xoxp-FAKETESTTOKEN",
+		},
+		{
+			name:  "xoxa app-level token",
+			input: "SLACK_TOKEN=xoxa-FAKETESTTOKEN",
+			leak:  "xoxa-FAKETESTTOKEN",
+		},
+		{
+			name:  "xoxs workspace token",
+			input: "workspace token xoxs-FAKETESTTOKEN expired",
+			leak:  "xoxs-FAKETESTTOKEN",
+		},
+		{
+			name:  "xoxe Enterprise Grid token",
+			input: "Enterprise Grid auth error: token=xoxe-FAKETESTTOKEN",
+			leak:  "xoxe-FAKETESTTOKEN",
+		},
+		{
+			name:  "xoxr refresh token",
+			input: "token refresh failed: xoxr-FAKETESTTOKEN is invalid",
+			leak:  "xoxr-FAKETESTTOKEN",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("Slack token leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
 func TestRedactSecrets_NoFalsePositive(t *testing.T) {
 	input := "CPU load is 4.5 at 12:00"
 	result := RedactSecrets(input)
