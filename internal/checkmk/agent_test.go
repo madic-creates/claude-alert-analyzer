@@ -1591,6 +1591,49 @@ func TestDenyReason(t *testing.T) {
 		}
 	})
 
+	t.Run("sed with BSD -I flag returns in-place message not generic denial", func(t *testing.T) {
+		// BSD sed (FreeBSD, macOS) uses uppercase -I for in-place editing.
+		// denyReason must return the specific in-place message (not the generic
+		// "not allowed" denial) so Claude knows it can retry without -I rather
+		// than incorrectly concluding that sed is entirely off-limits.
+		// isDenied already blocks -I variants; this test ensures denyReason
+		// sends the right self-correcting message to the tool-use loop.
+		msg := denyReason([]string{"sed", "-I", "s/foo/bar/", "/etc/hosts"})
+		if !strings.Contains(msg, "-i") {
+			t.Errorf("expected message to mention the -i/--in-place flag; got: %s", msg)
+		}
+		if !strings.Contains(msg, "stdout") {
+			t.Errorf("expected message to suggest stdout alternative; got: %s", msg)
+		}
+	})
+
+	t.Run("sed with BSD -I.bak suffix returns in-place message not generic denial", func(t *testing.T) {
+		// -I.bak is the BSD form of in-place edit with a backup extension.
+		// arg[:2] == "-I" catches this; verify denyReason returns the correct
+		// guidance rather than falling through to the generic denied message.
+		msg := denyReason([]string{"sed", "-I.bak", "s/foo/bar/", "/etc/hosts"})
+		if !strings.Contains(msg, "-i") {
+			t.Errorf("expected message to mention the -i/--in-place flag; got: %s", msg)
+		}
+		if !strings.Contains(msg, "stdout") {
+			t.Errorf("expected message to suggest stdout alternative; got: %s", msg)
+		}
+	})
+
+	t.Run("sed with combined BSD -nI flag returns in-place message not generic denial", func(t *testing.T) {
+		// -nI bundles -n (suppress output) with -I (BSD in-place). The combined-flag
+		// check in denyReason uses strings.ContainsRune(arg[1:], 'I') to catch this.
+		// A case-sensitive typo (checking only 'i', not 'I') would silently break
+		// BSD protection while all GNU -i tests continued to pass.
+		msg := denyReason([]string{"sed", "-nI", "s/foo/bar/", "/etc/hosts"})
+		if !strings.Contains(msg, "-i") {
+			t.Errorf("expected message to mention the -i/--in-place flag; got: %s", msg)
+		}
+		if !strings.Contains(msg, "stdout") {
+			t.Errorf("expected message to suggest stdout alternative; got: %s", msg)
+		}
+	})
+
 	t.Run("sed in custom denylist without in-place flag uses generic message", func(t *testing.T) {
 		// When sed is blocked because it is in the custom SSH_DENIED_COMMANDS map
 		// (not because of a -i flag), denyReason must return the generic "not
