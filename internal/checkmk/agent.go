@@ -219,7 +219,12 @@ func isDenied(denied map[string]bool, argv []string) bool {
 	// (./rm) are checked the same as bare names (rm). Trim surrounding
 	// whitespace so that a model-generated argv[0] like " sed" or "rm "
 	// cannot bypass the denylist by making the name not match any entry.
-	cmd := strings.TrimSpace(filepath.Base(argv[0]))
+	// Lower-case so that a prompt-injection attack instructing Claude to use
+	// "RM" or "/BIN/Rm" cannot bypass the denylist: all denylist entries and
+	// the special-case switch branches ("systemctl", "find", "sed") are
+	// lowercase, so a case-sensitive lookup would silently miss uppercase
+	// variants on a hypothetical case-insensitive or mixed-case host.
+	cmd := strings.ToLower(strings.TrimSpace(filepath.Base(argv[0])))
 
 	// A whitespace-only argv[0] normalises to "" after TrimSpace. Deny it
 	// unconditionally: there is no valid command with an empty name, and
@@ -299,7 +304,10 @@ func denyReason(argv []string) string {
 	if len(argv) == 0 {
 		return "Command denied: empty command"
 	}
-	cmd := strings.TrimSpace(filepath.Base(argv[0]))
+	// Normalize to lowercase, matching the same logic in isDenied, so that the
+	// switch cases ("systemctl", "find", "sed") fire consistently when argv[0]
+	// used an unexpected capitalisation.
+	cmd := strings.ToLower(strings.TrimSpace(filepath.Base(argv[0])))
 
 	switch cmd {
 	case "systemctl":

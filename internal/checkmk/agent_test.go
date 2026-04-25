@@ -1037,6 +1037,53 @@ func TestIsDenied_RelativePathBypassBlocked(t *testing.T) {
 	}
 }
 
+// TestIsDenied_UppercaseBypassBlocked verifies that commands with unusual
+// capitalisation — e.g. "RM", "/BIN/Rm", "SYSTEMCTL" — are denied exactly
+// like their lowercase equivalents. A prompt-injection payload could instruct
+// Claude to use "RM" instead of "rm" hoping the denylist (which stores lowercase
+// entries) would miss it; case-normalising argv[0] closes that bypass path.
+func TestIsDenied_UppercaseBypassBlocked(t *testing.T) {
+	denied := [][]string{
+		{"RM", "-rf", "/"},
+		{"Rm", "-rf", "/"},
+		{"/BIN/RM", "-rf", "/"},
+		{"/usr/bin/Rm", "-rf", "/"},
+		{"SUDO", "bash"},
+		{"SHUTDOWN", "now"},
+		{"KILL", "-9", "1"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected denied (uppercase command name): %v", argv)
+		}
+	}
+
+	// systemctl special case: uppercase argv[0] with a destructive subcommand
+	// must still be denied through the subcommand allowlist.
+	systemctlDenied := [][]string{
+		{"SYSTEMCTL", "restart", "nginx"},
+		{"Systemctl", "stop", "sshd"},
+		{"/usr/bin/SYSTEMCTL", "kill", "nginx"},
+	}
+	for _, argv := range systemctlDenied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected denied (uppercase systemctl): %v", argv)
+		}
+	}
+
+	// systemctl with a read-only subcommand must still be allowed regardless
+	// of argv[0] capitalisation.
+	systemctlAllowed := [][]string{
+		{"SYSTEMCTL", "status", "nginx"},
+		{"Systemctl", "--no-pager", "show", "sshd"},
+	}
+	for _, argv := range systemctlAllowed {
+		if isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected allowed (uppercase systemctl + read-only subcmd): %v", argv)
+		}
+	}
+}
+
 func TestIsDenied_AbsolutePathSystemctl(t *testing.T) {
 	// /usr/bin/systemctl with destructive subcommands must be denied.
 	denied := [][]string{
