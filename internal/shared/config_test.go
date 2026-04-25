@@ -57,6 +57,20 @@ func TestParseIntEnv_OutOfRange(t *testing.T) {
 	}
 }
 
+// TestParseIntEnv_BelowMin verifies that ParseIntEnv returns an error when the
+// value is below the minimum bound. The existing TestParseIntEnv_OutOfRange only
+// covers the v > max branch of the `v < min || v > max` condition; without this
+// test, a mutation that changed `<` to `>` in `v < min` would go undetected.
+// In production, ParseIntEnv("MAX_AGENT_ROUNDS", "10", 1, 50) must reject values
+// like 0 and -1 to prevent RunToolLoop from receiving an invalid maxRounds.
+func TestParseIntEnv_BelowMin(t *testing.T) {
+	t.Setenv("TEST_INT", "-1")
+	_, err := ParseIntEnv("TEST_INT", "10", 0, 100)
+	if err == nil {
+		t.Fatal("expected error for below-minimum value")
+	}
+}
+
 func TestRequireEnv_Set(t *testing.T) {
 	t.Setenv("TEST_REQ", "value")
 	got, err := RequireEnv("TEST_REQ")
