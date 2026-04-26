@@ -327,7 +327,11 @@ func getEvents(ctx context.Context, clientset kubernetes.Interface, namespace st
 			ts = t.UTC().Format(time.RFC3339)
 		}
 		lines = append(lines, fmt.Sprintf("%s %s %s %s: %s",
-			ts, e.Type, e.Reason, e.InvolvedObject.Name, shared.RedactSecrets(e.Message)))
+			ts,
+			shared.SanitizeAlertField(e.Type),
+			shared.SanitizeAlertField(e.Reason),
+			shared.SanitizeAlertField(e.InvolvedObject.Name),
+			shared.SanitizeAlertField(shared.RedactSecrets(e.Message))))
 	}
 	if len(lines) == 0 {
 		return "(no warning events)"
