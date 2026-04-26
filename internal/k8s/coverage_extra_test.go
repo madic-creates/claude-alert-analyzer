@@ -696,7 +696,7 @@ func TestProcessAlert_AlertFieldsArePromptInjectionSafe(t *testing.T) {
 		},
 	}
 
-	// Each of the four alert fields that are injected into the user prompt
+	// Each of the five alert fields that are injected into the user prompt
 	// contains an embedded newline followed by a fake Markdown heading. Without
 	// sanitization these would appear verbatim in the Claude prompt, allowing a
 	// compromised Alertmanager to inject arbitrary instructions.
@@ -708,7 +708,7 @@ func TestProcessAlert_AlertFieldsArePromptInjectionSafe(t *testing.T) {
 		Fields: map[string]string{
 			"label:namespace": "production\n## InjectedNamespace",
 			"status":          "firing\n## InjectedStatus",
-			"startsAt":        "2024-01-01T00:00:00Z",
+			"startsAt":        "2024-01-01T00:00:00Z\n## InjectedStartsAt",
 		},
 	}
 
@@ -726,13 +726,14 @@ func TestProcessAlert_AlertFieldsArePromptInjectionSafe(t *testing.T) {
 		"\n## FakeSection",
 		"\n## InjectedNamespace",
 		"\n## InjectedStatus",
+		"\n## InjectedStartsAt",
 	} {
 		if strings.Contains(prompt, forbidden) {
 			t.Errorf("prompt injection heading %q reached Claude prompt as a standalone section:\n%s", forbidden, prompt)
 		}
 	}
 	// The legitimate part of each field must still be present.
-	for _, want := range []string{"HighCPU", "critical", "production", "firing"} {
+	for _, want := range []string{"HighCPU", "critical", "production", "firing", "2024-01-01T00:00:00Z"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("expected legitimate field value %q in Claude prompt, got:\n%s", want, prompt)
 		}

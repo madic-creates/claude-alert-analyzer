@@ -45,7 +45,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 		shared.SanitizeAlertField(alert.Fields["status"]),
 		shared.SanitizeAlertField(alert.Severity),
 		shared.SanitizeAlertField(namespace),
-		alert.Fields["startsAt"],
+		shared.SanitizeAlertField(alert.Fields["startsAt"]),
 		actx.FormatForPrompt())
 
 	analysis, err := deps.Analyzer.Analyze(ctx, deps.SystemPrompt, userPrompt)
