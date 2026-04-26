@@ -2,7 +2,9 @@ package k8s
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -502,4 +504,70 @@ func TestGetEvents_EventTimeUsedWhenLastTimestampZero(t *testing.T) {
 	if !strings.Contains(events, "2026-01-15") {
 		t.Errorf("expected EventTime date '2026-01-15' in output, got: %q", events)
 	}
+}
+
+// TestGetMetrics_NoNamespace_AlertnameGoroutinePanic verifies that a panic
+// inside the alertname-specific query goroutine is caught when there is NO
+// namespace label. This covers context.go lines 262-267, the else-branch panic
+// recovery that mirrors the with-namespace recovery already tested by
+// TestGetMetrics_AlertnameGoroutinePanic.
+//
+// An alertname containing "node" (e.g. "NodeNotReady") triggers the
+// kube_node_status_condition query. The nodeQueryPanicTransport panics for
+// that specific query but returns success for the concurrent firing-alerts
+// query, exactly matching the alertnamePanicTransport pattern used in
+// TestGetMetrics_AlertnameGoroutinePanic.
+func TestGetMetrics_NoNamespace_AlertnameGoroutinePanic(t *testing.T) {
+	alert := makeAlertWithLabels(map[string]string{
+		"alertname": "NodeNotReady",
+		// No "namespace" label — exercises the no-namespace else branch.
+	})
+	prom := &PrometheusClient{
+		HTTP: &http.Client{Transport: newNodeQueryPanicTransport(t)},
+		URL:  "http://127.0.0.1:9999",
+	}
+
+	done := make(chan string, 1)
+	go func() { done <- prom.GetMetrics(context.Background(), alert) }()
+
+	var result string
+	select {
+	case result = <-done:
+		// success: did not deadlock
+	case <-time.After(5 * time.Second):
+		t.Fatal("GetMetrics deadlocked after no-namespace alertname goroutine panic")
+	}
+
+	if !strings.Contains(result, "alertname query goroutine panicked") {
+		t.Errorf("expected alertname panic sentinel in GetMetrics result, got: %q", result)
+	}
+}
+
+// nodeQueryPanicTransport panics when the Prometheus query targets
+// kube_node_status_condition (the alertname-specific query for "node" alerts)
+// and returns an empty success response for all other queries.
+type nodeQueryPanicTransport struct {
+	okBody []byte
+}
+
+func newNodeQueryPanicTransport(t *testing.T) nodeQueryPanicTransport {
+	t.Helper()
+	resp := PromQueryResponse{Status: "success"}
+	resp.Data.ResultType = "vector"
+	body, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal prom response: %v", err)
+	}
+	return nodeQueryPanicTransport{okBody: body}
+}
+
+func (tr nodeQueryPanicTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if strings.Contains(r.URL.RawQuery, "kube_node_status_condition") {
+		panic("simulated no-namespace alertname query panic")
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(string(tr.okBody))),
+	}, nil
 }
