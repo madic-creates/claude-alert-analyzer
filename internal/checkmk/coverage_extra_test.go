@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -553,5 +554,49 @@ func TestGetHostServices_OtherStateSortsLastAmongNonOK(t *testing.T) {
 	// UNKNOWN must appear before the STALE (other) service.
 	if unknownPos > stalePos {
 		t.Errorf("UNKNOWN (line %d) should appear before STALE state=4 (line %d)", unknownPos, stalePos)
+	}
+}
+
+// TestProcessAlert_SSH_AgenticFails_RecordsClaudeAPIErrorCounter verifies that
+// when RunAgenticDiagnostics returns an error and Prom is non-nil, the
+// claude_api_errors_total Prometheus counter is incremented for the SSH agentic
+// path. TestProcessAlert_SSH_AgenticFails_PublishFailureNotification exercises the
+// same failure branch but uses new(shared.AlertMetrics) (Prom == nil), so
+// RecordClaudeAPIError is a no-op there; this test exercises the non-nil path.
+func TestProcessAlert_SSH_AgenticFails_RecordsClaudeAPIErrorCounter(t *testing.T) {
+	sshClient := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		sendExitStatus(ch, 0)
+	})
+	dialer := &fixedDialer{client: sshClient}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+
+	deps := PipelineDeps{
+		ToolRunner: &capturingToolRunner{err: fmt.Errorf("tool loop failed")},
+		Publishers: []shared.Publisher{&mockPublisher{}},
+		Cooldown:   shared.NewCooldownManager(),
+		Metrics:    metrics,
+		SSHEnabled: true,
+		SSHDialer:  dialer,
+		SSHConfig:  Config{MaxAgentRounds: 3, SSHDeniedCommands: DefaultDeniedCommands},
+		GatherContext: func(_ context.Context, _ shared.AlertPayload, _ *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		ValidateHost: func(_ context.Context, _, _ string) (*HostInfo, error) {
+			return &HostInfo{VerifiedIP: "10.0.0.1"}, nil
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "ssh-claude-err-prom-fp",
+		Title:       "HighCPU",
+		Severity:    "critical",
+		Source:      "checkmk",
+		Fields:      map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+	}
+	ProcessAlert(context.Background(), deps, alert)
+
+	got := testutil.ToFloat64(metrics.Prom.ClaudeAPIErrors.WithLabelValues("checkmk"))
+	if got != 1 {
+		t.Errorf("claude_api_errors_total{source=\"checkmk\"} = %v, want 1", got)
 	}
 }
