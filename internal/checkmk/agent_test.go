@@ -1674,6 +1674,36 @@ func TestDenyReason(t *testing.T) {
 		}
 	})
 
+	t.Run("find with fprint0 write-to-file flag names the flag and mentions destructive", func(t *testing.T) {
+		msg := denyReason(DefaultDeniedCommands, []string{"find", "/var/log", "-name", "*.log", "-fprint0", "out.txt"})
+		if !strings.Contains(msg, "-fprint0") {
+			t.Errorf("expected message to name the -fprint0 flag; got: %s", msg)
+		}
+		if !strings.Contains(msg, "destructive") {
+			t.Errorf("expected message to describe flag as destructive; got: %s", msg)
+		}
+	})
+
+	t.Run("find with fprintf write-to-file flag names the flag and mentions destructive", func(t *testing.T) {
+		msg := denyReason(DefaultDeniedCommands, []string{"find", "/var/log", "-name", "*.log", "-fprintf", "out.txt", "%f\n"})
+		if !strings.Contains(msg, "-fprintf") {
+			t.Errorf("expected message to name the -fprintf flag; got: %s", msg)
+		}
+		if !strings.Contains(msg, "destructive") {
+			t.Errorf("expected message to describe flag as destructive; got: %s", msg)
+		}
+	})
+
+	t.Run("find with fls write-to-file flag names the flag and mentions destructive", func(t *testing.T) {
+		msg := denyReason(DefaultDeniedCommands, []string{"find", "/var/log", "-name", "*.log", "-fls", "out.txt"})
+		if !strings.Contains(msg, "-fls") {
+			t.Errorf("expected message to name the -fls flag; got: %s", msg)
+		}
+		if !strings.Contains(msg, "destructive") {
+			t.Errorf("expected message to describe flag as destructive; got: %s", msg)
+		}
+	})
+
 	t.Run("find in custom denylist without exec/destructive flags uses generic message", func(t *testing.T) {
 		// When find is blocked because it appears in the operator's custom
 		// SSH_DENIED_COMMANDS map (not because of -exec/-delete/-fprint etc.),
