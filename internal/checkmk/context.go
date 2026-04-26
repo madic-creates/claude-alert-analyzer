@@ -325,9 +325,9 @@ func GatherContext(ctx context.Context, apiClient *APIClient, alert shared.Alert
 		sanitizeAlertField(alert.Fields["host_state"]),
 		sanitizeAlertField(alert.Fields["service_description"]),
 		sanitizeAlertField(alert.Fields["service_state"]),
-		shared.RedactSecrets(alert.Fields["service_output"]),
+		sanitizeAlertField(shared.RedactSecrets(alert.Fields["service_output"])),
 		sanitizeAlertField(alert.Fields["notification_type"]),
-		shared.RedactSecrets(alert.Fields["perf_data"]),
+		sanitizeAlertField(shared.RedactSecrets(alert.Fields["perf_data"])),
 		sanitizeAlertField(alert.Fields["timestamp"]))
 	// long_plugin_output can be very large (multi-line check details up to the 1 MiB
 	// webhook body limit). Truncate to 4 KiB so a single verbose plugin does not
