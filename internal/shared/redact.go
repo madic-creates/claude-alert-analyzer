@@ -102,8 +102,13 @@ var sensitivePatterns = []sensitivePattern{
 		re:          regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?)://[^:\s/]*:[^@\s]+@\S+`),
 		replacement: "[REDACTED]",
 	},
+	// AWS access key IDs: AKIA prefix for long-term IAM user keys and ASIA
+	// prefix for short-term STS-generated keys (AssumeRole, GetFederationToken,
+	// IRSA in Kubernetes). Both are 20 characters total (4-char prefix + 16
+	// uppercase alphanumeric chars) and appear in application logs when AWS SDK
+	// calls fail with authentication errors.
 	{
-		re:          regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
+		re:          regexp.MustCompile(`(AKIA|ASIA)[0-9A-Z]{16}`),
 		replacement: "[REDACTED]",
 	},
 	// Email addresses: the domain section (between @ and the final dot) must

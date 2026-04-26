@@ -198,6 +198,27 @@ func TestRedactSecrets_AWSKeyInText(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_AWSTempAccessKeyID verifies that STS-generated temporary
+// access key IDs (ASIA prefix) are redacted. ASIA keys are issued by
+// AssumeRole, GetFederationToken, and IRSA (IAM Roles for Service Accounts in
+// Kubernetes) — they are equally sensitive as long-term AKIA keys and appear
+// in application logs when AWS SDK calls fail with authentication errors.
+func TestRedactSecrets_AWSTempAccessKeyID(t *testing.T) {
+	input := "aws_access_key_id = ASIAIOSFODNN7EXAMPLE"
+	result := RedactSecrets(input)
+	if strings.Contains(result, "ASIAIOSFODNN7EXAMPLE") {
+		t.Errorf("STS temporary access key ID not redacted: %s", result)
+	}
+}
+
+func TestRedactSecrets_AWSTempKeyInText(t *testing.T) {
+	input := "AssumeRole returned AccessKeyId: ASIAI44QH8DHBEXAMPLE"
+	result := RedactSecrets(input)
+	if strings.Contains(result, "ASIAI44QH8DHBEXAMPLE") {
+		t.Errorf("STS temporary access key not redacted in free text: %s", result)
+	}
+}
+
 func TestRedactSecrets_PostgresURL(t *testing.T) {
 	input := "DATABASE_URL=postgres://myuser:s3cr3t@db.example.com:5432/mydb"
 	result := RedactSecrets(input)
