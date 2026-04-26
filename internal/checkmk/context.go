@@ -133,24 +133,6 @@ func sanitizePluginOutput(s string) string {
 	return b.String()
 }
 
-// sanitizeAlertField strips all control characters from a single-line alert
-// field value before it is injected into the Claude prompt. Fields like
-// hostname, service name, and notification type are single-line identifiers —
-// embedded newlines or other control characters in these values could inject
-// fake Markdown sections into the prompt (prompt injection). Unlike
-// sanitizeHostContext, tabs and newlines are also stripped because these fields
-// are expected to be single-line identifiers, not formatted text.
-func sanitizeAlertField(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	for _, r := range s {
-		if !unicode.IsControl(r) {
-			b.WriteRune(r)
-		}
-	}
-	return strings.TrimSpace(b.String())
-}
-
 func (c *APIClient) ValidateAndDescribeHost(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
 	if !isValidHostname(hostname) {
 		return nil, fmt.Errorf("invalid hostname %q", hostname)
@@ -283,8 +265,8 @@ func (c *APIClient) GetHostServices(ctx context.Context, hostname string) string
 		if state == "" {
 			state = fmt.Sprintf("%d", svc.Extensions.State)
 		}
-		output := sanitizeAlertField(shared.RedactSecrets(svc.Extensions.Output))
-		line := fmt.Sprintf("- %s: %s — %s", sanitizeAlertField(svc.Extensions.Description), state, output)
+		output := shared.SanitizeAlertField(shared.RedactSecrets(svc.Extensions.Output))
+		line := fmt.Sprintf("- %s: %s — %s", shared.SanitizeAlertField(svc.Extensions.Description), state, output)
 		if svc.Extensions.State == 0 {
 			okLines = append(okLines, line)
 		} else {
@@ -340,14 +322,14 @@ func GatherContext(ctx context.Context, apiClient *APIClient, alert shared.Alert
 	}
 
 	alertDetails := fmt.Sprintf("- Hostname: %s\n- Address: %s\n- Host State: %s\n- Service: %s\n- State: %s\n- Output: %s\n- Type: %s\n- Perf Data: %s\n- Timestamp: %s",
-		sanitizeAlertField(hostname), sanitizeAlertField(hostAddress),
-		sanitizeAlertField(alert.Fields["host_state"]),
-		sanitizeAlertField(alert.Fields["service_description"]),
-		sanitizeAlertField(alert.Fields["service_state"]),
-		sanitizeAlertField(shared.RedactSecrets(alert.Fields["service_output"])),
-		sanitizeAlertField(alert.Fields["notification_type"]),
-		sanitizeAlertField(shared.RedactSecrets(alert.Fields["perf_data"])),
-		sanitizeAlertField(alert.Fields["timestamp"]))
+		shared.SanitizeAlertField(hostname), shared.SanitizeAlertField(hostAddress),
+		shared.SanitizeAlertField(alert.Fields["host_state"]),
+		shared.SanitizeAlertField(alert.Fields["service_description"]),
+		shared.SanitizeAlertField(alert.Fields["service_state"]),
+		shared.SanitizeAlertField(shared.RedactSecrets(alert.Fields["service_output"])),
+		shared.SanitizeAlertField(alert.Fields["notification_type"]),
+		shared.SanitizeAlertField(shared.RedactSecrets(alert.Fields["perf_data"])),
+		shared.SanitizeAlertField(alert.Fields["timestamp"]))
 	// long_plugin_output can be very large (multi-line check details up to the 1 MiB
 	// webhook body limit). Truncate to 4 KiB so a single verbose plugin does not
 	// exhaust the Claude context window or inflate analysis costs unnecessarily.
