@@ -444,6 +444,13 @@ func TestValidateAndDescribeHost_RejectsInvalidHostname(t *testing.T) {
 		// Consecutive dots are invalid in DNS label boundaries.
 		{"consecutive dots", "host..example.com"},
 		{"leading double dot", "..host"},
+		// RFC 952/1035: each label must start and end with a letter or digit.
+		// The top-level regex only guards the outer characters of the whole
+		// hostname, so these FQDN cases with hyphen-bordered labels must be
+		// rejected explicitly.
+		{"label starting with dash", "a.-b.c"},
+		{"label ending with dash", "a.b-.c"},
+		{"label starting and ending with dash", "a.-b-.c"},
 	}
 
 	for _, tt := range tests {

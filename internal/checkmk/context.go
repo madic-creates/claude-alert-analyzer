@@ -51,7 +51,19 @@ func isValidHostname(hostname string) bool {
 	if strings.Contains(hostname, "..") {
 		return false
 	}
-	return validHostnameRe.MatchString(hostname)
+	if !validHostnameRe.MatchString(hostname) {
+		return false
+	}
+	// Reject any label that starts or ends with a hyphen. The top-level regex
+	// only guarantees the overall string starts/ends with [a-zA-Z0-9], so a
+	// FQDN like "a.-b.c" passes the regex but violates RFC 952/1035, which
+	// requires every dot-separated label to begin and end with a letter or digit.
+	for _, label := range strings.Split(hostname, ".") {
+		if strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+	}
+	return true
 }
 
 type checkmkHostResponse struct {
