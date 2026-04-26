@@ -397,6 +397,48 @@ func TestGetKubeContext_GoroutinePanicRecovery(t *testing.T) {
 	}
 }
 
+// TestGetKubeContext_PodLogsGoroutinePanicRecovery verifies that a panic inside
+// the pod logs goroutine of GetKubeContext is recovered and the logs output
+// receives a "(pod logs context gathering panicked: ...)" sentinel without
+// deadlocking. The events and pod-status goroutines must still complete normally.
+//
+// This closes the gap in TestGetKubeContext_GoroutinePanicRecovery, which covers
+// only the events and pod-status goroutines even though the comment says "any of
+// the three kube-context goroutines". The pod-logs goroutine has its own
+// defer/recover block in context.go; losing that block silently would leave a
+// goroutine that can crash the process.
+//
+// The panic is injected via a reactor that fires only when getPodLogs calls
+// List with its FieldSelector ("status.phase!=Running,status.phase!=Succeeded").
+// getPodStatus uses no FieldSelector, so its List call passes through to the
+// default fake handler and returns normally.
+func TestGetKubeContext_PodLogsGoroutinePanicRecovery(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		la, ok := action.(k8stesting.ListAction)
+		if ok && la.GetListRestrictions().Fields.String() != "" {
+			panic("injected panic in pod logs goroutine")
+		}
+		return false, nil, nil // pass through for getPodStatus (no FieldSelector)
+	})
+
+	alert := makeAlertWithLabels(map[string]string{"namespace": "testns"})
+	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+
+	// Must not panic the test process.
+	events, pods, logs := GetKubeContext(context.Background(), cs, alert, cfg)
+
+	if !strings.Contains(logs, "panicked") {
+		t.Errorf("logs output should contain 'panicked' sentinel, got: %q", logs)
+	}
+	if strings.Contains(events, "panicked") {
+		t.Errorf("events output should not contain 'panicked' sentinel, got: %q", events)
+	}
+	if strings.Contains(pods, "panicked") {
+		t.Errorf("pods output should not contain 'panicked' sentinel, got: %q", pods)
+	}
+}
+
 // TestK8sProcessAlert_EmptyAnalysis_PublishFailureNotification verifies the
 // empty-analysis branch of ProcessAlert when the failure notification also fails.
 // This exercises the slog.Warn at pipeline.go:63.
