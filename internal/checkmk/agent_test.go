@@ -1823,6 +1823,30 @@ func TestDenyReason(t *testing.T) {
 			t.Errorf("expected 'denied' in message for empty argv; got: %s", msg)
 		}
 	})
+
+	t.Run("versioned interpreter names base command and explains bypass risk", func(t *testing.T) {
+		// python3.11 is denied via the versioned-stripping path in isDenied:
+		// TrimRight("python3.11", "0123456789.") == "python" which is in the
+		// denylist. denyReason must name both the versioned command and the base
+		// so Claude knows exactly why it was blocked and can choose a direct
+		// read-only diagnostic command rather than retrying with python3.12 etc.
+		msg := denyReason([]string{"python3.11", "-c", "import sys; print(sys.path)"})
+		if !strings.Contains(msg, "python3.11") {
+			t.Errorf("expected message to name the versioned command; got: %s", msg)
+		}
+		if !strings.Contains(msg, "python") {
+			t.Errorf("expected message to name the base command; got: %s", msg)
+		}
+		if !strings.Contains(msg, "versioned") {
+			t.Errorf("expected message to mention 'versioned'; got: %s", msg)
+		}
+		// Must NOT use the generic "destructive or privileged" phrasing — that
+		// description is misleading for interpreters (they are blocked as bypass
+		// vectors, not because they are inherently destructive).
+		if strings.Contains(msg, "destructive or privileged") {
+			t.Errorf("expected message NOT to use generic 'destructive or privileged' phrasing for a versioned interpreter; got: %s", msg)
+		}
+	})
 }
 
 // TestIsDenied_BlocksProcessWrappers verifies that process execution wrappers

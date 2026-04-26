@@ -370,6 +370,16 @@ func denyReason(argv []string) string {
 		// sed is in the custom denylist without in-place flags — fall through to generic message.
 	}
 
+	// Versioned interpreter or tool variant (e.g. python3.11, ruby2.7, node20).
+	// isDenied strips the trailing version suffix to find the base name in the
+	// denylist. Give Claude a specific message that names the base command so it
+	// understands why the versioned name was blocked and can choose a direct
+	// read-only diagnostic command instead of retrying with another variant.
+	base := strings.TrimRight(cmd, "0123456789.")
+	if base != cmd && base != "" {
+		return fmt.Sprintf("Command denied: %q is a versioned variant of %q which is not allowed (scripting interpreter that can bypass the command denylist); use direct read-only diagnostic commands instead", cmd, base)
+	}
+
 	return fmt.Sprintf("Command denied: %q is not allowed (destructive or privileged command)", cmd)
 }
 
