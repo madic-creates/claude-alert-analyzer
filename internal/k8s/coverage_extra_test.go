@@ -613,3 +613,47 @@ func (tr nodeQueryPanicTransport) RoundTrip(r *http.Request) (*http.Response, er
 		Body:       io.NopCloser(strings.NewReader(string(tr.okBody))),
 	}, nil
 }
+
+// panicingMetricsGetter is a PrometheusMetricsGetter whose GetMetrics panics
+// immediately, before spawning any goroutines. This is distinct from
+// panicTransport (which panics inside an HTTP RoundTrip and is caught by
+// GetMetrics' inner goroutine recover). Because GetMetrics itself panics here,
+// the defer/recover in GatherContext's outer Prometheus goroutine fires,
+// exercising the previously uncovered panic-recovery body.
+type panicingMetricsGetter struct{}
+
+func (panicingMetricsGetter) GetMetrics(_ context.Context, _ Alert) string {
+	panic("simulated top-level GetMetrics panic")
+}
+
+// TestGatherContext_PrometheusGetMetricsPanic verifies that a panic originating
+// inside GetMetrics itself (not inside one of its inner goroutines) is caught by
+// GatherContext's outer goroutine recover, and that GatherContext returns a
+// "(prometheus context gathering panicked: ...)" sentinel rather than deadlocking.
+func TestGatherContext_PrometheusGetMetricsPanic(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	alert := makeAlertWithLabels(map[string]string{"alertname": "PanicTest", "namespace": "ns"})
+	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+
+	done := make(chan struct{})
+	var actx shared.AnalysisContext
+	go func() {
+		actx = GatherContext(context.Background(), panicingMetricsGetter{}, cs, alert, cfg)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("GatherContext deadlocked after GetMetrics panic")
+	}
+
+	if len(actx.Sections) != 4 {
+		t.Fatalf("expected 4 sections, got %d", len(actx.Sections))
+		return
+	}
+	promContent := actx.Sections[0].Content
+	if !strings.Contains(promContent, "panicked") {
+		t.Errorf("expected panic sentinel in Prometheus section, got: %q", promContent)
+	}
+}

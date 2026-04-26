@@ -21,6 +21,14 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// PrometheusMetricsGetter is the interface used by GatherContext to collect
+// Prometheus metrics for an alert. Using an interface instead of a concrete
+// type lets tests inject a mock without an HTTP server, following the same
+// pattern as kubernetes.Interface for Kubernetes API calls.
+type PrometheusMetricsGetter interface {
+	GetMetrics(ctx context.Context, alert Alert) string
+}
+
 // PrometheusClient queries a Prometheus instance.
 type PrometheusClient struct {
 	HTTP *http.Client
@@ -522,7 +530,7 @@ func GetKubeContext(ctx context.Context, clientset kubernetes.Interface, alert A
 const defaultPromTimeout = defaultKubeAPITimeout
 
 // GatherContext collects Prometheus metrics and Kubernetes context for the given alert.
-func GatherContext(ctx context.Context, prom *PrometheusClient, clientset kubernetes.Interface, alert Alert, cfg Config) shared.AnalysisContext {
+func GatherContext(ctx context.Context, prom PrometheusMetricsGetter, clientset kubernetes.Interface, alert Alert, cfg Config) shared.AnalysisContext {
 	slog.Info("gathering context",
 		"alertname", alert.Labels["alertname"],
 		"namespace", alert.Labels["namespace"])
