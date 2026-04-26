@@ -263,7 +263,14 @@ func isDenied(denied map[string]bool, argv []string) bool {
 	// of whether "find" itself is in the denylist.
 	if cmd == "find" {
 		for _, arg := range argv[1:] {
-			if findExecFlags[arg] || findDestructiveFlags[arg] {
+			// Normalise to lowercase so that a prompt-injection attack using
+			// "-EXEC" or "-DELETE" cannot bypass the flag checks. This mirrors
+			// the lowercase normalisation applied to argv[0] (cmd) above and to
+			// the systemctl subcommand. The maps use lowercase keys; without
+			// this normalisation findExecFlags["-EXEC"] == false even though
+			// "-exec" is blocked.
+			lower := strings.ToLower(arg)
+			if findExecFlags[lower] || findDestructiveFlags[lower] {
 				return true
 			}
 		}
@@ -348,10 +355,14 @@ func denyReason(denied map[string]bool, argv []string) string {
 
 	case "find":
 		for _, arg := range argv[1:] {
-			if findExecFlags[arg] {
+			// Normalise to lowercase to match the same normalisation in isDenied,
+			// so that uppercase variants ("-EXEC", "-DELETE") produce the correct
+			// targeted guidance rather than falling through to the generic message.
+			lower := strings.ToLower(arg)
+			if findExecFlags[lower] {
 				return fmt.Sprintf("Command denied: find %s is not permitted (exec flags can spawn arbitrary sub-processes); omit %s and redirect output instead", arg, arg)
 			}
-			if findDestructiveFlags[arg] {
+			if findDestructiveFlags[lower] {
 				return fmt.Sprintf("Command denied: find %s is not permitted (destructive flag); omit %s", arg, arg)
 			}
 		}

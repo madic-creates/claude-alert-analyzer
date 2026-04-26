@@ -2045,3 +2045,65 @@ func TestIsDenied_CustomDeniedCommandsCaseInsensitive(t *testing.T) {
 		}
 	}
 }
+
+// TestIsDenied_FindFlagsCaseInsensitive verifies that find exec and destructive
+// flags are matched case-insensitively. A prompt-injection attack could instruct
+// Claude to use "-EXEC" or "-DELETE" (uppercase) to bypass the lowercase key
+// maps (findExecFlags and findDestructiveFlags). isDenied normalises argv[0] to
+// lowercase but previously did not normalise find's arguments, so "-EXEC" was
+// not found in findExecFlags (which stores "-exec") and the command was allowed.
+func TestIsDenied_FindFlagsCaseInsensitive(t *testing.T) {
+	denied := [][]string{
+		// Uppercase exec flags
+		{"find", "/tmp", "-EXEC", "cat", "{}", ";"},
+		{"find", "/tmp", "-EXECDIR", "cat", "{}", ";"},
+		{"find", "/tmp", "-OK", "cat", "{}", ";"},
+		{"find", "/tmp", "-OKDIR", "cat", "{}", ";"},
+		// Mixed-case exec flags
+		{"find", "/tmp", "-Exec", "cat", "{}", ";"},
+		// Uppercase destructive flags
+		{"find", "/tmp", "-DELETE"},
+		{"find", "/tmp", "-FPRINT", "out.txt"},
+		{"find", "/tmp", "-FPRINT0", "out.txt"},
+		{"find", "/tmp", "-FPRINTF", "out.txt", "%f\n"},
+		{"find", "/tmp", "-FLS", "out.txt"},
+		// Mixed-case destructive flags
+		{"find", "/tmp", "-Delete"},
+		{"find", "/tmp", "-Fprint", "out.txt"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected denied for uppercase find flag: %v", argv)
+		}
+	}
+}
+
+// TestDenyReason_FindFlagsCaseInsensitive verifies that denyReason produces a
+// targeted guidance message (not the generic "not allowed" fallback) for
+// uppercase find exec and destructive flags. Without lowercase normalisation
+// in denyReason, denyReason would fall through the find case's flag loop and
+// return the generic message, giving Claude no hint about which flag to omit.
+func TestDenyReason_FindFlagsCaseInsensitive(t *testing.T) {
+	cases := []struct {
+		argv     []string
+		wantWord string // substring expected in the message
+	}{
+		{[]string{"find", "/tmp", "-EXEC", "cat", "{}", ";"}, "exec"},
+		{[]string{"find", "/tmp", "-EXECDIR", "cat", "{}", ";"}, "exec"},
+		{[]string{"find", "/tmp", "-OK", "rm", "{}", ";"}, "exec"},
+		{[]string{"find", "/tmp", "-DELETE"}, "destructive"},
+		{[]string{"find", "/tmp", "-FPRINT", "out.txt"}, "destructive"},
+		{[]string{"find", "/tmp", "-Fprint0", "out.txt"}, "destructive"},
+	}
+	for _, tc := range cases {
+		msg := denyReason(DefaultDeniedCommands, tc.argv)
+		if !strings.Contains(strings.ToLower(msg), tc.wantWord) {
+			t.Errorf("denyReason(%v) = %q; expected %q in message", tc.argv, msg, tc.wantWord)
+		}
+		// Must NOT fall through to the generic "not allowed" message that
+		// provides no actionable guidance about which flag to remove.
+		if strings.Contains(msg, "not allowed (destructive or privileged command)") {
+			t.Errorf("denyReason(%v) returned generic message instead of targeted guidance: %q", tc.argv, msg)
+		}
+	}
+}
