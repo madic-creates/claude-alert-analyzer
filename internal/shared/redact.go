@@ -3,6 +3,7 @@ package shared
 import (
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 type sensitivePattern struct {
@@ -116,6 +117,23 @@ var sensitivePatterns = []sensitivePattern{
 		re:          regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]*[A-Za-z][A-Za-z0-9.-]*\.[A-Za-z]{2,}`),
 		replacement: "[REDACTED]",
 	},
+}
+
+// SanitizeAlertField strips all control characters from a single-line alert
+// field value before it is injected into a Claude prompt. Fields like alert
+// names, severities, and statuses are expected to be single-line identifiers;
+// embedded newlines or other control characters could inject fake Markdown
+// sections into the prompt (prompt injection). This mirrors the sanitization
+// applied by the CheckMK context gatherer to its single-line alert fields.
+func SanitizeAlertField(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if !unicode.IsControl(r) {
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func RedactSecrets(input string) string {

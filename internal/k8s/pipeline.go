@@ -41,7 +41,12 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 
 	actx := deps.GatherContext(ctx, alert)
 	userPrompt := fmt.Sprintf("## Alert: %s\n- Status: %s\n- Severity: %s\n- Namespace: %s\n- StartsAt: %s\n\n%s",
-		alertname, alert.Fields["status"], alert.Severity, namespace, alert.Fields["startsAt"], actx.FormatForPrompt())
+		shared.SanitizeAlertField(alertname),
+		shared.SanitizeAlertField(alert.Fields["status"]),
+		shared.SanitizeAlertField(alert.Severity),
+		shared.SanitizeAlertField(namespace),
+		alert.Fields["startsAt"],
+		actx.FormatForPrompt())
 
 	analysis, err := deps.Analyzer.Analyze(ctx, deps.SystemPrompt, userPrompt)
 	if err != nil {
