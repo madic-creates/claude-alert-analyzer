@@ -114,25 +114,6 @@ func sanitizeHostContext(s string) string {
 	return s
 }
 
-// sanitizePluginOutput strips control characters from multi-line plugin output
-// while preserving newlines and tabs, before it is injected into the Claude
-// prompt. long_plugin_output is expected to be multi-line formatted text, so
-// newlines and tabs must be kept intact. However, carriage returns, null bytes,
-// ESC (and other C0 characters), DEL, and C1 Unicode control characters
-// (U+0080–U+009F) are stripped — they serve no diagnostic purpose and could
-// be used to corrupt prompt formatting (e.g. ANSI escape sequences) or for
-// terminal-side prompt injection techniques.
-func sanitizePluginOutput(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	for _, r := range s {
-		if r == '\t' || r == '\n' || !unicode.IsControl(r) {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-
 func (c *APIClient) ValidateAndDescribeHost(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
 	if !isValidHostname(hostname) {
 		return nil, fmt.Errorf("invalid hostname %q", hostname)
@@ -333,7 +314,7 @@ func GatherContext(ctx context.Context, apiClient *APIClient, alert shared.Alert
 	// long_plugin_output can be very large (multi-line check details up to the 1 MiB
 	// webhook body limit). Truncate to 4 KiB so a single verbose plugin does not
 	// exhaust the Claude context window or inflate analysis costs unnecessarily.
-	if lpo := shared.Truncate(shared.RedactSecrets(sanitizePluginOutput(alert.Fields["long_plugin_output"])), 4096); lpo != "" {
+	if lpo := shared.Truncate(shared.RedactSecrets(shared.SanitizeOutput(alert.Fields["long_plugin_output"])), 4096); lpo != "" {
 		alertDetails += "\n- Detailed Output:\n" + lpo
 	}
 
