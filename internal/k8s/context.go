@@ -440,7 +440,8 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace s
 			slog.Warn("failed to get pod logs", "pod", p.Name, "namespace", namespace, "error", err)
 			logLines = append(logLines, fmt.Sprintf("--- %s --- (no logs)", p.Name))
 		} else {
-			redacted := shared.RedactSecrets(string(raw))
+			sanitized := shared.SanitizeOutput(string(raw))
+			redacted := shared.RedactSecrets(sanitized)
 			truncated := shared.Truncate(redacted, cfg.MaxLogBytes)
 			logLines = append(logLines, fmt.Sprintf("--- %s ---\n%s", p.Name, truncated))
 		}

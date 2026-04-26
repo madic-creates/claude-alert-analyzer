@@ -811,3 +811,33 @@ func TestTruncate_ExactBoundary(t *testing.T) {
 		t.Errorf("expected no truncation for exact-length string, got len=%d", len(result))
 	}
 }
+
+// TestSanitizeOutput verifies that SanitizeOutput strips C0/C1/DEL control
+// characters while preserving newlines and tabs.
+func TestSanitizeOutput(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"newline preserved", "line1\nline2", "line1\nline2"},
+		{"tab preserved", "col1\tcol2", "col1\tcol2"},
+		{"carriage return stripped", "foo\rbar", "foobar"},
+		{"null byte stripped", "foo\x00bar", "foobar"},
+		{"ESC stripped", "foo\x1bbar", "foobar"},
+		{"C1 control stripped", "foo\u0080bar", "foobar"},
+		{"DEL stripped", "foo\x7fbar", "foobar"},
+		{"ANSI escape sequence: ESC stripped, rest preserved", "\x1b[31mred\x1b[0m", "[31mred[0m"},
+		{"regular text unchanged", "hello world", "hello world"},
+		{"empty string", "", ""},
+		{"only newlines and tabs", "\n\t\n", "\n\t\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := SanitizeOutput(tc.input)
+			if got != tc.want {
+				t.Errorf("SanitizeOutput(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}

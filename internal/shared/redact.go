@@ -119,6 +119,27 @@ var sensitivePatterns = []sensitivePattern{
 	},
 }
 
+// SanitizeOutput strips control characters from multi-line output while
+// preserving newlines and tabs, before the output is injected into the Claude
+// prompt. Multi-line diagnostic output (e.g. pod logs, plugin output) is
+// expected to be formatted text, so newlines and tabs must be kept intact.
+// However, carriage returns, null bytes, ESC (and other C0 characters), DEL,
+// and C1 Unicode control characters (U+0080–U+009F) are stripped — they serve
+// no diagnostic purpose and could be used to corrupt prompt formatting (e.g.
+// ANSI escape sequences) or for terminal-side prompt injection techniques.
+// This mirrors the sanitization applied by the CheckMK context gatherer to
+// long_plugin_output.
+func SanitizeOutput(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r == '\t' || r == '\n' || !unicode.IsControl(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // SanitizeAlertField strips all control characters from a single-line alert
 // field value before it is injected into a Claude prompt. Fields like alert
 // names, severities, and statuses are expected to be single-line identifiers;
