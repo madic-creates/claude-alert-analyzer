@@ -120,10 +120,19 @@ func (p *PrometheusClient) query(ctx context.Context, queryStr string) string {
 	for _, r := range result.Data.Result {
 		var labels []string
 		for k, v := range r.Metric {
-			labels = append(labels, fmt.Sprintf("%s=%s", k, v))
+			// Sanitize label values before injecting into the Claude prompt.
+			// Prometheus label values are sourced from Kubernetes resource labels
+			// and can contain arbitrary strings including newlines. A value like
+			// "pod-name\n## Injected Section\nevil content" would insert a fake
+			// Markdown heading into the prompt (prompt injection). This mirrors
+			// the sanitization applied to k8s event fields (getEvents).
+			labels = append(labels, fmt.Sprintf("%s=%s", k, shared.SanitizeAlertField(v)))
 		}
 		sort.Strings(labels)
-		val := fmt.Sprintf("%v", r.Value[1])
+		// Sanitize the metric value string for the same reason: r.Value[1] is
+		// decoded from JSON as interface{} and formatted with %v; if Prometheus
+		// returns an unexpected non-numeric string it could contain control chars.
+		val := shared.SanitizeAlertField(fmt.Sprintf("%v", r.Value[1]))
 		lines = append(lines, fmt.Sprintf("%s: %s", strings.Join(labels, ", "), val))
 	}
 	total := len(lines)
