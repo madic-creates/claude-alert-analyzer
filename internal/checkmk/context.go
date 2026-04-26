@@ -114,6 +114,24 @@ func sanitizeHostContext(s string) string {
 	return s
 }
 
+// sanitizeAlertField strips all control characters from a single-line alert
+// field value before it is injected into the Claude prompt. Fields like
+// hostname, service name, and notification type are single-line identifiers —
+// embedded newlines or other control characters in these values could inject
+// fake Markdown sections into the prompt (prompt injection). Unlike
+// sanitizeHostContext, tabs and newlines are also stripped because these fields
+// are expected to be single-line identifiers, not formatted text.
+func sanitizeAlertField(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if !unicode.IsControl(r) {
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
 func (c *APIClient) ValidateAndDescribeHost(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
 	if !isValidHostname(hostname) {
 		return nil, fmt.Errorf("invalid hostname %q", hostname)
@@ -303,11 +321,14 @@ func GatherContext(ctx context.Context, apiClient *APIClient, alert shared.Alert
 	}
 
 	alertDetails := fmt.Sprintf("- Hostname: %s\n- Address: %s\n- Host State: %s\n- Service: %s\n- State: %s\n- Output: %s\n- Type: %s\n- Perf Data: %s\n- Timestamp: %s",
-		hostname, hostAddress, alert.Fields["host_state"],
-		alert.Fields["service_description"],
-		alert.Fields["service_state"], shared.RedactSecrets(alert.Fields["service_output"]),
-		alert.Fields["notification_type"], shared.RedactSecrets(alert.Fields["perf_data"]),
-		alert.Fields["timestamp"])
+		sanitizeAlertField(hostname), sanitizeAlertField(hostAddress),
+		sanitizeAlertField(alert.Fields["host_state"]),
+		sanitizeAlertField(alert.Fields["service_description"]),
+		sanitizeAlertField(alert.Fields["service_state"]),
+		shared.RedactSecrets(alert.Fields["service_output"]),
+		sanitizeAlertField(alert.Fields["notification_type"]),
+		shared.RedactSecrets(alert.Fields["perf_data"]),
+		sanitizeAlertField(alert.Fields["timestamp"]))
 	// long_plugin_output can be very large (multi-line check details up to the 1 MiB
 	// webhook body limit). Truncate to 4 KiB so a single verbose plugin does not
 	// exhaust the Claude context window or inflate analysis costs unnecessarily.

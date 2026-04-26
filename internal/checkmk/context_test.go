@@ -1322,3 +1322,45 @@ func TestNonOKPriority(t *testing.T) {
 		t.Errorf("UNKNOWN priority (%d) must be less than default priority (%d)", nonOKPriority(3), nonOKPriority(0))
 	}
 }
+
+func TestGatherContext_FieldControlCharsStripped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "u", Secret: "s"}
+
+	alert := shared.AlertPayload{
+		Fields: map[string]string{
+			"hostname":            "myhost\n## Injected Section\nFake content",
+			"host_address":        "10.0.0.1\rcarriage return",
+			"service_description": "HTTP\x01control",
+			"service_state":       "CRITICAL",
+			"service_output":      "check output",
+			"host_state":          "UP",
+			"notification_type":   "PROBLEM",
+			"perf_data":           "",
+			"timestamp":           "2024-01-15T12:00:00Z",
+		},
+	}
+
+	actx := GatherContext(context.Background(), apiClient, alert, nil)
+	formatted := actx.FormatForPrompt()
+
+	// The newlines are stripped, so the injected text may still appear but
+	// cannot form a separate Markdown heading line. The threat is a standalone
+	// "## Injected Section" on its own line — verify that does not occur.
+	if strings.Contains(formatted, "\n## Injected Section") {
+		t.Error("newline-injected Markdown heading from hostname appeared in formatted context")
+	}
+	if strings.Contains(formatted, "\x01") {
+		t.Error("control character from service_description appeared in formatted context")
+	}
+	if strings.Contains(formatted, "\r") {
+		t.Error("carriage return from host_address appeared in formatted context")
+	}
+	if !strings.Contains(formatted, "myhost") {
+		t.Error("hostname value was entirely removed from formatted context")
+	}
+}
