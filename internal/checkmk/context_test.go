@@ -810,6 +810,80 @@ func TestGatherContext_LongPluginOutputIncluded(t *testing.T) {
 	})
 }
 
+// TestGatherContext_LongPluginOutputControlCharsStripped verifies that control
+// characters other than newlines and tabs are stripped from long_plugin_output
+// before it is injected into the Claude prompt. Unlike single-line alert fields
+// (which strip all control characters), long_plugin_output is multi-line so
+// newlines must be preserved. However, carriage returns, null bytes, ESC, and
+// other C0/C1 control characters are stripped to prevent ANSI escape sequences
+// and terminal-side prompt injection from reaching Claude.
+func TestGatherContext_LongPluginOutputControlCharsStripped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "u", Secret: "s"}
+
+	cases := []struct {
+		name        string
+		input       string
+		mustHave    string // must appear in prompt (legitimate content preserved)
+		mustNotHave string // must NOT appear in prompt (control char stripped)
+	}{
+		{
+			name:        "carriage return stripped",
+			input:       "line1\r\nline2",
+			mustHave:    "line1",
+			mustNotHave: "\r",
+		},
+		{
+			name:        "null byte stripped",
+			input:       "output\x00null",
+			mustHave:    "outputnull",
+			mustNotHave: "\x00",
+		},
+		{
+			name:        "ESC (ANSI escape) stripped",
+			input:       "\x1b[31mred text\x1b[0m",
+			mustHave:    "red text",
+			mustNotHave: "\x1b",
+		},
+		{
+			name:        "newline preserved",
+			input:       "line1\nline2\nline3",
+			mustHave:    "line2",
+			mustNotHave: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			alert := shared.AlertPayload{
+				Fields: map[string]string{
+					"hostname":            "host1",
+					"host_address":        "10.0.0.1",
+					"service_description": "TestSvc",
+					"service_state":       "CRITICAL",
+					"service_output":      "CRITICAL - test",
+					"notification_type":   "PROBLEM",
+					"perf_data":           "",
+					"long_plugin_output":  tc.input,
+				},
+			}
+			actx := GatherContext(context.Background(), apiClient, alert, nil)
+			prompt := actx.FormatForPrompt()
+
+			if tc.mustHave != "" && !strings.Contains(prompt, tc.mustHave) {
+				t.Errorf("expected %q in prompt but not found:\n%s", tc.mustHave, prompt)
+			}
+			if tc.mustNotHave != "" && strings.Contains(prompt, tc.mustNotHave) {
+				t.Errorf("control character %q leaked into prompt", tc.mustNotHave)
+			}
+		})
+	}
+}
+
 // TestGatherContext_TimestampIncluded verifies that the CheckMK notification
 // timestamp is included in the Alert Details section sent to Claude. The timestamp
 // tells Claude when the alert fired, which is useful for correlating with
