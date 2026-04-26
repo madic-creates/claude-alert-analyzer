@@ -812,6 +812,43 @@ func TestTruncate_ExactBoundary(t *testing.T) {
 	}
 }
 
+// TestSanitizeAlertField verifies that SanitizeAlertField strips ALL control
+// characters (including newlines and tabs) and trims surrounding whitespace.
+// Alert fields are single-line identifiers; embedded newlines could inject fake
+// Markdown headings into the Claude prompt (prompt injection). This differs from
+// SanitizeOutput which preserves newlines and tabs for multi-line output.
+func TestSanitizeAlertField(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"plain text unchanged", "CrashLoopBackOff", "CrashLoopBackOff"},
+		{"leading and trailing whitespace trimmed", "  warning  ", "warning"},
+		{"newline stripped", "foo\nbar", "foobar"},
+		{"tab stripped", "foo\tbar", "foobar"},
+		{"carriage return stripped", "foo\rbar", "foobar"},
+		{"null byte stripped", "foo\x00bar", "foobar"},
+		{"ESC stripped", "foo\x1bbar", "foobar"},
+		{"C1 control stripped", "foo\u0080bar", "foobar"},
+		{"DEL stripped", "foo\x7fbar", "foobar"},
+		// Newline injection would add a fake Markdown heading to the Claude prompt
+		// (e.g. "alertname\n## Injected Section\n..."); stripping the newline
+		// collapses it to a single line so the heading syntax never takes effect.
+		{"embedded newline prompt injection", "## Fake Section\nInjected content", "## Fake SectionInjected content"},
+		{"empty string", "", ""},
+		{"only whitespace", "   ", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := SanitizeAlertField(tc.input)
+			if got != tc.want {
+				t.Errorf("SanitizeAlertField(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestSanitizeOutput verifies that SanitizeOutput strips C0/C1/DEL control
 // characters while preserving newlines and tabs.
 func TestSanitizeOutput(t *testing.T) {
