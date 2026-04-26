@@ -547,6 +547,7 @@ func RunAgenticDiagnostics(
 			// status nginx" on a stopped service exits 3 and its full status output
 			// is discarded, leaving Claude with only "Command failed: exit status 3".
 			if output != "" {
+				output = shared.SanitizeOutput(output)
 				output = shared.RedactSecrets(output)
 				output = shared.Truncate(output, 4096)
 				return fmt.Sprintf("$ %s\n%s\n[exited: %v]", shellQuote(argv), output, err), nil
@@ -554,6 +555,7 @@ func RunAgenticDiagnostics(
 			return fmt.Sprintf("Command failed: %v", err), nil
 		}
 
+		output = shared.SanitizeOutput(output)
 		output = shared.RedactSecrets(output)
 		output = shared.Truncate(output, 4096)
 

@@ -241,6 +241,101 @@ func TestRunAgenticDiagnostics_OutputRedacted(t *testing.T) {
 	}
 }
 
+// TestRunAgenticDiagnostics_OutputControlCharsStripped verifies that ANSI
+// escape sequences and other control characters emitted by SSH command output
+// are stripped before the result is returned to Claude. A compromised host
+// could embed ANSI sequences (e.g. ESC[31m) or carriage returns in command
+// output to corrupt the Claude prompt or attempt prompt injection. The output
+// pipeline must apply SanitizeOutput before RedactSecrets and Truncate,
+// matching the pattern used for pod logs in k8s/context.go and
+// long_plugin_output in checkmk/context.go.
+func TestRunAgenticDiagnostics_OutputControlCharsStripped(t *testing.T) {
+	// Output contains ANSI colour codes and a carriage return that should be
+	// stripped. The surrounding text "normal output" must survive intact.
+	const rawOutput = "\x1b[31mERROR\x1b[0m normal output\r\nno newline issue"
+	const wantPrefix = "$ "
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		_, _ = io.WriteString(ch, rawOutput)
+		sendExitStatus(ch, 0)
+	})
+
+	runner := &capturingToolRunner{
+		calls:  []agentToolCall{{name: "execute_command", input: `{"command": ["cat", "/var/log/app.log"]}`}},
+		result: "log analysis",
+	}
+	dialer := &fixedDialer{client: client}
+
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(runner.toolOutputs) != 1 {
+		t.Fatalf("expected 1 tool output, got %d", len(runner.toolOutputs))
+	}
+	out := runner.toolOutputs[0]
+	if !strings.HasPrefix(out, wantPrefix) {
+		t.Errorf("tool output missing command prefix, got: %q", out)
+	}
+	// ESC (0x1b) must be stripped.
+	if strings.ContainsRune(out, '\x1b') {
+		t.Errorf("ESC character not stripped from tool output: %q", out)
+	}
+	// Carriage return (0x0d) must be stripped.
+	if strings.ContainsRune(out, '\r') {
+		t.Errorf("carriage return not stripped from tool output: %q", out)
+	}
+	// Printable content must be preserved.
+	if !strings.Contains(out, "normal output") {
+		t.Errorf("printable content unexpectedly missing from tool output: %q", out)
+	}
+}
+
+// TestRunAgenticDiagnostics_NonZeroExitControlCharsStripped verifies that the
+// same control-character stripping is applied on the non-zero exit code path,
+// where output is preserved alongside the exit annotation. Without
+// SanitizeOutput the "[exited: ...]" format could carry raw ANSI sequences
+// from a compromised host into the Claude tool-result block.
+func TestRunAgenticDiagnostics_NonZeroExitControlCharsStripped(t *testing.T) {
+	const rawOutput = "\x1b[31mfailed\x1b[0m unit output\r\n"
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		_, _ = io.WriteString(ch, rawOutput)
+		sendExitStatus(ch, 3)
+	})
+
+	runner := &capturingToolRunner{
+		calls:  []agentToolCall{{name: "execute_command", input: `{"command": ["systemctl", "status", "nginx"]}`}},
+		result: "nginx analysis",
+	}
+	dialer := &fixedDialer{client: client}
+
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(runner.toolOutputs) != 1 {
+		t.Fatalf("expected 1 tool output, got %d", len(runner.toolOutputs))
+	}
+	out := runner.toolOutputs[0]
+	if strings.ContainsRune(out, '\x1b') {
+		t.Errorf("ESC character not stripped from non-zero exit tool output: %q", out)
+	}
+	if strings.ContainsRune(out, '\r') {
+		t.Errorf("carriage return not stripped from non-zero exit tool output: %q", out)
+	}
+	if !strings.Contains(out, "unit output") {
+		t.Errorf("printable content unexpectedly missing from non-zero exit tool output: %q", out)
+	}
+	if !strings.Contains(out, "exited") {
+		t.Errorf("exit annotation missing from non-zero exit tool output: %q", out)
+	}
+}
+
 // TestRunAgenticDiagnostics_NonZeroExitIncludesOutput verifies that when a diagnostic
 // command exits with a non-zero status but produced output (e.g. "systemctl status"
 // on a stopped service exits 3 with useful status text), the output is preserved in
