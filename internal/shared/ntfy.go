@@ -52,6 +52,16 @@ const maxNtfyTitleBytes = 250
 
 func (n *NtfyPublisher) Publish(ctx context.Context, title, priority, body string) error {
 	body = Truncate(body, maxNtfyBodyBytes)
+	// Strip control characters from the title before using it as an HTTP header
+	// value. RFC 7230 §3.2.6 prohibits control characters in header field values;
+	// Go's HTTP transport rejects requests whose headers contain C0 control
+	// characters (including \n and \r). Without this guard, an alert whose title
+	// is derived from a CheckMK service description or Alertmanager label that
+	// contains an embedded newline would fail every publish attempt — including
+	// the failure-notification publish — silently swallowing the error after
+	// retries. Sanitizing here is consistent with how all other strings in the
+	// pipeline are cleaned before injection into external systems.
+	title = SanitizeAlertField(title)
 	if len(title) > maxNtfyTitleBytes {
 		// Trim to a valid UTF-8 boundary and append "..." to signal truncation.
 		// We use a plain ellipsis rather than truncationMarker because titles

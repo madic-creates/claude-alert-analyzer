@@ -157,6 +157,41 @@ func TestNtfyPublisher_Publish_ShortTitleUnchanged(t *testing.T) {
 	}
 }
 
+// TestNtfyPublisher_Publish_TitleControlCharsStripped verifies that control
+// characters embedded in the title are removed before it is used as an HTTP
+// header value. RFC 7230 §3.2.6 prohibits C0 control characters in header
+// field values; Go's HTTP transport rejects such requests outright, which
+// would cause every publish attempt to fail silently after retries for alerts
+// whose title is derived from a CheckMK service description or Alertmanager
+// label containing an embedded newline.
+func TestNtfyPublisher_Publish_TitleControlCharsStripped(t *testing.T) {
+	var gotTitle string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTitle = r.Header.Get("Title")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	p := &NtfyPublisher{HTTP: srv.Client(), URL: srv.URL, Topic: "alerts"}
+	// Title with embedded newline, carriage return, and null byte — all C0
+	// control characters that Go's HTTP client would reject as invalid header
+	// values. The clean text on either side must be preserved.
+	dirtyTitle := "Analysis: web01\nfake-section\r\x00 - CPU Usage"
+	if err := p.Publish(context.Background(), dirtyTitle, "default", "body"); err != nil {
+		t.Fatalf("expected no error after control char stripping, got: %v", err)
+	}
+	// Control characters must be absent from the transmitted header.
+	for _, ch := range []string{"\n", "\r", "\x00"} {
+		if strings.Contains(gotTitle, ch) {
+			t.Errorf("control char %q not stripped from title: %q", ch, gotTitle)
+		}
+	}
+	// The printable portion of the title must be preserved.
+	if !strings.Contains(gotTitle, "Analysis: web01") {
+		t.Errorf("clean title prefix not preserved: %q", gotTitle)
+	}
+}
+
 func TestNtfyPublisher_Publish_TruncatesLargeBody(t *testing.T) {
 	var receivedLen int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
