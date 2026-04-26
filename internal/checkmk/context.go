@@ -283,8 +283,8 @@ func (c *APIClient) GetHostServices(ctx context.Context, hostname string) string
 		if state == "" {
 			state = fmt.Sprintf("%d", svc.Extensions.State)
 		}
-		output := shared.RedactSecrets(svc.Extensions.Output)
-		line := fmt.Sprintf("- %s: %s — %s", svc.Extensions.Description, state, output)
+		output := sanitizeAlertField(shared.RedactSecrets(svc.Extensions.Output))
+		line := fmt.Sprintf("- %s: %s — %s", sanitizeAlertField(svc.Extensions.Description), state, output)
 		if svc.Extensions.State == 0 {
 			okLines = append(okLines, line)
 		} else {
