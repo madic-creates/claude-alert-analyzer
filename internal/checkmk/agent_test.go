@@ -1610,7 +1610,7 @@ func TestIsDenied_BlocksBusybox(t *testing.T) {
 // approach. Fully-denied commands fall through to the generic message.
 func TestDenyReason(t *testing.T) {
 	t.Run("systemctl write subcommand names the subcommand and lists allowed ones", func(t *testing.T) {
-		msg := denyReason([]string{"systemctl", "restart", "nginx"})
+		msg := denyReason(DefaultDeniedCommands, []string{"systemctl", "restart", "nginx"})
 		if !strings.Contains(msg, "systemctl restart") {
 			t.Errorf("expected message to name the subcommand; got: %s", msg)
 		}
@@ -1621,14 +1621,14 @@ func TestDenyReason(t *testing.T) {
 	})
 
 	t.Run("systemctl with flags before write subcommand still names the subcommand", func(t *testing.T) {
-		msg := denyReason([]string{"systemctl", "--no-pager", "stop", "sshd"})
+		msg := denyReason(DefaultDeniedCommands, []string{"systemctl", "--no-pager", "stop", "sshd"})
 		if !strings.Contains(msg, "systemctl stop") {
 			t.Errorf("expected message to name 'stop'; got: %s", msg)
 		}
 	})
 
 	t.Run("systemctl uppercase write subcommand is lowercased in message", func(t *testing.T) {
-		msg := denyReason([]string{"systemctl", "RESTART", "nginx"})
+		msg := denyReason(DefaultDeniedCommands, []string{"systemctl", "RESTART", "nginx"})
 		if !strings.Contains(msg, "systemctl restart") {
 			t.Errorf("expected lowercase 'restart' in message; got: %s", msg)
 		}
@@ -1638,21 +1638,21 @@ func TestDenyReason(t *testing.T) {
 	})
 
 	t.Run("systemctl no subcommand lists allowed subcommands", func(t *testing.T) {
-		msg := denyReason([]string{"systemctl"})
+		msg := denyReason(DefaultDeniedCommands, []string{"systemctl"})
 		if !strings.Contains(msg, "status") {
 			t.Errorf("expected message to list read-only subcommands; got: %s", msg)
 		}
 	})
 
 	t.Run("find with exec flag names the flag and suggests alternative", func(t *testing.T) {
-		msg := denyReason([]string{"find", "/var/log", "-exec", "cat", "{}", ";"})
+		msg := denyReason(DefaultDeniedCommands, []string{"find", "/var/log", "-exec", "cat", "{}", ";"})
 		if !strings.Contains(msg, "-exec") {
 			t.Errorf("expected message to name the -exec flag; got: %s", msg)
 		}
 	})
 
 	t.Run("find with delete flag names the flag", func(t *testing.T) {
-		msg := denyReason([]string{"find", "/tmp", "-name", "*.tmp", "-delete"})
+		msg := denyReason(DefaultDeniedCommands, []string{"find", "/tmp", "-name", "*.tmp", "-delete"})
 		if !strings.Contains(msg, "-delete") {
 			t.Errorf("expected message to name the -delete flag; got: %s", msg)
 		}
@@ -1665,7 +1665,7 @@ func TestDenyReason(t *testing.T) {
 		// Claude understands why it was blocked. Without an explicit test for -fprint
 		// (and its siblings -fprint0, -fprintf, -fls) the "destructive flag" message
 		// path could regress silently while -exec tests continued to pass.
-		msg := denyReason([]string{"find", "/var/log", "-name", "*.log", "-fprint", "out.txt"})
+		msg := denyReason(DefaultDeniedCommands, []string{"find", "/var/log", "-name", "*.log", "-fprint", "out.txt"})
 		if !strings.Contains(msg, "-fprint") {
 			t.Errorf("expected message to name the -fprint flag; got: %s", msg)
 		}
@@ -1681,7 +1681,7 @@ func TestDenyReason(t *testing.T) {
 		// flag-specific one. A flag-specific message would mislead Claude into
 		// believing it can retry without the flag, wasting a tool-loop round.
 		// This mirrors the analogous "sed in custom denylist" sub-test above.
-		msg := denyReason([]string{"find", "/var/log", "-name", "*.log", "-type", "f"})
+		msg := denyReason(DefaultDeniedCommands, []string{"find", "/var/log", "-name", "*.log", "-type", "f"})
 		if !strings.Contains(msg, "find") {
 			t.Errorf("expected generic message to name the command; got: %s", msg)
 		}
@@ -1694,7 +1694,7 @@ func TestDenyReason(t *testing.T) {
 	})
 
 	t.Run("sed with -i flag mentions in-place and suggests stdout alternative", func(t *testing.T) {
-		msg := denyReason([]string{"sed", "-i", "s/foo/bar/", "/etc/hosts"})
+		msg := denyReason(DefaultDeniedCommands, []string{"sed", "-i", "s/foo/bar/", "/etc/hosts"})
 		if !strings.Contains(msg, "-i") {
 			t.Errorf("expected message to mention the -i flag; got: %s", msg)
 		}
@@ -1704,7 +1704,7 @@ func TestDenyReason(t *testing.T) {
 	})
 
 	t.Run("sed with --in-place long flag mentions in-place and suggests stdout alternative", func(t *testing.T) {
-		msg := denyReason([]string{"sed", "--in-place", "s/foo/bar/", "/etc/hosts"})
+		msg := denyReason(DefaultDeniedCommands, []string{"sed", "--in-place", "s/foo/bar/", "/etc/hosts"})
 		if !strings.Contains(msg, "-i") {
 			t.Errorf("expected message to mention the -i flag; got: %s", msg)
 		}
@@ -1714,7 +1714,7 @@ func TestDenyReason(t *testing.T) {
 	})
 
 	t.Run("sed with --in-place=suffix long flag mentions in-place and suggests stdout alternative", func(t *testing.T) {
-		msg := denyReason([]string{"sed", "--in-place=.bak", "s/foo/bar/", "/etc/hosts"})
+		msg := denyReason(DefaultDeniedCommands, []string{"sed", "--in-place=.bak", "s/foo/bar/", "/etc/hosts"})
 		if !strings.Contains(msg, "-i") {
 			t.Errorf("expected message to mention the -i flag; got: %s", msg)
 		}
@@ -1727,7 +1727,7 @@ func TestDenyReason(t *testing.T) {
 		// -ni bundles -n (suppress default output) with -i (in-place edit).
 		// The third sed check in denyReason scans for 'i'/'I' inside any
 		// short-flag cluster to catch this form.
-		msg := denyReason([]string{"sed", "-ni", "s/foo/bar/", "/etc/hosts"})
+		msg := denyReason(DefaultDeniedCommands, []string{"sed", "-ni", "s/foo/bar/", "/etc/hosts"})
 		if !strings.Contains(msg, "-i") {
 			t.Errorf("expected message to mention the -i flag; got: %s", msg)
 		}
@@ -1743,7 +1743,7 @@ func TestDenyReason(t *testing.T) {
 		// than incorrectly concluding that sed is entirely off-limits.
 		// isDenied already blocks -I variants; this test ensures denyReason
 		// sends the right self-correcting message to the tool-use loop.
-		msg := denyReason([]string{"sed", "-I", "s/foo/bar/", "/etc/hosts"})
+		msg := denyReason(DefaultDeniedCommands, []string{"sed", "-I", "s/foo/bar/", "/etc/hosts"})
 		if !strings.Contains(msg, "-i") {
 			t.Errorf("expected message to mention the -i/--in-place flag; got: %s", msg)
 		}
@@ -1756,7 +1756,7 @@ func TestDenyReason(t *testing.T) {
 		// -I.bak is the BSD form of in-place edit with a backup extension.
 		// arg[:2] == "-I" catches this; verify denyReason returns the correct
 		// guidance rather than falling through to the generic denied message.
-		msg := denyReason([]string{"sed", "-I.bak", "s/foo/bar/", "/etc/hosts"})
+		msg := denyReason(DefaultDeniedCommands, []string{"sed", "-I.bak", "s/foo/bar/", "/etc/hosts"})
 		if !strings.Contains(msg, "-i") {
 			t.Errorf("expected message to mention the -i/--in-place flag; got: %s", msg)
 		}
@@ -1770,7 +1770,7 @@ func TestDenyReason(t *testing.T) {
 		// check in denyReason uses strings.ContainsRune(arg[1:], 'I') to catch this.
 		// A case-sensitive typo (checking only 'i', not 'I') would silently break
 		// BSD protection while all GNU -i tests continued to pass.
-		msg := denyReason([]string{"sed", "-nI", "s/foo/bar/", "/etc/hosts"})
+		msg := denyReason(DefaultDeniedCommands, []string{"sed", "-nI", "s/foo/bar/", "/etc/hosts"})
 		if !strings.Contains(msg, "-i") {
 			t.Errorf("expected message to mention the -i/--in-place flag; got: %s", msg)
 		}
@@ -1785,7 +1785,7 @@ func TestDenyReason(t *testing.T) {
 		// allowed" message rather than the in-place-specific one. The in-place
 		// message tells Claude "remove -i and retry", which would be wrong here
 		// because sed is completely disallowed and every retry wastes a tool-loop round.
-		msg := denyReason([]string{"sed", "-e", "s/foo/bar/", "/etc/file"})
+		msg := denyReason(DefaultDeniedCommands, []string{"sed", "-e", "s/foo/bar/", "/etc/file"})
 		if !strings.Contains(msg, "sed") {
 			t.Errorf("expected generic message to name the command; got: %s", msg)
 		}
@@ -1798,7 +1798,7 @@ func TestDenyReason(t *testing.T) {
 	})
 
 	t.Run("fully denied command uses generic message", func(t *testing.T) {
-		msg := denyReason([]string{"rm", "-rf", "/"})
+		msg := denyReason(DefaultDeniedCommands, []string{"rm", "-rf", "/"})
 		if !strings.Contains(msg, "rm") {
 			t.Errorf("expected generic message to include command name; got: %s", msg)
 		}
@@ -1808,14 +1808,14 @@ func TestDenyReason(t *testing.T) {
 	})
 
 	t.Run("absolute path normalized in generic message", func(t *testing.T) {
-		msg := denyReason([]string{"/bin/rm", "-rf", "/"})
+		msg := denyReason(DefaultDeniedCommands, []string{"/bin/rm", "-rf", "/"})
 		if !strings.Contains(msg, "rm") {
 			t.Errorf("expected message to contain normalized command name; got: %s", msg)
 		}
 	})
 
 	t.Run("empty argv returns safe message without panicking", func(t *testing.T) {
-		msg := denyReason([]string{})
+		msg := denyReason(DefaultDeniedCommands, []string{})
 		if msg == "" {
 			t.Error("expected non-empty message for empty argv")
 		}
@@ -1830,7 +1830,7 @@ func TestDenyReason(t *testing.T) {
 		// denylist. denyReason must name both the versioned command and the base
 		// so Claude knows exactly why it was blocked and can choose a direct
 		// read-only diagnostic command rather than retrying with python3.12 etc.
-		msg := denyReason([]string{"python3.11", "-c", "import sys; print(sys.path)"})
+		msg := denyReason(DefaultDeniedCommands, []string{"python3.11", "-c", "import sys; print(sys.path)"})
 		if !strings.Contains(msg, "python3.11") {
 			t.Errorf("expected message to name the versioned command; got: %s", msg)
 		}
@@ -1845,6 +1845,30 @@ func TestDenyReason(t *testing.T) {
 		// vectors, not because they are inherently destructive).
 		if strings.Contains(msg, "destructive or privileged") {
 			t.Errorf("expected message NOT to use generic 'destructive or privileged' phrasing for a versioned interpreter; got: %s", msg)
+		}
+	})
+
+	t.Run("command ending in digits whose base is not denied gets generic message not versioned-variant", func(t *testing.T) {
+		// A custom denylist might explicitly deny a command whose name ends in
+		// digits (e.g. "ip6" or "nmap3") while the stripped base ("ip", "nmap")
+		// is NOT in the denylist. Before this fix, denyReason would emit the
+		// misleading "versioned variant of X (scripting interpreter)" message
+		// even though X is not denied and the command is not an interpreter.
+		// After the fix, denyReason checks denied[base] before emitting that
+		// message, so the generic "not allowed" message is returned instead.
+		customDenied := map[string]bool{"nmap3": true} // "nmap" is not denied
+		msg := denyReason(customDenied, []string{"nmap3", "-sV", "192.168.1.1"})
+		if !strings.Contains(msg, "nmap3") {
+			t.Errorf("expected message to name the command; got: %s", msg)
+		}
+		if !strings.Contains(msg, "not allowed") {
+			t.Errorf("expected generic 'not allowed' message; got: %s", msg)
+		}
+		if strings.Contains(msg, "versioned") {
+			t.Errorf("expected message NOT to say 'versioned' when base 'nmap' is not denied; got: %s", msg)
+		}
+		if strings.Contains(msg, "scripting interpreter") {
+			t.Errorf("expected message NOT to say 'scripting interpreter' for a non-interpreter; got: %s", msg)
 		}
 	})
 }

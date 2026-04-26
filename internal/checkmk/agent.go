@@ -315,7 +315,9 @@ func isDenied(denied map[string]bool, argv []string) bool {
 // For commands that are only partially restricted (systemctl, find, sed) it
 // provides specific guidance so Claude can self-correct and try a permitted
 // alternative instead of abandoning the diagnostic approach entirely.
-func denyReason(argv []string) string {
+// denied is the same map passed to isDenied so the versioned-variant message
+// is only emitted when the base command is actually in the denylist.
+func denyReason(denied map[string]bool, argv []string) string {
 	if len(argv) == 0 {
 		return "Command denied: empty command"
 	}
@@ -375,8 +377,12 @@ func denyReason(argv []string) string {
 	// denylist. Give Claude a specific message that names the base command so it
 	// understands why the versioned name was blocked and can choose a direct
 	// read-only diagnostic command instead of retrying with another variant.
+	// Guard with denied[base] to match isDenied's logic: a command ending in
+	// digits that is itself explicitly denied (but whose base is not) must get
+	// the generic "not allowed" message, not a misleading "versioned variant of
+	// X (scripting interpreter)" message for a base command that is not denied.
 	base := strings.TrimRight(cmd, "0123456789.")
-	if base != cmd && base != "" {
+	if base != cmd && base != "" && denied[base] {
 		return fmt.Sprintf("Command denied: %q is a versioned variant of %q which is not allowed (scripting interpreter that can bypass the command denylist); use direct read-only diagnostic commands instead", cmd, base)
 	}
 
@@ -515,7 +521,7 @@ func RunAgenticDiagnostics(
 
 		if isDenied(denied, argv) {
 			slog.Warn("denied command", "hostname", hostname, "command", shellQuote(argv))
-			return denyReason(argv), nil
+			return denyReason(denied, argv), nil
 		}
 
 		logCmd := shellQuote(argv)
