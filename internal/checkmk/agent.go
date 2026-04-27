@@ -311,6 +311,16 @@ func isDenied(denied map[string]bool, argv []string) bool {
 		return true
 	}
 
+	// Block nc.TYPE netcat variants (e.g. nc.openbsd, nc.traditional).
+	// Debian/Ubuntu install netcat as /bin/nc.openbsd or /bin/nc.traditional;
+	// these package-suffix names contain letters after the dot, so the
+	// versioned-variant TrimRight heuristic (which strips only digits/dots)
+	// never reduces them to "nc". The exact-match check therefore misses them.
+	// Guard with denied["nc"] to respect custom denylists.
+	if strings.HasPrefix(cmd, "nc.") && len(cmd) > 3 && denied["nc"] {
+		return true
+	}
+
 	// Deny versioned interpreter and tool variants (e.g. python3.11, ruby2.7,
 	// perl5.36, node20, python-3.11, bash-5.1). Strip a trailing version suffix
 	// (any combination of digits and dots, optionally preceded by a hyphen
@@ -404,6 +414,13 @@ func denyReason(denied map[string]bool, argv []string) string {
 	// another mkfs variant.
 	if strings.HasPrefix(cmd, "mkfs.") && len(cmd) > 5 && denied["mkfs"] {
 		return fmt.Sprintf("Command denied: %q formats a filesystem and is blocked (variant of %q which is in the command denylist); use read-only diagnostic commands instead", cmd, "mkfs")
+	}
+
+	// nc.TYPE netcat variant (e.g. nc.openbsd, nc.traditional). isDenied blocks
+	// these when "nc" is in the denylist; give Claude a specific message so it
+	// understands why and does not retry with another netcat variant.
+	if strings.HasPrefix(cmd, "nc.") && len(cmd) > 3 && denied["nc"] {
+		return fmt.Sprintf("Command denied: %q is a netcat variant blocked as a variant of %q which is in the command denylist; use read-only diagnostic commands instead", cmd, "nc")
 	}
 
 	// Versioned interpreter or tool variant (e.g. python3.11, ruby2.7, node20,

