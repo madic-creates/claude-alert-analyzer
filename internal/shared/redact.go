@@ -78,8 +78,18 @@ var sensitivePatterns = []sensitivePattern{
 	// xoxs- (workspace), xoxe- (Enterprise Grid), xoxr- (refresh). The original
 	// xox[bpas]- pattern missed xoxe- and xoxr-, both of which are valid Slack
 	// API credentials that appear in application logs on auth failures.
+	// HashiCorp Vault token prefixes: hvs. (service tokens, the most common
+	// type — issued by vault login, AppRole, and Kubernetes auth methods) and
+	// hvb. (batch tokens — lightweight, non-renewable tokens used for
+	// high-throughput workloads). Both appear in application logs when a Vault
+	// API call fails with a 403 (e.g. "permission denied: token=hvs.xxx") or
+	// when a Vault agent sidecar fails to authenticate and logs the raw token.
+	// Kubernetes deployments using Vault Agent Injector or the Vault Secrets
+	// Operator frequently surface these tokens in pod logs and events. The dot
+	// separator is escaped as \. in the raw string so it matches a literal dot
+	// rather than any character.
 	{
-		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|xox[bpaers]-)\S+`),
+		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|xox[bpaers]-|hvs\.|hvb\.)\S+`),
 		replacement: "[REDACTED]",
 	},
 	{

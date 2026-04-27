@@ -695,6 +695,64 @@ func TestRedactSecrets_SlackTokens(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_VaultTokens verifies that HashiCorp Vault service tokens
+// (hvs. prefix) and batch tokens (hvb. prefix) are redacted. These tokens
+// appear in application logs when a Vault API call fails with a 403 permission
+// denied error, or when the Vault Agent Injector sidecar logs authentication
+// failures. Without this pattern, a bare hvs.XXXX token in a Kubernetes pod
+// log or CheckMK plugin output would reach Claude's context unredacted unless
+// it happened to follow a keyword like "token=" that triggers the generic
+// keyword=value pattern.
+func TestRedactSecrets_VaultTokens(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "service token in permission denied error",
+			input: "vault: permission denied (token=hvs.CAESIFakeServiceTokenAbcDef1234)",
+			leak:  "hvs.CAESIFakeServiceTokenAbcDef1234",
+		},
+		{
+			name:  "service token as standalone value",
+			input: "authenticating with hvs.CAESIFakeServiceToken",
+			leak:  "hvs.CAESIFakeServiceToken",
+		},
+		{
+			name:  "service token in env assignment",
+			input: "VAULT_TOKEN=hvs.CAESIFakeServiceTokenAbcDef",
+			leak:  "hvs.CAESIFakeServiceTokenAbcDef",
+		},
+		{
+			name:  "batch token inline",
+			input: "vault agent: token renewal failed for hvb.AAAAAQICAHiFakeToken",
+			leak:  "hvb.AAAAAQICAHiFakeToken",
+		},
+		{
+			name:  "batch token in env assignment",
+			input: "VAULT_TOKEN=hvb.AAAAAQICAHiBatchFakeToken",
+			leak:  "hvb.AAAAAQICAHiBatchFakeToken",
+		},
+		{
+			name:  "service token in JSON error response",
+			input: `{"errors":["permission denied"],"token":"hvs.CAESIFakeJsonToken"}`,
+			leak:  "hvs.CAESIFakeJsonToken",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("Vault token leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
 func TestRedactSecrets_NoFalsePositive(t *testing.T) {
 	input := "CPU load is 4.5 at 12:00"
 	result := RedactSecrets(input)
