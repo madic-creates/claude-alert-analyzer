@@ -389,7 +389,7 @@ func getPodStatus(ctx context.Context, clientset kubernetes.Interface, namespace
 			}
 		}
 		lines = append(lines, fmt.Sprintf("%s %s %d/%d restarts=%d",
-			p.Name, phase, ready, total, restarts))
+			shared.SanitizeAlertField(p.Name), phase, ready, total, restarts))
 	}
 	if len(lines) == 0 {
 		return "(no pods)"
@@ -455,12 +455,12 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace s
 		raw, err := logResp.DoRaw(ctx)
 		if err != nil {
 			slog.Warn("failed to get pod logs", "pod", p.Name, "namespace", namespace, "error", err)
-			logLines = append(logLines, fmt.Sprintf("--- %s --- (no logs)", p.Name))
+			logLines = append(logLines, fmt.Sprintf("--- %s --- (no logs)", shared.SanitizeAlertField(p.Name)))
 		} else {
 			sanitized := shared.SanitizeOutput(string(raw))
 			redacted := shared.RedactSecrets(sanitized)
 			truncated := shared.Truncate(redacted, cfg.MaxLogBytes)
-			logLines = append(logLines, fmt.Sprintf("--- %s ---\n%s", p.Name, truncated))
+			logLines = append(logLines, fmt.Sprintf("--- %s ---\n%s", shared.SanitizeAlertField(p.Name), truncated))
 		}
 	}
 	// When the API returned exactly maxLogPods pods, the server-side Limit was
