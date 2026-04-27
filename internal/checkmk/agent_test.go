@@ -583,6 +583,41 @@ func TestIsDenied_BlocksVersionedInterpreters(t *testing.T) {
 	}
 }
 
+// TestIsDenied_BlocksLuaTclPhpInterpreters verifies that Lua, Tcl, and PHP
+// scripting interpreters are denied. These are present on many Linux servers
+// and all support sub-process execution primitives that would allow a
+// hallucinatory or adversarially-prompted model to run any denied command:
+//
+//	lua  -e 'os.execute("rm -rf /")'
+//	tclsh → exec reboot
+//	php  -r 'system("shutdown now");'
+//
+// Versioned binary names (lua5.4, tclsh8.6, php8.1) are also covered because
+// the versioned-variant heuristic in isDenied strips trailing digit+dot
+// suffixes and falls back to the base name in the denylist.
+func TestIsDenied_BlocksLuaTclPhpInterpreters(t *testing.T) {
+	denied := [][]string{
+		// Bare interpreter names.
+		{"lua", "-e", "os.execute('rm -rf /')"},
+		{"tclsh"},
+		{"wish"},
+		{"php", "-r", "system('reboot');"},
+		// Versioned variants — covered by the versioned-heuristic once the
+		// base name is in the denylist.
+		{"lua5.4", "-e", "os.execute('reboot')"},
+		{"lua5.3", "-e", "os.execute('shutdown now')"},
+		{"tclsh8.6"},
+		{"tclsh8.5"},
+		{"php8.1", "-r", "system('rm -rf /');"},
+		{"php7.4", "-r", "system('dd if=/dev/zero of=/dev/sda');"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("Lua/Tcl/PHP interpreter bypass not blocked: %v", argv)
+		}
+	}
+}
+
 func TestIsDenied_AllowsReadOnlyCommands(t *testing.T) {
 	allowed := [][]string{
 		{"df", "-h"},

@@ -116,6 +116,19 @@ var DefaultDeniedCommands = map[string]bool{
 	// alternative implementations that must be denied for the same reason.
 	// nawk ("one true awk") is the default on Alpine Linux and BSD systems.
 	"awk": true, "gawk": true, "mawk": true, "nawk": true,
+	// Lua, Tcl, and PHP scripting interpreters: all support system-call
+	// primitives that can invoke denied commands as sub-processes.
+	//   lua -e 'os.execute("rm -rf /")'      — Lua os.execute()
+	//   tclsh → exec rm -rf /                 — Tcl exec built-in
+	//   php -r 'system("reboot");'            — PHP system()
+	// lua is used by nginx/OpenResty, embedded devices, and game servers.
+	// tclsh is installed by default on many RHEL, Debian, and Ubuntu systems.
+	// wish is the Tk-enabled Tcl shell; it shares the same exec primitive.
+	// php is ubiquitous on web-application hosts (LAMP/LEMP stacks).
+	// The versioned-variant heuristic automatically extends the denial to
+	// lua5.4, tclsh8.6, php8.1, and similar versioned binary names once
+	// the base name appears in the denylist.
+	"lua": true, "tclsh": true, "wish": true, "php": true,
 	// busybox is a multi-call binary that exposes almost every Unix utility
 	// (including sh, rm, wget, nc) under a single executable. Running
 	// "busybox rm -rf /" or "busybox sh -c '...'" completely bypasses the
