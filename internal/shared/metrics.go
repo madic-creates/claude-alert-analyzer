@@ -98,6 +98,13 @@ func (m *AlertMetrics) RecordNtfyPublishError(source string) {
 // underlying TCP connection rather than one syscall per metric line, and
 // ensures the response body is assembled consistently before transmission.
 func (m *AlertMetrics) MetricsHandler() http.HandlerFunc {
+	// Create the promhttp handler once at registration time rather than on
+	// every scrape request. promhttp.HandlerFor is safe to call concurrently
+	// after construction, so this is both correct and more efficient.
+	var promHandler http.Handler
+	if m.Prom != nil {
+		promHandler = promhttp.HandlerFor(m.Prom.Registry(), promhttp.HandlerOpts{})
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		var b strings.Builder
 		fmt.Fprintf(&b, "# HELP alert_analyzer_webhooks_received_total Total webhook requests received.\n")
@@ -127,9 +134,8 @@ func (m *AlertMetrics) MetricsHandler() http.HandlerFunc {
 		fmt.Fprintf(&b, "alert_analyzer_processing_duration_seconds_count %d\n", m.ProcessingDurationCount.Load())
 
 		// Append labeled Prometheus metrics when available.
-		if m.Prom != nil {
+		if promHandler != nil {
 			var promBuf bytes.Buffer
-			promHandler := promhttp.HandlerFor(m.Prom.Registry(), promhttp.HandlerOpts{})
 			promHandler.ServeHTTP(newBufferedResponseWriter(&promBuf), r)
 			b.Write(promBuf.Bytes())
 		}
