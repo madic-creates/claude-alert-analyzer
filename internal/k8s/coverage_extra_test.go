@@ -792,6 +792,125 @@ func TestGetPodLogs_PodNameSanitized(t *testing.T) {
 	}
 }
 
+// TestGetEvents_APILimitTruncationNote verifies that getEvents appends an
+// "API limit reached" note when the Kubernetes API returns exactly
+// maxEvents*5 (100) events. The note informs Claude that the visible list is
+// incomplete because the server-side Limit was hit. The fake client returns 100
+// events via a reactor; the post-fetch backstop trims them to maxEvents (20)
+// for the prompt, but the raw-count check (len(eventList.Items) >= 100) fires
+// the truncation note.
+func TestGetEvents_APILimitTruncationNote(t *testing.T) {
+	const eventLimit = 100 // maxEvents * 5 = 20 * 5
+	cs := fake.NewSimpleClientset()
+	cs.PrependReactor("list", "events", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		items := make([]corev1.Event, eventLimit)
+		for i := range items {
+			items[i] = corev1.Event{
+				ObjectMeta:     metav1.ObjectMeta{Name: fmt.Sprintf("evt-%d", i), Namespace: "testns"},
+				Type:           corev1.EventTypeWarning,
+				Reason:         "Reason",
+				Message:        "msg",
+				InvolvedObject: corev1.ObjectReference{Name: "obj"},
+				LastTimestamp:  metav1.Time{Time: time.Now().Add(-time.Duration(i) * time.Second)},
+			}
+		}
+		return true, &corev1.EventList{Items: items}, nil
+	})
+
+	alert := makeAlertWithLabels(map[string]string{"namespace": "testns"})
+	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+
+	events, _, _ := GetKubeContext(context.Background(), cs, alert, cfg)
+	if !strings.Contains(events, "API limit reached") {
+		t.Errorf("expected API limit truncation note in events output, got: %q", events)
+	}
+	if !strings.Contains(events, "events shown") {
+		t.Errorf("expected events-shown count in truncation note, got: %q", events)
+	}
+}
+
+// TestGetPodStatus_APILimitTruncationNote verifies that getPodStatus appends an
+// "API limit reached" note when exactly maxPods (50) pods are returned by the
+// API. The empty AllowedNamespaces list prevents getPodLogs from issuing its own
+// pod List call, so the reactor fires only for the getPodStatus List request
+// (which has no FieldSelector).
+func TestGetPodStatus_APILimitTruncationNote(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		la, ok := action.(k8stesting.ListAction)
+		if ok && la.GetListRestrictions().Fields.String() == "" {
+			items := make([]corev1.Pod, maxPods)
+			for i := range items {
+				items[i] = corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("pod-%d", i), Namespace: "testns"},
+					Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+				}
+			}
+			return true, &corev1.PodList{Items: items}, nil
+		}
+		return false, nil, nil
+	})
+
+	alert := makeAlertWithLabels(map[string]string{"namespace": "testns"})
+	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+
+	_, pods, _ := GetKubeContext(context.Background(), cs, alert, cfg)
+	if !strings.Contains(pods, "API limit reached") {
+		t.Errorf("expected API limit truncation note in pod status output, got: %q", pods)
+	}
+	if !strings.Contains(pods, "pods shown") {
+		t.Errorf("expected pods-shown count in truncation note, got: %q", pods)
+	}
+}
+
+// TestGetPodLogs_ExcessFailingPodsTruncationNote verifies that getPodLogs
+// appends a "more may exist" note when more than maxLogPods (3) failing pods
+// are found. We use an HTTP test server that returns a pod list with 4 Failed
+// pods and errors on log requests; the resulting "(no logs)" entries are
+// sufficient to exercise the truncation-note path at context.go.
+func TestGetPodLogs_ExcessFailingPodsTruncationNote(t *testing.T) {
+	const numPods = maxLogPods + 1 // 4 failing pods — one more than the cap
+	podItems := make([]string, numPods)
+	for i := range podItems {
+		podItems[i] = fmt.Sprintf(`{
+			"apiVersion": "v1", "kind": "Pod",
+			"metadata": {"name": "pod-%d", "namespace": "testns", "resourceVersion": "1"},
+			"spec": {"containers": [{"name": "app", "image": "nginx"}]},
+			"status": {"phase": "Failed"}
+		}`, i)
+	}
+	podListJSON := fmt.Sprintf(`{
+		"apiVersion": "v1", "kind": "PodList",
+		"metadata": {"resourceVersion": "1"},
+		"items": [%s]
+	}`, strings.Join(podItems, ","))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/log") {
+			http.Error(w, "server error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, podListJSON) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	cs, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatalf("failed to create clientset: %v", err)
+	}
+
+	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	result := getPodLogs(context.Background(), cs, "testns", cfg)
+
+	if !strings.Contains(result, "more may exist") {
+		t.Errorf("expected truncation note in pod logs output, got: %q", result)
+	}
+	if !strings.Contains(result, fmt.Sprintf("first %d failing pod(s)", maxLogPods)) {
+		t.Errorf("expected pod count in truncation note, got: %q", result)
+	}
+}
+
 // captureAnalyzer is a shared.Analyzer that records the user prompt it receives.
 // Used by TestProcessAlert_AlertFieldsArePromptInjectionSafe to verify that
 // sanitized values (not raw attacker-controlled input) reach the Claude API.
