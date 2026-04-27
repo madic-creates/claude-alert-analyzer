@@ -450,6 +450,58 @@ func TestGetPodLogs_FetchBoundedToMaxLogPods(t *testing.T) {
 	}
 }
 
+// TestGetPodLogs_APILimitReachedFewFailures verifies that the "more may exist"
+// note is appended when the API server-side Limit was reached, even when the
+// number of failing pods found is less than maxLogPods. Previously the note
+// was only appended when limit == maxLogPods (i.e. we had many failing pods),
+// so a namespace with many healthy pods and few failing pods would silently
+// omit the note even though additional unfetched pods might also be failing.
+func TestGetPodLogs_APILimitReachedFewFailures(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	// Return exactly maxLogPods*3 pods (simulating the server-side Limit being
+	// hit), with only one failing pod. The remaining pods are healthy Running
+	// pods that the filter skips. limit will be 1 (< maxLogPods = 3), so the
+	// old condition (limit == maxLogPods) would NOT have fired.
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		items := make([]corev1.Pod, maxLogPods*3)
+		for i := range items {
+			if i == 0 {
+				// First pod is failing.
+				items[i] = corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Name: "fail-pod-0", Namespace: "prod"},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
+					Status:     corev1.PodStatus{Phase: corev1.PodFailed},
+				}
+			} else {
+				// All other pods are healthy Running (will be filtered out).
+				items[i] = corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("ok-pod-%d", i), Namespace: "prod"},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
+					Status: corev1.PodStatus{
+						Phase:             corev1.PodRunning,
+						ContainerStatuses: []corev1.ContainerStatus{{Ready: true}},
+					},
+				}
+			}
+		}
+		return true, &corev1.PodList{Items: items}, nil
+	})
+
+	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	result := getPodLogs(context.Background(), cs, "prod", cfg)
+
+	// The one failing pod's logs must appear.
+	if !strings.Contains(result, "fail-pod-0") {
+		t.Errorf("expected log entry for the failing pod, got: %q", result)
+	}
+	// Even though only 1 failing pod was found (limit=1 < maxLogPods=3), the
+	// "more may exist" note must be shown because the API returned a full page.
+	if !strings.Contains(result, "more may exist") {
+		t.Errorf("expected 'more may exist' note when API limit is reached with few failures, got: %q", result)
+	}
+}
+
 // TestGetPodLogs_CrashLoopBackOff verifies that getPodLogs collects logs for
 // CrashLoopBackOff pods. CrashLoopBackOff pods remain in the Running phase
 // between crash/restart cycles; a FieldSelector of "status.phase!=Running"

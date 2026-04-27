@@ -506,11 +506,14 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace s
 			logLines = append(logLines, fmt.Sprintf("--- %s ---\n%s", shared.SanitizeAlertField(p.Name), truncated))
 		}
 	}
-	// When the API returned the maximum number of pods, the server-side Limit
-	// was hit and more failing pods may exist. Append a note so Claude knows
-	// the log collection may be incomplete.
-	if limit == maxLogPods {
-		logLines = append(logLines, fmt.Sprintf("... [logs shown for first %d failing pods; more may exist]", maxLogPods))
+	// Append a note when log collection may be incomplete. There are two cases:
+	//   1. We capped at maxLogPods: more failing pods exist in the namespace but
+	//      their logs were not fetched.
+	//   2. The server-side Limit was reached: more pods exist in the namespace
+	//      that were never fetched at all, so we cannot know whether they are
+	//      failing. Mirrors the same check used in getPodStatus (len >= maxPods).
+	if limit == maxLogPods || len(podList.Items) >= maxLogPods*3 {
+		logLines = append(logLines, fmt.Sprintf("... [logs shown for first %d failing pod(s); more may exist]", limit))
 	}
 	return strings.Join(logLines, "\n\n")
 }
