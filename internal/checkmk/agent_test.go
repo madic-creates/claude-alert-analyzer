@@ -2394,3 +2394,65 @@ func TestDenyReason_NcTypeVariants(t *testing.T) {
 		}
 	}
 }
+
+func TestIsDenied_BlocksIptablesTypeVariants(t *testing.T) {
+	cases := []struct {
+		argv []string
+		desc string
+	}{
+		{[]string{"iptables-legacy", "-F"}, "iptables-legacy clears all rules"},
+		{[]string{"iptables-nft", "-P", "INPUT", "DROP"}, "iptables-nft sets default drop"},
+		{[]string{"iptables-restore"}, "iptables-restore applies saved rules"},
+		{[]string{"iptables-legacy-restore"}, "iptables-legacy-restore"},
+		{[]string{"/sbin/iptables-legacy", "-F"}, "absolute path iptables-legacy"},
+		{[]string{"ip6tables-legacy", "-F"}, "ip6tables-legacy clears rules"},
+		{[]string{"ip6tables-nft", "-P", "INPUT", "DROP"}, "ip6tables-nft sets default drop"},
+		{[]string{"ip6tables-restore"}, "ip6tables-restore applies saved rules"},
+		{[]string{"/sbin/ip6tables-legacy", "-F"}, "absolute path ip6tables-legacy"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			if !isDenied(DefaultDeniedCommands, tc.argv) {
+				t.Errorf("isDenied(%q) = false, want true (%s)", tc.argv, tc.desc)
+			}
+		})
+	}
+}
+
+func TestIsDenied_IptablesTypeRespectsDenylist(t *testing.T) {
+	// When iptables/ip6tables are absent from a custom denylist, their
+	// dash-suffix variants must also be allowed (denylist opt-out).
+	emptyDenied := map[string]bool{}
+	for _, argv := range [][]string{
+		{"iptables-legacy", "-F"},
+		{"iptables-nft", "-F"},
+		{"ip6tables-legacy", "-F"},
+		{"ip6tables-nft", "-F"},
+	} {
+		if isDenied(emptyDenied, argv) {
+			t.Errorf("isDenied(%q) = true with empty denylist, want false", argv)
+		}
+	}
+}
+
+func TestDenyReason_IptablesTypeVariants(t *testing.T) {
+	cases := []struct {
+		argv    []string
+		wantStr string // expected substring in the deny message
+	}{
+		{[]string{"iptables-legacy", "-F"}, "iptables"},
+		{[]string{"iptables-nft", "-P", "INPUT", "DROP"}, "iptables"},
+		{[]string{"ip6tables-legacy", "-F"}, "ip6tables"},
+		{[]string{"ip6tables-nft"}, "ip6tables"},
+	}
+	for _, tc := range cases {
+		msg := denyReason(DefaultDeniedCommands, tc.argv)
+		if !strings.Contains(msg, tc.wantStr) {
+			t.Errorf("denyReason(%v) = %q; expected %q in message", tc.argv, msg, tc.wantStr)
+		}
+		// Must NOT fall through to the generic "not allowed" message.
+		if strings.Contains(msg, "not allowed (destructive or privileged command)") {
+			t.Errorf("denyReason(%v) returned generic message instead of targeted guidance: %q", tc.argv, msg)
+		}
+	}
+}

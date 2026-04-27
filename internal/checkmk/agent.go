@@ -321,6 +321,20 @@ func isDenied(denied map[string]bool, argv []string) bool {
 		return true
 	}
 
+	// Block iptables-TYPE and ip6tables-TYPE firewall variants (e.g. iptables-legacy,
+	// iptables-nft, iptables-restore, ip6tables-legacy, ip6tables-nft).
+	// Debian/Ubuntu ship /sbin/iptables-legacy and /sbin/iptables-nft alongside the
+	// /sbin/iptables symlink; all of these can modify firewall rules. The versioned-variant
+	// heuristic only strips trailing digits, dots, and hyphens, so "iptables-legacy" is
+	// never reduced to "iptables" (it ends with 'y', not a digit or dot). Guard with
+	// denied["iptables"] / denied["ip6tables"] to respect custom denylists.
+	if strings.HasPrefix(cmd, "iptables-") && len(cmd) > len("iptables-") && denied["iptables"] {
+		return true
+	}
+	if strings.HasPrefix(cmd, "ip6tables-") && len(cmd) > len("ip6tables-") && denied["ip6tables"] {
+		return true
+	}
+
 	// Deny versioned interpreter and tool variants (e.g. python3.11, ruby2.7,
 	// perl5.36, node20, python-3.11, bash-5.1). Strip a trailing version suffix
 	// (any combination of digits and dots, optionally preceded by a hyphen
@@ -421,6 +435,16 @@ func denyReason(denied map[string]bool, argv []string) string {
 	// understands why and does not retry with another netcat variant.
 	if strings.HasPrefix(cmd, "nc.") && len(cmd) > 3 && denied["nc"] {
 		return fmt.Sprintf("Command denied: %q is a netcat variant blocked as a variant of %q which is in the command denylist; use read-only diagnostic commands instead", cmd, "nc")
+	}
+
+	// iptables-TYPE / ip6tables-TYPE firewall variant (e.g. iptables-legacy, iptables-nft,
+	// ip6tables-legacy). isDenied blocks these when "iptables"/"ip6tables" is in the denylist.
+	// Give Claude a specific message so it understands why and does not retry with another variant.
+	if strings.HasPrefix(cmd, "iptables-") && len(cmd) > len("iptables-") && denied["iptables"] {
+		return fmt.Sprintf("Command denied: %q is a firewall variant blocked as a variant of %q which is in the command denylist; use read-only diagnostic commands instead", cmd, "iptables")
+	}
+	if strings.HasPrefix(cmd, "ip6tables-") && len(cmd) > len("ip6tables-") && denied["ip6tables"] {
+		return fmt.Sprintf("Command denied: %q is a firewall variant blocked as a variant of %q which is in the command denylist; use read-only diagnostic commands instead", cmd, "ip6tables")
 	}
 
 	// Versioned interpreter or tool variant (e.g. python3.11, ruby2.7, node20,
