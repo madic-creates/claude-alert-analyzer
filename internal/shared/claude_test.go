@@ -155,6 +155,32 @@ func TestAnalyze_APIErrorInBody(t *testing.T) {
 	}
 }
 
+// TestAnalyze_MaxTokensStopReason verifies that when the API returns
+// stop_reason "max_tokens" (response truncated by the token budget), Analyze
+// still returns the partial text content without an error. The caller receives
+// whatever analysis was generated; a slog.Warn is emitted so operators can
+// identify truncated analyses in logs.
+func TestAnalyze_MaxTokensStopReason(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"content": [{"type": "text", "text": "Partial analysis cut off mid-sentence"}],
+			"stop_reason": "max_tokens",
+			"usage": {"input_tokens": 100, "output_tokens": 512}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
+	result, err := client.Analyze(context.Background(), "sys", "user")
+	if err != nil {
+		t.Fatalf("unexpected error for max_tokens stop reason: %v", err)
+	}
+	if result != "Partial analysis cut off mid-sentence" {
+		t.Errorf("unexpected result: %q", result)
+	}
+}
+
 func TestAnalyze_HTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)

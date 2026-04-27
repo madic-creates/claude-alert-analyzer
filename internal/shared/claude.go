@@ -135,6 +135,19 @@ func (c *ClaudeClient) Analyze(ctx context.Context, systemPrompt, userPrompt str
 		"inputTokens", result.Usage.InputTokens,
 		"outputTokens", result.Usage.OutputTokens)
 
+	// Warn when the API signals that the response was cut off before a natural
+	// stopping point. "end_turn" is the normal stop reason; anything else
+	// (typically "max_tokens") means the output was truncated by the token
+	// budget and the published analysis may end mid-sentence. This mirrors the
+	// slog.Warn already emitted by RunToolLoop for its non-"end_turn" early
+	// returns and makes truncated single-turn analyses visible in operator logs.
+	if result.StopReason != "" && result.StopReason != "end_turn" {
+		slog.Warn("analysis response may be truncated",
+			"stop_reason", result.StopReason,
+			"model", c.Model,
+			"outputTokens", result.Usage.OutputTokens)
+	}
+
 	return extractText(result.Content), nil
 }
 
