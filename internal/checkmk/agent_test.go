@@ -652,6 +652,59 @@ func TestIsDenied_SystemctlSpecialCases(t *testing.T) {
 	}
 }
 
+func TestIsDenied_IptablesSpecialCases(t *testing.T) {
+	// Read-only operations must be allowed even though iptables is in the denylist.
+	allowed := [][]string{
+		{"iptables", "-L"},
+		{"iptables", "-L", "-n"},
+		{"iptables", "-L", "-v", "--line-numbers"},
+		{"iptables", "-S"},
+		{"iptables", "-S", "INPUT"},
+		{"iptables", "--list"},
+		{"iptables", "--list-rules"},
+		{"iptables", "-t", "nat", "-L", "-n"},
+		{"iptables", "-C", "INPUT", "-p", "tcp", "--dport", "80", "-j", "ACCEPT"},
+		{"ip6tables", "-L"},
+		{"ip6tables", "-S"},
+		{"ip6tables", "-t", "filter", "--list", "-n"},
+		// iptables-save / ip6tables-save are fully read-only variants.
+		{"iptables-save"},
+		{"iptables-save", "-t", "nat"},
+		{"ip6tables-save"},
+	}
+	for _, argv := range allowed {
+		if isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected allowed: %v", argv)
+		}
+	}
+
+	// Write operations and no-op (no operation flag) must be denied.
+	denied := [][]string{
+		{"iptables", "-F"},
+		{"iptables", "-F", "INPUT"},
+		{"iptables", "-A", "INPUT", "-j", "DROP"},
+		{"iptables", "--flush"},
+		{"iptables", "-P", "INPUT", "DROP"},
+		{"iptables", "-N", "MYCHAIN"},
+		{"iptables", "-D", "INPUT", "-j", "DROP"},
+		{"iptables", "-Z"},
+		{"iptables"},       // no operation flag — deny
+		{"iptables", "-n"}, // only modifier, no operation — deny
+		{"ip6tables", "-F"},
+		{"ip6tables", "-A", "FORWARD", "-j", "ACCEPT"},
+		{"iptables-restore"},
+		{"iptables-legacy"},
+		{"iptables-nft"},
+		// iptables-save/ip6tables-save with --list flag style — no known op flag.
+		{"iptables", "--modprobe=foo"}, // only modifier, no operation — deny
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected denied: %v", argv)
+		}
+	}
+}
+
 func TestIsDenied_EmptyCommand(t *testing.T) {
 	if !isDenied(DefaultDeniedCommands, nil) {
 		t.Error("expected denied for nil")

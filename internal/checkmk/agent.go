@@ -28,7 +28,7 @@ Guidelines:
 - You have NO root/sudo access — never attempt privilege escalation
 - Start broad (check logs, resource usage) then narrow down based on findings
 - You have a maximum of %d command rounds — use them wisely
-- Common useful commands: journalctl, df, free, top, ps, ss, ip, lsblk, cat/tail/head on log files, systemctl status/show, du, lsof, netstat, find
+- Common useful commands: journalctl, df, free, top, ps, ss, ip, lsblk, cat/tail/head on log files, systemctl status/show, du, lsof, netstat, find, iptables -L/-S/-n/-v (read-only firewall rules)
 
 Output your final analysis in markdown (headings, bold, lists, code blocks — no tables):
 1. Root cause (most likely explanation based on evidence)
@@ -178,6 +178,34 @@ var systemctlReadOnly = map[string]bool{
 	"cat": true, // shows installed unit file content; read-only and useful for config inspection
 }
 
+// iptablesReadOnlyOps are iptables(8)/ip6tables(8) operation flags that only
+// read firewall state without modifying it. Commands using only these flags
+// (plus modifier-only flags such as -n, -v, -t, --line-numbers) are allowed
+// even when "iptables"/"ip6tables" is in the denylist.
+var iptablesReadOnlyOps = map[string]bool{
+	"-L": true, "--list": true, // list rules in the selected chain
+	"-S": true, "--list-rules": true, // print rules in iptables-save format
+	"-C": true, "--check": true, // check whether a rule exists (does not modify state)
+	"-V": true, "--version": true,
+	"-h": true, "--help": true,
+}
+
+// iptablesWriteOps are iptables(8)/ip6tables(8) operation flags that modify
+// firewall state. Their presence in any argv causes the command to be denied
+// even if a read-only operation flag also appears.
+var iptablesWriteOps = map[string]bool{
+	"-A": true, "--append": true,
+	"-D": true, "--delete": true,
+	"-I": true, "--insert": true,
+	"-R": true, "--replace": true,
+	"-F": true, "--flush": true,
+	"-X": true, "--delete-chain": true,
+	"-P": true, "--policy": true,
+	"-E": true, "--rename-chain": true,
+	"-N": true, "--new-chain": true,
+	"-Z": true, "--zero": true,
+}
+
 // findDestructiveFlags are find(1) primary expressions that perform
 // destructive or write operations without executing a sub-process.
 // They must be blocked alongside the exec flags even when "find" itself
@@ -235,6 +263,26 @@ func isDenied(denied map[string]bool, argv []string) bool {
 
 	if len(denied) == 0 {
 		return false
+	}
+
+	// Special case: iptables/ip6tables — allow read-only operations (-L, -S,
+	// -C) even when the command is in the denylist. Any write operation flag
+	// (-A, -F, -P, etc.) denies the command regardless of other flags.
+	// A command with no recognisable operation flag is also denied (safe default).
+	if (cmd == "iptables" || cmd == "ip6tables") && denied[cmd] {
+		// iptables flags are case-sensitive (-L ≠ -l, -S ≠ -s, -F ≠ -f), so
+		// do NOT lowercase them before lookup. Only argv[0] is lowercased (above)
+		// to prevent "IPTABLES -L" from bypassing this guard via uppercase cmd.
+		readOnly := false
+		for _, arg := range argv[1:] {
+			if iptablesWriteOps[arg] {
+				return true // write operation present — deny
+			}
+			if iptablesReadOnlyOps[arg] {
+				readOnly = true
+			}
+		}
+		return !readOnly // deny if no read-only operation flag found
 	}
 
 	// Special case: systemctl with read-only subcommands is allowed.
@@ -329,9 +377,15 @@ func isDenied(denied map[string]bool, argv []string) bool {
 	// never reduced to "iptables" (it ends with 'y', not a digit or dot). Guard with
 	// denied["iptables"] / denied["ip6tables"] to respect custom denylists.
 	if strings.HasPrefix(cmd, "iptables-") && len(cmd) > len("iptables-") && denied["iptables"] {
+		if cmd == "iptables-save" {
+			return false // iptables-save only reads rules; allow it
+		}
 		return true
 	}
 	if strings.HasPrefix(cmd, "ip6tables-") && len(cmd) > len("ip6tables-") && denied["ip6tables"] {
+		if cmd == "ip6tables-save" {
+			return false // ip6tables-save only reads rules; allow it
+		}
 		return true
 	}
 
@@ -373,6 +427,16 @@ func denyReason(denied map[string]bool, argv []string) string {
 	cmd := strings.ToLower(strings.TrimSpace(filepath.Base(argv[0])))
 
 	switch cmd {
+	case "iptables", "ip6tables":
+		// iptables flags are case-sensitive — do not lowercase before lookup.
+		allowed := []string{"-L/--list", "-S/--list-rules", "-C/--check"}
+		for _, arg := range argv[1:] {
+			if iptablesWriteOps[arg] {
+				return fmt.Sprintf("Command denied: %s %s modifies firewall rules; only read-only operation flags are allowed (%s) plus modifier flags (-n, -v, -t <table>, --line-numbers)", cmd, arg, strings.Join(allowed, ", "))
+			}
+		}
+		return fmt.Sprintf("Command denied: %s requires a read-only operation flag; allowed operation flags: %s (modifier flags such as -n, -v, -t <table>, --line-numbers are also permitted)", cmd, strings.Join(allowed, ", "))
+
 	case "systemctl":
 		subcmd := ""
 		for _, arg := range argv[1:] {
@@ -441,10 +505,12 @@ func denyReason(denied map[string]bool, argv []string) string {
 	// ip6tables-legacy). isDenied blocks these when "iptables"/"ip6tables" is in the denylist.
 	// Give Claude a specific message so it understands why and does not retry with another variant.
 	if strings.HasPrefix(cmd, "iptables-") && len(cmd) > len("iptables-") && denied["iptables"] {
-		return fmt.Sprintf("Command denied: %q is a firewall variant blocked as a variant of %q which is in the command denylist; use read-only diagnostic commands instead", cmd, "iptables")
+		// iptables-save is allowed (read-only); it would not reach denyReason.
+		return fmt.Sprintf("Command denied: %q is a firewall variant of %q which is in the command denylist; use iptables -L/-S for read-only listing or iptables-save instead", cmd, "iptables")
 	}
 	if strings.HasPrefix(cmd, "ip6tables-") && len(cmd) > len("ip6tables-") && denied["ip6tables"] {
-		return fmt.Sprintf("Command denied: %q is a firewall variant blocked as a variant of %q which is in the command denylist; use read-only diagnostic commands instead", cmd, "ip6tables")
+		// ip6tables-save is allowed (read-only); it would not reach denyReason.
+		return fmt.Sprintf("Command denied: %q is a firewall variant of %q which is in the command denylist; use ip6tables -L/-S for read-only listing or ip6tables-save instead", cmd, "ip6tables")
 	}
 
 	// Versioned interpreter or tool variant (e.g. python3.11, ruby2.7, node20,
