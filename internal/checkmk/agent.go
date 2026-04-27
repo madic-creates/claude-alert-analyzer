@@ -302,6 +302,24 @@ func isDenied(denied map[string]bool, argv []string) bool {
 	// Flags (e.g. --no-pager, --user) may appear before the subcommand,
 	// so skip leading dash-prefixed arguments to find the actual subcommand.
 	if cmd == "systemctl" {
+		// Deny remote-host and container flags before checking the subcommand.
+		// --host/-H connects to a remote system via SSH, enabling lateral
+		// movement beyond the diagnosed host.
+		// --machine/-M targets a local systemd-nspawn container rather than
+		// the host itself, taking diagnostics out of scope.
+		// The short-option-with-separate-value form (-H user@remote) is already
+		// implicitly blocked: the subcommand loop below finds "user@remote" as
+		// the subcommand, which is not in systemctlReadOnly. The
+		// long-option-with-equals form (--host=user@remote) bypasses that check
+		// because the arg starts with "--" and is skipped entirely, allowing the
+		// real subcommand (e.g. "status") to be found and incorrectly permitted.
+		// Checking both forms here closes that gap and makes the intent explicit.
+		for _, arg := range argv[1:] {
+			if arg == "--host" || arg == "-H" || strings.HasPrefix(arg, "--host=") ||
+				arg == "--machine" || arg == "-M" || strings.HasPrefix(arg, "--machine=") {
+				return true
+			}
+		}
 		subcmd := ""
 		for _, arg := range argv[1:] {
 			if !strings.HasPrefix(arg, "-") {
@@ -451,6 +469,17 @@ func denyReason(denied map[string]bool, argv []string) string {
 		return fmt.Sprintf("Command denied: %s requires a read-only operation flag; allowed operation flags: %s (modifier flags such as -n, -v, -t <table>, --line-numbers are also permitted)", cmd, strings.Join(allowed, ", "))
 
 	case "systemctl":
+		// Check for remote/container flags before looking for the subcommand,
+		// matching the same order as isDenied so the message targets the real
+		// reason the command was blocked.
+		for _, arg := range argv[1:] {
+			if arg == "--host" || arg == "-H" || strings.HasPrefix(arg, "--host=") {
+				return "Command denied: systemctl --host/-H targets a remote system via SSH; run diagnostic commands directly on the affected host instead"
+			}
+			if arg == "--machine" || arg == "-M" || strings.HasPrefix(arg, "--machine=") {
+				return "Command denied: systemctl --machine/-M targets a container; connect to the container directly for container-level diagnostics"
+			}
+		}
 		subcmd := ""
 		for _, arg := range argv[1:] {
 			if !strings.HasPrefix(arg, "-") {

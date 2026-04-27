@@ -1252,6 +1252,86 @@ func TestIsDenied_SystemctlFlagsBeforeSubcommand(t *testing.T) {
 	}
 }
 
+func TestIsDenied_SystemctlRemoteAndContainerFlagsDenied(t *testing.T) {
+	// --host/-H and --machine/-M target remote hosts or containers, which are
+	// out of scope for diagnosing the local host. Both the long-option-with-equals
+	// form (--host=user@remote) and the short-option form (-H user@remote) must be
+	// denied regardless of the subcommand.
+	//
+	// The short-option form was already implicitly blocked because the arg value
+	// (e.g. "user@remote") becomes the "subcommand" and is not in systemctlReadOnly.
+	// The long-option-with-equals form was NOT blocked: the arg starts with "--",
+	// was skipped by the flag loop, and the real subcommand ("status") was found
+	// and incorrectly permitted. This test pins the fix for that gap.
+	denied := [][]string{
+		// Long-option-with-equals form (the previously unblocked gap).
+		{"systemctl", "--host=user@remote", "status", "nginx"},
+		{"systemctl", "--host=10.0.0.1", "list-units"},
+		{"systemctl", "--machine=mycontainer", "status", "nginx"},
+		{"systemctl", "--machine=.host", "show", "sshd"},
+		// Standalone long flags (no =).
+		{"systemctl", "--host", "user@remote", "status"},
+		{"systemctl", "--machine", "mycontainer", "status"},
+		// Short flag forms (already blocked via subcommand mismatch, but tested
+		// explicitly here so the behaviour is documented and won't regress).
+		{"systemctl", "-H", "user@remote", "status"},
+		{"systemctl", "-M", "mycontainer", "status"},
+		// Combined with other benign flags.
+		{"systemctl", "--no-pager", "--host=remote", "status"},
+		{"systemctl", "--user", "--machine=box", "status"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected denied (remote/container flag): %v", argv)
+		}
+	}
+
+	// Benign flags like --user, --system, --no-pager must still be allowed
+	// when used with a read-only subcommand.
+	allowed := [][]string{
+		{"systemctl", "--user", "status", "nginx"},
+		{"systemctl", "--system", "show", "sshd"},
+		{"systemctl", "--no-pager", "list-units", "--failed"},
+	}
+	for _, argv := range allowed {
+		if isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected allowed (benign flag): %v", argv)
+		}
+	}
+}
+
+func TestDenyReason_SystemctlRemoteAndContainerFlags(t *testing.T) {
+	// denyReason must produce a targeted message for --host and --machine flags
+	// so Claude understands why the command was blocked and can self-correct.
+	t.Run("--host= form names the flag", func(t *testing.T) {
+		msg := denyReason(DefaultDeniedCommands, []string{"systemctl", "--host=user@remote", "status"})
+		if !strings.Contains(msg, "--host") {
+			t.Errorf("expected --host in message; got: %s", msg)
+		}
+		if !strings.Contains(msg, "remote") {
+			t.Errorf("expected 'remote' context in message; got: %s", msg)
+		}
+	})
+	t.Run("-H form names the flag", func(t *testing.T) {
+		msg := denyReason(DefaultDeniedCommands, []string{"systemctl", "-H", "user@remote", "status"})
+		if !strings.Contains(msg, "--host") || !strings.Contains(msg, "-H") {
+			t.Errorf("expected --host/-H in message; got: %s", msg)
+		}
+	})
+	t.Run("--machine= form names the flag", func(t *testing.T) {
+		msg := denyReason(DefaultDeniedCommands, []string{"systemctl", "--machine=mybox", "status"})
+		if !strings.Contains(msg, "--machine") {
+			t.Errorf("expected --machine in message; got: %s", msg)
+		}
+	})
+	t.Run("-M form names the flag", func(t *testing.T) {
+		msg := denyReason(DefaultDeniedCommands, []string{"systemctl", "-M", "mybox", "status"})
+		if !strings.Contains(msg, "--machine") || !strings.Contains(msg, "-M") {
+			t.Errorf("expected --machine/-M in message; got: %s", msg)
+		}
+	})
+}
+
 func TestIsDenied_AbsolutePathBypassBlocked(t *testing.T) {
 	// Absolute paths like /bin/rm must be treated the same as bare "rm".
 	denied := [][]string{
