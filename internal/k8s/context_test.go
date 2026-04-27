@@ -450,6 +450,101 @@ func TestGetPodLogs_FetchBoundedToMaxLogPods(t *testing.T) {
 	}
 }
 
+// TestGetPodLogs_CrashLoopBackOff verifies that getPodLogs collects logs for
+// CrashLoopBackOff pods. CrashLoopBackOff pods remain in the Running phase
+// between crash/restart cycles; a FieldSelector of "status.phase!=Running"
+// would silently exclude them, returning "(no failing pods)" for the most
+// common Kubernetes alert type. The fix keeps Running pods but filters out
+// healthy ones (all containers Ready). It also sets Previous=true so that
+// the last terminated container's logs are fetched — the currently waiting
+// container has not run yet and has no logs.
+func TestGetPodLogs_CrashLoopBackOff(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	// Inject a CrashLoopBackOff pod: Running phase, container in Waiting/CrashLoopBackOff.
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.PodList{Items: []corev1.Pod{{
+			ObjectMeta: metav1.ObjectMeta{Name: "crasher", Namespace: "prod"},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{Name: "app"}},
+			},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{
+					{
+						Name:         "app",
+						Ready:        false,
+						RestartCount: 7,
+						State: corev1.ContainerState{
+							Waiting: &corev1.ContainerStateWaiting{
+								Reason: "CrashLoopBackOff",
+							},
+						},
+					},
+				},
+			},
+		}}}, nil
+	})
+
+	var capturedOpts *corev1.PodLogOptions
+	cs.PrependReactor("get", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		ga, ok := action.(k8stesting.GenericAction)
+		if !ok || action.GetSubresource() != "log" {
+			return false, nil, nil
+		}
+		if opts, ok := ga.GetValue().(*corev1.PodLogOptions); ok {
+			capturedOpts = opts
+		}
+		return false, nil, nil
+	})
+
+	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	result := getPodLogs(context.Background(), cs, "prod", cfg)
+
+	if strings.Contains(result, "no failing pods") {
+		t.Error("CrashLoopBackOff pod (Running phase) was incorrectly excluded — getPodLogs must include Running pods with non-ready containers")
+	}
+	if capturedOpts == nil {
+		t.Fatal("GetLogs was not called for CrashLoopBackOff pod")
+	}
+	if !capturedOpts.Previous {
+		t.Error("Previous must be true for CrashLoopBackOff containers — the current waiting instance has no logs; the previous terminated instance does")
+	}
+}
+
+// TestGetPodLogs_HealthyRunningPodsExcluded verifies that getPodLogs skips
+// Running pods where all containers are Ready. Including healthy pods would
+// flood Claude with irrelevant logs and waste the maxLogPods budget.
+func TestGetPodLogs_HealthyRunningPodsExcluded(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.PodList{Items: []corev1.Pod{
+			// Healthy Running pod — should be filtered out.
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "healthy-pod", Namespace: "prod"},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					ContainerStatuses: []corev1.ContainerStatus{
+						{Name: "app", Ready: true},
+					},
+				},
+			},
+		}}, nil
+	})
+
+	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	result := getPodLogs(context.Background(), cs, "prod", cfg)
+
+	if !strings.Contains(result, "no failing pods") {
+		t.Errorf("expected '(no failing pods)' when only healthy Running pods exist, got: %q", result)
+	}
+	if strings.Contains(result, "healthy-pod") {
+		t.Error("healthy Running pod (all containers Ready) must not appear in pod logs output")
+	}
+}
+
 func TestGetKubeContext_Events_WarningEventListed(t *testing.T) {
 	cs := fake.NewSimpleClientset(
 		&corev1.Event{

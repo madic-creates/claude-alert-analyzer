@@ -415,49 +415,85 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace s
 		return fmt.Sprintf("(namespace %q not in log allowlist)", namespace)
 	}
 
-	// Limit the API response to maxLogPods so that a namespace with many
-	// failing pods (e.g. a rolling restart gone wrong) does not download
-	// hundreds of pod objects before the in-memory cap below runs. The API
-	// applies the limit server-side, matching the approach in getEvents
-	// and getPodStatus.
+	// Fetch Running and non-Succeeded pods. We intentionally include Running
+	// pods here because containers in CrashLoopBackOff remain in the Running
+	// phase between crash/restart cycles — a FieldSelector excluding Running
+	// would silently produce "(no failing pods)" for the most common Kubernetes
+	// failure mode. We filter out healthy Running pods in Go below.
+	//
+	// Use a larger server-side Limit to account for healthy Running pods that
+	// will be skipped by the Go-side filter; we stop collecting once we have
+	// maxLogPods worth of failing pods.
 	podList, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
-		FieldSelector: "status.phase!=Running,status.phase!=Succeeded",
-		Limit:         maxLogPods,
+		FieldSelector: "status.phase!=Succeeded",
+		Limit:         maxLogPods * 3,
 	})
 	if err != nil {
 		slog.Warn("failed to list failing pods", "namespace", namespace, "error", err)
 		return fmt.Sprintf("(failed to list failing pods: %v)", err)
 	}
-	if len(podList.Items) == 0 {
+
+	// Filter: keep only pods that are actually failing.
+	// A Running pod is healthy when every container reports Ready=true; skip it.
+	var failingPods []corev1.Pod
+	for _, p := range podList.Items {
+		if p.Status.Phase == corev1.PodRunning && len(p.Status.ContainerStatuses) > 0 {
+			allReady := true
+			for _, cs := range p.Status.ContainerStatuses {
+				if !cs.Ready {
+					allReady = false
+					break
+				}
+			}
+			if allReady {
+				continue
+			}
+		}
+		failingPods = append(failingPods, p)
+	}
+
+	if len(failingPods) == 0 {
 		return "(no failing pods)"
 	}
 
-	var logLines []string
 	limit := maxLogPods
-	if len(podList.Items) < limit {
-		limit = len(podList.Items)
+	if len(failingPods) < limit {
+		limit = len(failingPods)
 	}
-	for _, p := range podList.Items[:limit] {
+
+	var logLines []string
+	for _, p := range failingPods[:limit] {
 		tailLines := int64(30)
 		limitBytes := int64(cfg.MaxLogBytes)
 		opts := &corev1.PodLogOptions{
 			TailLines:  &tailLines,
 			LimitBytes: &limitBytes,
 		}
-		// For multi-container pods the Kubernetes API requires an explicit container
-		// name; omitting it returns an error ("a container name must be specified").
-		// Pick the first non-ready container (most likely the one that failed); fall
-		// back to the first container if status is unavailable or all containers are
-		// erroneously marked ready.
+
+		// For multi-container pods the Kubernetes API requires an explicit
+		// container name; omitting it returns an error. Pick the first
+		// non-ready container (most likely the failing one); fall back to
+		// the first container if status is unavailable or all are ready.
+		targetContainer := ""
 		if len(p.Spec.Containers) > 1 {
-			opts.Container = p.Spec.Containers[0].Name
-			for _, cs := range p.Status.ContainerStatuses {
-				if !cs.Ready {
-					opts.Container = cs.Name
-					break
+			targetContainer = p.Spec.Containers[0].Name
+		}
+		for _, cs := range p.Status.ContainerStatuses {
+			if !cs.Ready {
+				targetContainer = cs.Name
+				// CrashLoopBackOff: the container is in Waiting state between
+				// restarts; the current instance has no logs yet. Request the
+				// previous terminated instance's logs instead.
+				if cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff" {
+					opts.Previous = true
 				}
+				break
 			}
 		}
+		if targetContainer != "" {
+			opts.Container = targetContainer
+		}
+
 		logResp := clientset.CoreV1().Pods(namespace).GetLogs(p.Name, opts)
 		raw, err := logResp.DoRaw(ctx)
 		if err != nil {
@@ -470,9 +506,9 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace s
 			logLines = append(logLines, fmt.Sprintf("--- %s ---\n%s", shared.SanitizeAlertField(p.Name), truncated))
 		}
 	}
-	// When the API returned exactly maxLogPods pods, the server-side Limit was
-	// hit and more failing pods may exist. Append a note so Claude knows the log
-	// collection may be incomplete — mirroring the truncation note in getPodStatus.
+	// When the API returned the maximum number of pods, the server-side Limit
+	// was hit and more failing pods may exist. Append a note so Claude knows
+	// the log collection may be incomplete.
 	if limit == maxLogPods {
 		logLines = append(logLines, fmt.Sprintf("... [logs shown for first %d failing pods; more may exist]", maxLogPods))
 	}
