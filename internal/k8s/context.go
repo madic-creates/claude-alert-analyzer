@@ -101,7 +101,14 @@ func (p *PrometheusClient) query(ctx context.Context, queryStr string) string {
 	}
 	if result.Status != "success" {
 		if result.Error != "" {
-			return fmt.Sprintf("(query error: %s: %s)", result.ErrorType, result.Error)
+			// Sanitize both fields before injecting into the Claude prompt.
+			// A compromised or malicious Prometheus instance could embed
+			// newlines in errorType or error to inject fake Markdown sections
+			// (e.g. "\n## INJECTED"). This mirrors the sanitization applied
+			// to Prometheus label keys/values and Kubernetes event fields.
+			return fmt.Sprintf("(query error: %s: %s)",
+				shared.SanitizeAlertField(result.ErrorType),
+				shared.SanitizeAlertField(result.Error))
 		}
 		return fmt.Sprintf("(query error: status=%q)", result.Status)
 	}
