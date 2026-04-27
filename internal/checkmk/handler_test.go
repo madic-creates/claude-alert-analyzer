@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func makeCheckmkConfig() Config {
@@ -319,6 +320,32 @@ func TestCheckmkHandleWebhook_CooldownIncrementsMetric(t *testing.T) {
 	postCheckmkWebhook(t, handler, "test-secret", notif)
 	if metrics.AlertsCooldown.Load() != 1 {
 		t.Errorf("expected 1 cooldown skip after duplicate request, got %d", metrics.AlertsCooldown.Load())
+	}
+}
+
+// TestCheckmkHandleWebhook_CooldownIncrementsPrometheusCounter verifies that when
+// an alert is blocked by the cooldown the labeled Prometheus counter
+// alerts_cooldown_total{source="checkmk"} is incremented via RecordCooldown.
+// The existing TestCheckmkHandleWebhook_CooldownIncrementsMetric uses
+// new(shared.AlertMetrics) (Prom == nil) so RecordCooldown is a no-op there;
+// this test exercises the non-nil path so that a mutation removing the
+// RecordCooldown call or using the wrong source label would be detected.
+func TestCheckmkHandleWebhook_CooldownIncrementsPrometheusCounter(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cfg.CooldownSeconds = 60
+	cd := shared.NewCooldownManager()
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, metrics)
+
+	notif := makeNotification("host1", "CPU", "WARNING", "PROBLEM")
+	// First request: accepted, cooldown set — RecordCooldown not called yet.
+	postCheckmkWebhook(t, handler, "test-secret", notif)
+	// Second request: blocked by cooldown → RecordCooldown must be called.
+	postCheckmkWebhook(t, handler, "test-secret", notif)
+
+	got := testutil.ToFloat64(metrics.Prom.AlertsCooldown.WithLabelValues("checkmk"))
+	if got != 1 {
+		t.Errorf("alerts_cooldown_total{source=\"checkmk\"} = %v, want 1", got)
 	}
 }
 
