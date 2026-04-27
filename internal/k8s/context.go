@@ -356,6 +356,14 @@ func getEvents(ctx context.Context, clientset kubernetes.Interface, namespace st
 	if len(lines) == 0 {
 		return "(no warning events)"
 	}
+	// When the API returned exactly maxEvents*5 events, the server-side Limit was
+	// reached and more events may exist in the namespace. Kubernetes returns events
+	// in etcd insertion order (oldest first), so the newest events (beyond position
+	// maxEvents*5) are completely invisible to this fetch. Append a note so Claude
+	// knows the list may be incomplete — mirroring the same check in getPodStatus.
+	if len(eventList.Items) >= maxEvents*5 {
+		lines = append(lines, fmt.Sprintf("... [%d events shown (sorted by recency); more may exist — API limit reached]", len(lines)))
+	}
 	return strings.Join(lines, "\n")
 }
 

@@ -799,6 +799,83 @@ func TestGetEvents_LimitSetInListOptions(t *testing.T) {
 	}
 }
 
+// TestGetEvents_APILimitNote verifies that getEvents appends a "more may exist"
+// note when the Kubernetes API returns exactly maxEvents*5 (100) events,
+// indicating the server-side Limit was reached and newer events may exist.
+// This mirrors TestGetPodStatus_APILimitNote for the events code path.
+func TestGetEvents_APILimitNote(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	// Return exactly maxEvents*5 = 100 events (the server-side Limit), simulating
+	// a busy namespace where the API page was full and newer events may exist.
+	cs.PrependReactor("list", "events", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		items := make([]corev1.Event, 100)
+		for i := range items {
+			items[i] = corev1.Event{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("evt-%03d", i),
+					Namespace: "busy",
+				},
+				Type:    corev1.EventTypeWarning,
+				Reason:  "BackOff",
+				Message: fmt.Sprintf("event %d", i),
+				InvolvedObject: corev1.ObjectReference{
+					Name: fmt.Sprintf("pod-%03d", i),
+				},
+				LastTimestamp: metav1.Time{Time: time.Now().Add(time.Duration(i) * time.Second)},
+			}
+		}
+		return true, &corev1.EventList{Items: items}, nil
+	})
+
+	alert := makeAlertWithLabels(map[string]string{"namespace": "busy"})
+	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+
+	events, _, _ := GetKubeContext(context.Background(), cs, alert, cfg)
+
+	if !strings.Contains(events, "more may exist") {
+		t.Errorf("expected 'more may exist' note when API limit is reached, got: %q", events)
+	}
+}
+
+// TestGetEvents_NoAPILimitNote verifies that getEvents does NOT append the
+// "more may exist" note when the API returns fewer than maxEvents*5 events,
+// indicating the full result set was returned.
+func TestGetEvents_NoAPILimitNote(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	// Return only 5 events — well below the server-side Limit — so the full
+	// result set was returned and the note must not appear.
+	cs.PrependReactor("list", "events", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		items := make([]corev1.Event, 5)
+		for i := range items {
+			items[i] = corev1.Event{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("evt-%d", i),
+					Namespace: "small",
+				},
+				Type:    corev1.EventTypeWarning,
+				Reason:  "BackOff",
+				Message: fmt.Sprintf("event %d", i),
+				InvolvedObject: corev1.ObjectReference{
+					Name: fmt.Sprintf("pod-%d", i),
+				},
+				LastTimestamp: metav1.Time{Time: time.Now().Add(time.Duration(i) * time.Second)},
+			}
+		}
+		return true, &corev1.EventList{Items: items}, nil
+	})
+
+	alert := makeAlertWithLabels(map[string]string{"namespace": "small"})
+	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+
+	events, _, _ := GetKubeContext(context.Background(), cs, alert, cfg)
+
+	if strings.Contains(events, "more may exist") {
+		t.Errorf("unexpected 'more may exist' note when API limit not reached, got: %q", events)
+	}
+}
+
 // ----- GetPrometheusMetrics tests -----
 
 func TestGetMetrics_NoNamespaceNoAlertname(t *testing.T) {
