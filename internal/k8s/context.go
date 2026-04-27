@@ -389,7 +389,7 @@ func getPodStatus(ctx context.Context, clientset kubernetes.Interface, namespace
 			}
 		}
 		lines = append(lines, fmt.Sprintf("%s %s %d/%d restarts=%d",
-			shared.SanitizeAlertField(p.Name), phase, ready, total, restarts))
+			shared.SanitizeAlertField(p.Name), shared.SanitizeAlertField(phase), ready, total, restarts))
 	}
 	if len(lines) == 0 {
 		return "(no pods)"
