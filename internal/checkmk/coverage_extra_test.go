@@ -601,6 +601,68 @@ func TestProcessAlert_SSH_AgenticFails_RecordsClaudeAPIErrorCounter(t *testing.T
 	}
 }
 
+// TestProcessAlert_SSH_ValidationFails_FallsBackToStaticAnalysis verifies that
+// when SSHEnabled is true but host validation returns an error, the pipeline
+// falls back to static analysis via deps.Analyzer (not deps.ToolRunner) and
+// appends the "SSH diagnostics unavailable" note to the prompt. This covers
+// the sshOK=false branch at pipeline.go when SSHEnabled=true and validationErr!=nil.
+func TestProcessAlert_SSH_ValidationFails_FallsBackToStaticAnalysis(t *testing.T) {
+	analyzer := &mockAnalyzer{result: "static analysis result"}
+	pub := &mockPublisher{}
+	cooldown := shared.NewCooldownManager()
+	metrics := new(shared.AlertMetrics)
+
+	deps := PipelineDeps{
+		Analyzer:   analyzer,
+		ToolRunner: &capturingToolRunner{err: fmt.Errorf("should not be called")},
+		Publishers: []shared.Publisher{pub},
+		Cooldown:   cooldown,
+		Metrics:    metrics,
+		SSHEnabled: true,
+		GatherContext: func(_ context.Context, _ shared.AlertPayload, _ *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		ValidateHost: func(_ context.Context, _, _ string) (*HostInfo, error) {
+			return nil, fmt.Errorf("host not found in CheckMK")
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "ssh-validation-fail-fp",
+		Title:       "host1 - Disk Full",
+		Severity:    "critical",
+		Fields:      map[string]string{"hostname": "host1", "host_address": "10.0.0.2"},
+	}
+
+	ProcessAlert(context.Background(), deps, alert)
+
+	// The static analysis path must succeed: processed incremented, not failed.
+	if metrics.AlertsProcessed.Load() != 1 {
+		t.Errorf("AlertsProcessed = %d, want 1", metrics.AlertsProcessed.Load())
+	}
+	if metrics.AlertsFailed.Load() != 0 {
+		t.Errorf("AlertsFailed = %d, want 0", metrics.AlertsFailed.Load())
+	}
+
+	// Analyzer.Analyze must have been called (not the ToolRunner).
+	if analyzer.capturedUserPrompt == "" {
+		t.Fatal("Analyzer.Analyze was not called; expected static analysis fallback")
+	}
+
+	// The "SSH diagnostics unavailable" note must be injected into the prompt.
+	if !strings.Contains(analyzer.capturedUserPrompt, "SSH diagnostics unavailable") {
+		t.Errorf("expected 'SSH diagnostics unavailable' in user prompt, got:\n%s", analyzer.capturedUserPrompt)
+	}
+
+	// The analysis result must be published.
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
+	}
+	if !strings.Contains(pub.calls[0].body, "static analysis result") {
+		t.Errorf("published body does not contain analysis result, got: %s", pub.calls[0].body)
+	}
+}
+
 // TestGetHostServices_ServiceDataSanitized verifies that control characters in
 // service descriptions and plugin outputs fetched from the CheckMK REST API are
 // stripped before the data is injected into the Claude prompt. A compromised
