@@ -2250,3 +2250,78 @@ func TestDenyReason_FindFlagsCaseInsensitive(t *testing.T) {
 		}
 	}
 }
+
+// TestIsDenied_BlocksMkfsTypeVariants verifies that mkfs.TYPE filesystem-
+// specific formatting tools (e.g. mkfs.ext4, mkfs.btrfs, mkfs.xfs) are denied
+// when "mkfs" is in the denylist. These bypass the versioned-variant heuristic
+// because TrimRight("mkfs.ext4","0123456789.") yields "mkfs.ext" — not "mkfs"
+// — so the base-name check never matches; the explicit prefix check closes the
+// gap. mkfs.mke2fs and similar unusual aliases are also covered.
+func TestIsDenied_BlocksMkfsTypeVariants(t *testing.T) {
+	denied := [][]string{
+		{"mkfs.ext4", "/dev/sdb1"},
+		{"mkfs.ext3", "/dev/sdb1"},
+		{"mkfs.ext2", "/dev/sdb1"},
+		{"mkfs.btrfs", "/dev/sdc"},
+		{"mkfs.xfs", "-f", "/dev/sdd"},
+		{"mkfs.vfat", "/dev/sde1"},
+		{"mkfs.ntfs", "/dev/sdf1"},
+		{"mkfs.f2fs", "/dev/sdg1"},
+		{"/sbin/mkfs.ext4", "/dev/sdb1"},
+		{"/usr/sbin/mkfs.xfs", "-f", "/dev/sdd"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected %v to be denied", argv)
+		}
+	}
+}
+
+// TestIsDenied_MkfsTypeRespectsDenylist verifies that the mkfs.TYPE check
+// honours the custom denylist: if "mkfs" is not in the denylist, mkfs.TYPE
+// variants must not be blocked by this rule.
+func TestIsDenied_MkfsTypeRespectsDenylist(t *testing.T) {
+	// Custom denylist without mkfs — mkfs.TYPE variants must pass.
+	custom := map[string]bool{"rm": true, "dd": true}
+	allowed := [][]string{
+		{"mkfs.ext4", "/dev/sdb1"},
+		{"mkfs.btrfs", "/dev/sdc"},
+	}
+	for _, argv := range allowed {
+		if isDenied(custom, argv) {
+			t.Errorf("expected %v to be allowed when \"mkfs\" is not in denylist", argv)
+		}
+	}
+
+	// With mkfs in the denylist the same commands must be denied.
+	withMkfs := map[string]bool{"rm": true, "mkfs": true}
+	for _, argv := range allowed {
+		if !isDenied(withMkfs, argv) {
+			t.Errorf("expected %v to be denied when \"mkfs\" is in denylist", argv)
+		}
+	}
+}
+
+// TestDenyReason_MkfsTypeVariants verifies that denyReason returns a targeted
+// message for mkfs.TYPE commands (not the generic "not allowed" fallback) so
+// that Claude understands why the command was blocked and does not retry with
+// another mkfs variant.
+func TestDenyReason_MkfsTypeVariants(t *testing.T) {
+	cases := [][]string{
+		{"mkfs.ext4", "/dev/sdb1"},
+		{"mkfs.btrfs", "/dev/sdc"},
+		{"mkfs.xfs", "-f", "/dev/sdd"},
+		{"/sbin/mkfs.ext4", "/dev/sdb1"},
+	}
+	for _, argv := range cases {
+		msg := denyReason(DefaultDeniedCommands, argv)
+		// Message must mention "mkfs" so Claude knows what the base command is.
+		if !strings.Contains(msg, "mkfs") {
+			t.Errorf("denyReason(%v) = %q; expected \"mkfs\" in message", argv, msg)
+		}
+		// Must NOT fall through to the generic "not allowed" message.
+		if strings.Contains(msg, "not allowed (destructive or privileged command)") {
+			t.Errorf("denyReason(%v) returned generic message instead of targeted guidance: %q", argv, msg)
+		}
+	}
+}

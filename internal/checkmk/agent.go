@@ -301,6 +301,16 @@ func isDenied(denied map[string]bool, argv []string) bool {
 		return denied[cmd]
 	}
 
+	// Block mkfs.TYPE filesystem-specific formatting tools (e.g. mkfs.ext4,
+	// mkfs.btrfs, mkfs.xfs). These bypass the exact "mkfs" denylist entry
+	// because the versioned-variant heuristic strips only trailing digits and
+	// dots: TrimRight("mkfs.ext4","0123456789.") yields "mkfs.ext" — not
+	// "mkfs" — so denied["mkfs"] is never matched by that path.
+	// Only block when "mkfs" itself is denied to respect custom denylists.
+	if strings.HasPrefix(cmd, "mkfs.") && len(cmd) > 5 && denied["mkfs"] {
+		return true
+	}
+
 	// Deny versioned interpreter and tool variants (e.g. python3.11, ruby2.7,
 	// perl5.36, node20, python-3.11, bash-5.1). Strip a trailing version suffix
 	// (any combination of digits and dots, optionally preceded by a hyphen
@@ -386,6 +396,14 @@ func denyReason(denied map[string]bool, argv []string) string {
 			}
 		}
 		// sed is in the custom denylist without in-place flags — fall through to generic message.
+	}
+
+	// mkfs.TYPE filesystem-specific formatting tool (e.g. mkfs.ext4, mkfs.btrfs,
+	// mkfs.xfs). isDenied blocks these when "mkfs" is in the denylist; give
+	// Claude a specific message so it understands why and does not retry with
+	// another mkfs variant.
+	if strings.HasPrefix(cmd, "mkfs.") && len(cmd) > 5 && denied["mkfs"] {
+		return fmt.Sprintf("Command denied: %q formats a filesystem and is blocked (variant of %q which is in the command denylist); use read-only diagnostic commands instead", cmd, "mkfs")
 	}
 
 	// Versioned interpreter or tool variant (e.g. python3.11, ruby2.7, node20,
