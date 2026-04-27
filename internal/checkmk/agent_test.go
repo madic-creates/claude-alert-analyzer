@@ -537,6 +537,10 @@ func TestIsDenied_BlocksShellInterpreterBypass(t *testing.T) {
 // installed under a versioned name (python3.11 alongside a python3 symlink), so
 // a prompt-injection or hallucinatory model could bypass the denylist by using
 // the versioned name directly.
+//
+// Hyphen-separated versioned names (python-3.11, bash-5.1) are also covered:
+// TrimRight strips digits and dots first leaving a trailing hyphen which is
+// then stripped in a second pass so the base name matches the denylist entry.
 func TestIsDenied_BlocksVersionedInterpreters(t *testing.T) {
 	denied := [][]string{
 		{"python3.11", "-c", "import os; os.system('rm -rf /')"},
@@ -547,6 +551,15 @@ func TestIsDenied_BlocksVersionedInterpreters(t *testing.T) {
 		{"perl5.36", "-e", "system('kill -9 1')"},
 		{"perl5.38", "-e", "system('rm -rf /')"},
 		{"node20", "-e", "require('child_process').exec('rm -rf /')"},
+		// Hyphen-separated versioned interpreter names — also must be denied.
+		// Debian/Ubuntu ship python3.11 as canonical, but some distros and manual
+		// installs use python-3.11 / bash-5.2 etc. with a hyphen separator.
+		{"python-3.11", "-c", "import os; os.system('rm -rf /')"},
+		{"python-2.7", "-c", "import os; os.system('shutdown now')"},
+		{"bash-5.2", "-c", "rm -rf /"},
+		{"node-18", "-e", "require('child_process').exec('rm -rf /')"},
+		{"perl-5.36", "-e", "system('rm -rf /')"},
+		{"ruby-3.2", "-e", "system('reboot')"},
 	}
 	for _, argv := range denied {
 		if !isDenied(DefaultDeniedCommands, argv) {
@@ -1970,6 +1983,22 @@ func TestDenyReason(t *testing.T) {
 		// vectors, not because they are inherently destructive).
 		if strings.Contains(msg, "destructive or privileged") {
 			t.Errorf("expected message NOT to use generic 'destructive or privileged' phrasing for a versioned interpreter; got: %s", msg)
+		}
+	})
+
+	t.Run("hyphen-separated versioned interpreter names base command in message", func(t *testing.T) {
+		// python-3.11 must be denied via the two-pass stripping in isDenied:
+		// TrimRight("python-3.11", "0123456789.") == "python-"; TrimRight("python-", "-") == "python".
+		// denyReason must likewise name both the versioned command and the base.
+		msg := denyReason(DefaultDeniedCommands, []string{"python-3.11", "-c", "import sys; print(sys.path)"})
+		if !strings.Contains(msg, "python-3.11") {
+			t.Errorf("expected message to name the hyphen-versioned command; got: %s", msg)
+		}
+		if !strings.Contains(msg, "python") {
+			t.Errorf("expected message to name the base command; got: %s", msg)
+		}
+		if !strings.Contains(msg, "versioned") {
+			t.Errorf("expected message to mention 'versioned'; got: %s", msg)
 		}
 	})
 

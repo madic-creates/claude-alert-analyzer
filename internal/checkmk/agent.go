@@ -302,15 +302,20 @@ func isDenied(denied map[string]bool, argv []string) bool {
 	}
 
 	// Deny versioned interpreter and tool variants (e.g. python3.11, ruby2.7,
-	// perl5.36, node20). Strip a trailing version suffix (any combination of
-	// digits and dots) and check the resulting base name against the denylist.
-	// This closes the gap between "python3" (in the denylist) and "python3.11"
-	// (not in the denylist by exact name but functionally equivalent).
+	// perl5.36, node20, python-3.11, bash-5.1). Strip a trailing version suffix
+	// (any combination of digits and dots, optionally preceded by a hyphen
+	// separator) and check the resulting base name against the denylist.
+	// This closes two gaps:
+	//   "python3" (denylist) vs "python3.11" (not by exact name, functionally same)
+	//   "python"  (denylist) vs "python-3.11" (hyphen-separated version, same gap)
 	// TrimRight removes only the rightmost sequence of cutset characters, so:
-	//   - "python3.11" → base "python"   (denied["python"] = true  → deny)
-	//   - "md5sum"     → base "md5sum"   (base == cmd, skipped → exact-match path)
-	//   - "ip6tables"  → base "ip6tables" (trailing 's', not stripped → exact-match)
+	//   - "python3.11"  → digits/dots stripped → "python"  (denied → deny)
+	//   - "python-3.11" → digits/dots stripped → "python-" → hyphen stripped → "python" (denied → deny)
+	//   - "bash-5.1"    → digits/dots stripped → "bash-"   → hyphen stripped → "bash"   (denied → deny)
+	//   - "md5sum"      → base "md5sum" (base == cmd, skipped → exact-match path)
+	//   - "ip6tables"   → trailing 's' not stripped → base == cmd → exact-match path
 	base := strings.TrimRight(cmd, "0123456789.")
+	base = strings.TrimRight(base, "-") // also strip separator from hyphen-versioned names like python-3.11
 	if base != cmd && base != "" && denied[base] {
 		return true
 	}
@@ -383,8 +388,9 @@ func denyReason(denied map[string]bool, argv []string) string {
 		// sed is in the custom denylist without in-place flags — fall through to generic message.
 	}
 
-	// Versioned interpreter or tool variant (e.g. python3.11, ruby2.7, node20).
-	// isDenied strips the trailing version suffix to find the base name in the
+	// Versioned interpreter or tool variant (e.g. python3.11, ruby2.7, node20,
+	// python-3.11, bash-5.1). isDenied strips the trailing version suffix
+	// (digits/dots and optional hyphen separator) to find the base name in the
 	// denylist. Give Claude a specific message that names the base command so it
 	// understands why the versioned name was blocked and can choose a direct
 	// read-only diagnostic command instead of retrying with another variant.
@@ -393,6 +399,7 @@ func denyReason(denied map[string]bool, argv []string) string {
 	// the generic "not allowed" message, not a misleading "versioned variant of
 	// X (scripting interpreter)" message for a base command that is not denied.
 	base := strings.TrimRight(cmd, "0123456789.")
+	base = strings.TrimRight(base, "-") // mirror isDenied: also strip hyphen separator
 	if base != cmd && base != "" && denied[base] {
 		return fmt.Sprintf("Command denied: %q is a versioned variant of %q which is not allowed (scripting interpreter that can bypass the command denylist); use direct read-only diagnostic commands instead", cmd, base)
 	}
