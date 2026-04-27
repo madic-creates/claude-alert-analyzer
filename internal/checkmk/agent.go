@@ -389,7 +389,7 @@ func denyReason(denied map[string]bool, argv []string) string {
 	}
 
 	// Versioned interpreter or tool variant (e.g. python3.11, ruby2.7, node20,
-	// python-3.11, bash-5.1). isDenied strips the trailing version suffix
+	// python-3.11, bash-5.1, nc6). isDenied strips the trailing version suffix
 	// (digits/dots and optional hyphen separator) to find the base name in the
 	// denylist. Give Claude a specific message that names the base command so it
 	// understands why the versioned name was blocked and can choose a direct
@@ -397,11 +397,15 @@ func denyReason(denied map[string]bool, argv []string) string {
 	// Guard with denied[base] to match isDenied's logic: a command ending in
 	// digits that is itself explicitly denied (but whose base is not) must get
 	// the generic "not allowed" message, not a misleading "versioned variant of
-	// X (scripting interpreter)" message for a base command that is not denied.
+	// X" message for a base command that is not denied.
+	// The message intentionally omits a category label (e.g. "scripting
+	// interpreter") because the denylist covers both interpreters (bash, python)
+	// and non-interpreter tools (nc, curl, ssh). Calling nc6 a "scripting
+	// interpreter" would be inaccurate; a generic description covers all cases.
 	base := strings.TrimRight(cmd, "0123456789.")
 	base = strings.TrimRight(base, "-") // mirror isDenied: also strip hyphen separator
 	if base != cmd && base != "" && denied[base] {
-		return fmt.Sprintf("Command denied: %q is a versioned variant of %q which is not allowed (scripting interpreter that can bypass the command denylist); use direct read-only diagnostic commands instead", cmd, base)
+		return fmt.Sprintf("Command denied: %q is a versioned variant of %q which is blocked by the command denylist; use direct read-only diagnostic commands instead", cmd, base)
 	}
 
 	return fmt.Sprintf("Command denied: %q is not allowed (destructive or privileged command)", cmd)
