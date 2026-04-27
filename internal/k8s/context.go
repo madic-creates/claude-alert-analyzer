@@ -515,12 +515,15 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace s
 		}
 	}
 	// Append a note when log collection may be incomplete. There are two cases:
-	//   1. We capped at maxLogPods: more failing pods exist in the namespace but
-	//      their logs were not fetched.
+	//   1. We capped at maxLogPods: more failing pods were found than we logged
+	//      (len(failingPods) > maxLogPods). Using strict greater-than avoids a
+	//      false positive when exactly maxLogPods failing pods exist but the server
+	//      returned all pods (len(podList.Items) < maxLogPods*3) — in that case we
+	//      showed logs for every failing pod and there are genuinely no more.
 	//   2. The server-side Limit was reached: more pods exist in the namespace
 	//      that were never fetched at all, so we cannot know whether they are
 	//      failing. Mirrors the same check used in getPodStatus (len >= maxPods).
-	if limit == maxLogPods || len(podList.Items) >= maxLogPods*3 {
+	if len(failingPods) > maxLogPods || len(podList.Items) >= maxLogPods*3 {
 		logLines = append(logLines, fmt.Sprintf("... [logs shown for first %d failing pod(s); more may exist]", limit))
 	}
 	return strings.Join(logLines, "\n\n")
