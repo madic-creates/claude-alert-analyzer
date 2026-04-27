@@ -42,8 +42,15 @@ var sensitivePatterns = []sensitivePattern{
 	// the replacement; group 2 captures the separator so its whitespace is
 	// preserved too. Must run before the generic pattern to avoid the generic
 	// pattern partially consuming the closing key-quote.
+	// Compound key names (access_token, api_key, client_secret, etc.) are listed
+	// first because they are more specific than the single-keyword entries at the
+	// end of the alternation. OAuth2 and cloud-provider API error responses
+	// routinely include these compound names as JSON keys; without this
+	// extension the generic keyword=value pattern below cannot catch them because
+	// the closing double-quote after the key name is not whitespace and therefore
+	// does not satisfy the \s*[=:] separator check.
 	{
-		re:          regexp.MustCompile(`(?i)"(password|passwd|secret|token|key|authorization|bearer)"(\s*:\s*)"[^"]*"`),
+		re:          regexp.MustCompile(`(?i)"(access_token|refresh_token|id_token|api_key|secret_key|private_key|signing_key|auth_token|access_key|client_secret|api_secret|password|passwd|secret|token|key|authorization|bearer)"(\s*:\s*)"[^"]*"`),
 		replacement: `"${1}"${2}"[REDACTED]"`,
 	},
 	// Keyword=value pairs: require the keyword not to be immediately preceded by

@@ -491,6 +491,132 @@ func TestRedactSecrets_JSONKeyValueNoFalsePositive(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_JSONCompoundKeyValue verifies that compound JSON key names
+// commonly used in OAuth2 and cloud-provider API responses are redacted.
+// The generic keyword=value pattern cannot catch these because the closing
+// double-quote after the key name is not whitespace and therefore does not
+// satisfy the \s*[=:] separator check. The JSON key-value pattern must include
+// these compound names explicitly.
+func TestRedactSecrets_JSONCompoundKeyValue(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+		key   string // key name that must be preserved in output
+	}{
+		{
+			name:  "access_token OAuth response",
+			input: `{"access_token": "ya29.A0ARrdaM-FAKETOKEN"}`,
+			leak:  "ya29.A0ARrdaM-FAKETOKEN",
+			key:   "access_token",
+		},
+		{
+			name:  "refresh_token in token response",
+			input: `{"refresh_token": "1//0g-FAKEREFRESHTOKEN", "expires_in": 3600}`,
+			leak:  "1//0g-FAKEREFRESHTOKEN",
+			key:   "refresh_token",
+		},
+		{
+			name:  "id_token JWT value",
+			input: `{"id_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6IkZBS0UifQ.FAKE.FAKE"}`,
+			leak:  "eyJhbGciOiJSUzI1NiIsImtpZCI6IkZBS0UifQ.FAKE.FAKE",
+			key:   "id_token",
+		},
+		{
+			name:  "api_key in error log",
+			input: `{"error": "invalid_key", "api_key": "sk-proj-FAKEAPIKEY"}`,
+			leak:  "sk-proj-FAKEAPIKEY",
+			key:   "api_key",
+		},
+		{
+			name:  "client_secret in OAuth client config",
+			input: `{"client_id": "my-app", "client_secret": "FAKECLIENTSECRET123"}`,
+			leak:  "FAKECLIENTSECRET123",
+			key:   "client_secret",
+		},
+		{
+			name:  "secret_key in AWS SDK error",
+			input: `{"secret_key": "wJalrXUtnFEMI/K7MDENG/FAKE"}`,
+			leak:  "wJalrXUtnFEMI/K7MDENG/FAKE",
+			key:   "secret_key",
+		},
+		{
+			name:  "private_key in service account JSON",
+			input: `{"private_key": "-----BEGIN RSA PRIVATE KEY-----\nFAKEDATA\n-----END RSA PRIVATE KEY-----"}`,
+			leak:  "FAKEDATA",
+			key:   "private_key",
+		},
+		{
+			name:  "signing_key in webhook config",
+			input: `{"signing_key": "whsec_FAKESIGNINGKEY"}`,
+			leak:  "whsec_FAKESIGNINGKEY",
+			key:   "signing_key",
+		},
+		{
+			name:  "auth_token in service response",
+			input: `{"auth_token": "tok_FAKEAUTHTOKEN"}`,
+			leak:  "tok_FAKEAUTHTOKEN",
+			key:   "auth_token",
+		},
+		{
+			name:  "access_key in cloud provider error",
+			input: `{"access_key": "AKIAIOSFODNN7EXAMPLE"}`,
+			leak:  "AKIAIOSFODNN7EXAMPLE",
+			key:   "access_key",
+		},
+		{
+			name:  "api_secret in HMAC config",
+			input: `{"api_secret": "FAKEAPISECRET1234567890"}`,
+			leak:  "FAKEAPISECRET1234567890",
+			key:   "api_secret",
+		},
+		{
+			name:  "access_token compact JSON no spaces",
+			input: `{"access_token":"tok-FAKECOMPACT","token_type":"Bearer"}`,
+			leak:  "tok-FAKECOMPACT",
+			key:   "access_token",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("compound JSON key %q: secret leaked:\n  input:  %s\n  output: %s", tc.key, tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("compound JSON key %q: expected [REDACTED] marker in output, got: %s", tc.key, result)
+			}
+			// Key name must be preserved so operators can identify which field was redacted.
+			if !strings.Contains(result, `"`+tc.key+`"`) {
+				t.Errorf("compound JSON key %q: key name not preserved in output: %s", tc.key, result)
+			}
+		})
+	}
+}
+
+// TestRedactSecrets_JSONCompoundKeyNoFalsePositive verifies that common
+// non-sensitive JSON keys whose names contain sensitive substrings (e.g.
+// "cache_key_count", "token_expiry") are NOT redacted.
+func TestRedactSecrets_JSONCompoundKeyNoFalsePositive(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"cache_key_count is not a credential", `{"cache_key_count": "42"}`},
+		{"token_expiry is not a credential", `{"token_expiry": "3600"}`},
+		{"status is not a credential", `{"status": "running"}`},
+		{"host is not a credential", `{"host": "db.internal"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if result != tc.input {
+				t.Errorf("false positive: %q was modified to %q", tc.input, result)
+			}
+		})
+	}
+}
+
 // TestRedactSecrets_StripeAPIKeys verifies that Stripe secret keys and
 // restricted keys are redacted. Stripe uses underscore separators
 // (sk_live_/sk_test_/rk_live_/rk_test_) rather than hyphens, so they are not
