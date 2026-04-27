@@ -2509,3 +2509,126 @@ func TestDenyReason_IptablesTypeVariants(t *testing.T) {
 		}
 	}
 }
+
+// TestDenyReason_IptablesWriteOpAndMissingOp verifies that denyReason produces
+// targeted self-correcting messages for the two denial branches introduced by
+// the iptables read-only feature:
+//
+//  1. Write operation flag present (e.g. -F, -A, -P): the message names the
+//     specific offending flag and explains that it modifies firewall rules.
+//  2. No recognised operation flag present (e.g. bare "iptables" or only
+//     modifier flags like -n, -t): the message tells Claude which read-only
+//     operation flags are permitted.
+//
+// Without these tests a regression in the case "iptables", "ip6tables": switch
+// branch of denyReason would silently fall through to the generic
+// "not allowed (destructive or privileged command)" message, giving Claude no
+// guidance on how to self-correct (e.g. "use -L instead of -F").
+func TestDenyReason_IptablesWriteOpAndMissingOp(t *testing.T) {
+	t.Run("iptables write op names the flag and mentions firewall rules", func(t *testing.T) {
+		msg := denyReason(DefaultDeniedCommands, []string{"iptables", "-F"})
+		// Must name the offending flag.
+		if !strings.Contains(msg, "-F") {
+			t.Errorf("expected message to name the -F flag; got: %s", msg)
+		}
+		// Must explain that the flag modifies firewall rules.
+		if !strings.Contains(msg, "modifies firewall rules") {
+			t.Errorf("expected 'modifies firewall rules' in message; got: %s", msg)
+		}
+		// Must list at least one allowed read-only flag so Claude can self-correct.
+		if !strings.Contains(msg, "-L") {
+			t.Errorf("expected allowed flag -L to be mentioned; got: %s", msg)
+		}
+		// Must NOT fall through to the generic denial.
+		if strings.Contains(msg, "not allowed (destructive or privileged command)") {
+			t.Errorf("expected targeted message, got generic denial: %s", msg)
+		}
+	})
+
+	t.Run("iptables append write op names the flag", func(t *testing.T) {
+		msg := denyReason(DefaultDeniedCommands, []string{"iptables", "-A", "INPUT", "-j", "DROP"})
+		if !strings.Contains(msg, "-A") {
+			t.Errorf("expected message to name the -A flag; got: %s", msg)
+		}
+		if !strings.Contains(msg, "modifies firewall rules") {
+			t.Errorf("expected 'modifies firewall rules' in message; got: %s", msg)
+		}
+	})
+
+	t.Run("iptables long write op flag names the flag", func(t *testing.T) {
+		msg := denyReason(DefaultDeniedCommands, []string{"iptables", "--flush"})
+		if !strings.Contains(msg, "--flush") {
+			t.Errorf("expected message to name the --flush flag; got: %s", msg)
+		}
+		if !strings.Contains(msg, "modifies firewall rules") {
+			t.Errorf("expected 'modifies firewall rules' in message; got: %s", msg)
+		}
+	})
+
+	t.Run("iptables no op flag tells Claude which flags are allowed", func(t *testing.T) {
+		msg := denyReason(DefaultDeniedCommands, []string{"iptables"})
+		// Must mention that a read-only operation flag is required.
+		if !strings.Contains(msg, "read-only operation flag") {
+			t.Errorf("expected 'read-only operation flag' in message; got: %s", msg)
+		}
+		// Must list the permitted flags so Claude can pick one.
+		if !strings.Contains(msg, "-L") {
+			t.Errorf("expected -L in allowed flags list; got: %s", msg)
+		}
+		if !strings.Contains(msg, "-S") {
+			t.Errorf("expected -S in allowed flags list; got: %s", msg)
+		}
+		// Must NOT fall through to the generic denial.
+		if strings.Contains(msg, "not allowed (destructive or privileged command)") {
+			t.Errorf("expected targeted message, got generic denial: %s", msg)
+		}
+	})
+
+	t.Run("iptables modifier-only flags (no op flag) tells Claude which flags are allowed", func(t *testing.T) {
+		// -n is a modifier flag (suppress name resolution) but not an operation
+		// flag. A command with only modifier flags must be denied with the
+		// "requires a read-only operation flag" message, not the generic one.
+		msg := denyReason(DefaultDeniedCommands, []string{"iptables", "-n"})
+		if !strings.Contains(msg, "read-only operation flag") {
+			t.Errorf("expected 'read-only operation flag' in message; got: %s", msg)
+		}
+		if strings.Contains(msg, "not allowed (destructive or privileged command)") {
+			t.Errorf("expected targeted message, got generic denial: %s", msg)
+		}
+	})
+
+	t.Run("ip6tables write op names the flag and mentions firewall rules", func(t *testing.T) {
+		msg := denyReason(DefaultDeniedCommands, []string{"ip6tables", "-F"})
+		if !strings.Contains(msg, "-F") {
+			t.Errorf("expected message to name the -F flag; got: %s", msg)
+		}
+		if !strings.Contains(msg, "modifies firewall rules") {
+			t.Errorf("expected 'modifies firewall rules' in message; got: %s", msg)
+		}
+		if strings.Contains(msg, "not allowed (destructive or privileged command)") {
+			t.Errorf("expected targeted message, got generic denial: %s", msg)
+		}
+	})
+
+	t.Run("ip6tables no op flag tells Claude which flags are allowed", func(t *testing.T) {
+		msg := denyReason(DefaultDeniedCommands, []string{"ip6tables"})
+		if !strings.Contains(msg, "read-only operation flag") {
+			t.Errorf("expected 'read-only operation flag' in message; got: %s", msg)
+		}
+		if strings.Contains(msg, "not allowed (destructive or privileged command)") {
+			t.Errorf("expected targeted message, got generic denial: %s", msg)
+		}
+	})
+
+	t.Run("uppercase IPTABLES write op is normalised and still returns targeted message", func(t *testing.T) {
+		// denyReason normalises argv[0] to lowercase (same as isDenied), so
+		// "IPTABLES -F" must trigger the iptables case, not the generic path.
+		msg := denyReason(DefaultDeniedCommands, []string{"IPTABLES", "-F"})
+		if !strings.Contains(msg, "modifies firewall rules") {
+			t.Errorf("expected 'modifies firewall rules' for IPTABLES -F; got: %s", msg)
+		}
+		if strings.Contains(msg, "not allowed (destructive or privileged command)") {
+			t.Errorf("expected targeted message for uppercase IPTABLES, got generic denial: %s", msg)
+		}
+	})
+}
