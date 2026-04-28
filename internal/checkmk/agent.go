@@ -155,6 +155,19 @@ var DefaultDeniedCommands = map[string]bool{
 	// lua5.4, tclsh8.6, php8.1, and similar versioned binary names once
 	// the base name appears in the denylist.
 	"lua": true, "tclsh": true, "wish": true, "php": true,
+	// Package managers: installing a package executes arbitrary code during the
+	// install step (Python setup.py/pyproject.toml build hooks, Node.js
+	// package.json scripts, Ruby extconf.rb install hooks), effectively
+	// bypassing the interpreter denials above without invoking the interpreter
+	// directly. npx is the most direct bypass: it downloads and immediately
+	// executes a Node.js package in a single step ("npx evil-package" requires
+	// no prior install). pipx similarly fetches and runs a Python application
+	// from PyPI in one command ("pipx run evil-pkg"). The versioned-variant
+	// heuristic automatically extends the pip denial to pip2, pip3, pip3.10,
+	// and pip-3.10; pipx needs an explicit entry because "x" is not stripped.
+	"pip": true, "pipx": true,
+	"npm": true, "npx": true, "yarn": true,
+	"gem": true,
 	// busybox is a multi-call binary that exposes almost every Unix utility
 	// (including sh, rm, wget, nc) under a single executable. Running
 	// "busybox rm -rf /" or "busybox sh -c '...'" completely bypasses the

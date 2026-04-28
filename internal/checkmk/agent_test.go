@@ -656,6 +656,45 @@ func TestIsDenied_BlocksLuaTclPhpInterpreters(t *testing.T) {
 	}
 }
 
+// TestIsDenied_BlocksPackageManagers verifies that package-manager binaries are
+// denied. Installing a package triggers build hooks (Python setup.py, Node.js
+// postinstall scripts, Ruby extconf.rb) that execute arbitrary code on the
+// host, bypassing the interpreter denials above without invoking the
+// interpreter binary directly. npx and pipx are blocked as single-step
+// fetch-and-execute wrappers that need no prior install step.
+func TestIsDenied_BlocksPackageManagers(t *testing.T) {
+	denied := [][]string{
+		// pip — installs Python packages; setup.py/pyproject.toml build hooks
+		// run the Python interpreter indirectly during installation.
+		{"pip", "install", "evil-package"},
+		{"pip", "install", "-r", "requirements.txt"},
+		// Versioned variants — covered by the versioned-heuristic.
+		{"pip2", "install", "evil-package"},
+		{"pip3", "install", "evil-package"},
+		{"pip3.10", "install", "evil-package"},
+		// pipx — fetches and runs a Python app in one step; needs explicit
+		// entry because the "x" suffix is not stripped by the heuristic.
+		{"pipx", "run", "evil-pkg"},
+		{"pipx", "install", "evil-pkg"},
+		// npm — package.json scripts (preinstall/postinstall) run Node.js code.
+		{"npm", "install", "evil-package"},
+		{"npm", "run", "build"},
+		// npx — downloads and immediately executes a Node.js package.
+		{"npx", "evil-package"},
+		{"npx", "-y", "evil-package"},
+		// yarn — equivalent to npm for package.json lifecycle scripts.
+		{"yarn", "add", "evil-package"},
+		{"yarn", "install"},
+		// gem — Ruby gem install hooks (extconf.rb) run the Ruby interpreter.
+		{"gem", "install", "evil-gem"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("package-manager bypass not blocked: %v", argv)
+		}
+	}
+}
+
 func TestIsDenied_AllowsReadOnlyCommands(t *testing.T) {
 	allowed := [][]string{
 		{"df", "-h"},
