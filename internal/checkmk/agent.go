@@ -160,6 +160,17 @@ var DefaultDeniedCommands = map[string]bool{
 	// at and batch schedule one-shot commands for deferred execution outside
 	// the current SSH session, allowing persistence after the session ends.
 	"at": true, "batch": true,
+	// Debuggers: gdb, lldb, and cgdb expose an interactive shell command
+	// ("gdb -ex 'shell cmd'" / "lldb -o 'platform shell cmd'") that executes
+	// an arbitrary child process — effectively the same bypass as
+	// bash/python/env. gdbserver opens a TCP/Unix debug port that allows a
+	// remote client to control process execution on the host, enabling
+	// exfiltration and lateral movement without any local interaction.
+	// valgrind is a memory-analysis framework that always executes a target
+	// program as a child process ("valgrind /bin/sh -c '...'"), making it a
+	// direct command wrapper equivalent to nohup or timeout.
+	"gdb": true, "lldb": true, "cgdb": true, "gdbserver": true,
+	"valgrind": true,
 	// Process execution wrappers: these commands accept another command as an
 	// argument and execute it as a child process, allowing any denied command
 	// to run undetected. For example, "nohup rm -rf /" passes the isDenied

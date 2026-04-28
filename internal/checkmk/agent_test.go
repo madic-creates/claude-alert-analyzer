@@ -2844,3 +2844,41 @@ func TestDenyReason_IptablesWriteOpAndMissingOp(t *testing.T) {
 		}
 	})
 }
+
+// TestIsDenied_BlocksDebuggers verifies that gdb, lldb, cgdb, gdbserver, and
+// valgrind are denied by DefaultDeniedCommands. GNU debugger and its frontends
+// expose a built-in shell command ("gdb -ex 'shell rm -rf /'" or
+// "lldb -o 'platform shell cmd'") that spawns an arbitrary child process —
+// the same denylist bypass as bash/python/env. gdbserver opens a debug port
+// allowing a remote client to control process execution. valgrind always
+// executes its argument program as a child process, making it equivalent to
+// other process-execution wrappers (nohup, timeout) that are already denied.
+func TestIsDenied_BlocksDebuggers(t *testing.T) {
+	denied := [][]string{
+		// gdb — built-in "shell" command executes arbitrary child processes.
+		{"gdb", "/bin/sh"},
+		{"gdb", "-ex", "shell rm -rf /", "--batch", "/bin/true"},
+		{"gdb", "--args", "/bin/sh", "-c", "reboot"},
+		{"/usr/bin/gdb", "-ex", "shell cat /etc/shadow", "--batch", "/bin/ls"},
+		// lldb — "platform shell" / "process launch" execute child processes.
+		{"lldb", "--", "/bin/sh"},
+		{"lldb", "-o", "platform shell rm -rf /", "--", "/bin/true"},
+		{"/usr/bin/lldb", "/bin/sh"},
+		// cgdb — curses frontend for gdb; inherits the same shell-escape capabilities.
+		{"cgdb", "/bin/sh"},
+		{"/usr/bin/cgdb", "--args", "/bin/sh", "-c", "reboot"},
+		// gdbserver — opens a TCP/Unix debug port for remote process control.
+		{"gdbserver", ":1234", "/bin/sh"},
+		{"gdbserver", "--attach", ":1234", "1"},
+		{"/usr/bin/gdbserver", "0.0.0.0:9999", "/bin/bash"},
+		// valgrind — always executes its argument as a child process.
+		{"valgrind", "/bin/sh", "-c", "rm -rf /"},
+		{"valgrind", "--tool=memcheck", "/bin/sh"},
+		{"/usr/bin/valgrind", "/bin/bash", "-c", "reboot"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected debugger/valgrind command to be denied: %v", argv)
+		}
+	}
+}
