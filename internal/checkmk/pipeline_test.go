@@ -761,6 +761,49 @@ func TestProcessAlert_SSH_PanicClearsCooldown(t *testing.T) {
 	}
 }
 
+// TestProcessAlert_FailureBodySanitizesTitle verifies that embedded control
+// characters in alert.Title do not appear in failure notification bodies.
+// A crafted CheckMK webhook with a title containing "\n" or other C0 control
+// characters could otherwise corrupt the ntfy notification body, since
+// NtfyPublisher.Publish sanitizes the title HTTP header but only truncates
+// (not sanitizes) the body HTTP body.
+func TestProcessAlert_FailureBodySanitizesTitle(t *testing.T) {
+	pub := &mockPublisher{}
+	metrics := new(shared.AlertMetrics)
+
+	deps := PipelineDeps{
+		Analyzer:   &mockAnalyzer{err: fmt.Errorf("api error")},
+		Publishers: []shared.Publisher{pub},
+		Cooldown:   shared.NewCooldownManager(),
+		Metrics:    metrics,
+		SSHEnabled: false,
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		ValidateHost: func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
+			return &HostInfo{}, nil
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "fp-ctrl",
+		Title:       "host1 - Disk\n## Injected Section",
+		Severity:    "warning",
+		Fields:      map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+	}
+	ProcessAlert(context.Background(), deps, alert)
+
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
+	}
+	if strings.Contains(pub.calls[0].body, "\n## Injected Section") {
+		t.Errorf("control character from title leaked into failure body: %q", pub.calls[0].body)
+	}
+	if !strings.Contains(pub.calls[0].body, "host1 - Disk") {
+		t.Errorf("sanitized title should still appear in body, got: %q", pub.calls[0].body)
+	}
+}
+
 // TestProcessAlert_ValidationErrorNotLeakedToPrompt verifies that when host
 // validation fails, the raw error message (which contains attacker-controlled
 // values from the webhook payload like hostname and host_address) is NOT

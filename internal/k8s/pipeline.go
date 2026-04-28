@@ -35,8 +35,15 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 			panic(r) // re-panic so safeProcess can log the stack trace
 		}
 	}()
-	alertname := alert.Title
-	namespace := alert.Fields["label:namespace"]
+	// Sanitize at the point of extraction so that all downstream uses —
+	// failure notification bodies, log fields, and the Claude prompt — are
+	// free of control characters. The Claude userPrompt already applied
+	// SanitizeAlertField to alertname, but the failure-notification bodies
+	// passed it unsanitized, allowing embedded newlines or other C0 control
+	// characters from a crafted Alertmanager webhook to corrupt notification
+	// content. Sanitizing once here is simpler than at every call site.
+	alertname := shared.SanitizeAlertField(alert.Title)
+	namespace := shared.SanitizeAlertField(alert.Fields["label:namespace"])
 	slog.Info("processing alert", "alertname", alertname, "namespace", namespace)
 
 	actx := deps.GatherContext(ctx, alert)

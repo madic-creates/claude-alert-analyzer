@@ -400,6 +400,45 @@ func (c *capturePromptAnalyzer) Analyze(_ context.Context, _, userPrompt string)
 	return c.result, nil
 }
 
+// TestProcessAlert_FailureBodySanitizesTitle verifies that embedded control
+// characters in alert.Title do not appear in the failure notification body.
+// A crafted webhook with a title like "Alert\n## Injected" could otherwise
+// corrupt the ntfy notification body since NtfyPublisher.Publish does not
+// sanitize the body parameter (only the title header).
+func TestProcessAlert_FailureBodySanitizesTitle(t *testing.T) {
+	pub := &mockPublisher{}
+	metrics := new(shared.AlertMetrics)
+
+	deps := PipelineDeps{
+		Analyzer:     &mockAnalyzer{err: fmt.Errorf("api error")},
+		Publishers:   []shared.Publisher{pub},
+		Cooldown:     shared.NewCooldownManager(),
+		Metrics:      metrics,
+		SystemPrompt: "test",
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "fp-ctrl",
+		Title:       "HighCPU\n## Injected Section",
+		Severity:    "warning",
+		Fields:      map[string]string{},
+	}
+	ProcessAlert(context.Background(), deps, alert)
+
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
+	}
+	if strings.Contains(pub.calls[0].body, "\n## Injected Section") {
+		t.Errorf("control character from title leaked into failure body: %q", pub.calls[0].body)
+	}
+	if !strings.Contains(pub.calls[0].body, "HighCPU") {
+		t.Errorf("sanitized title should still appear in body, got: %q", pub.calls[0].body)
+	}
+}
+
 // TestProcessAlert_TitleFormatting verifies that the published title includes
 // the namespace when present and omits it when absent.
 func TestProcessAlert_TitleFormatting(t *testing.T) {
