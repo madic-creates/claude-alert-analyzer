@@ -267,6 +267,173 @@ func TestSendRequest_ReadBodyError(t *testing.T) {
 	}
 }
 
+// TestSendRequest_ContextCancelledDuringRetry verifies that when the context is
+// cancelled while sendRequest is waiting inside the retry-delay timer select,
+// the function returns immediately with a "context cancelled awaiting retry"
+// error rather than blocking for the full delay duration. This covers the
+// ctx.Done() case in the retry timer select (claude.go lines ~100-103), which
+// is not reached by tests that use zero-duration retryDelays (the "if delay > 0"
+// guard is false) or that cancel the context before the first HTTP attempt (no
+// retry is ever started). The path is production-relevant: during graceful
+// shutdown a cancelled context must unblock the 2–4 s default backoff
+// immediately.
+func TestSendRequest_ContextCancelledDuringRetry(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Always return 429 so sendRequest classifies the response as transient
+		// and enters the retry path with a delay.
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprint(w, "rate limited")
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := &ClaudeClient{
+		HTTP:    srv.Client(),
+		BaseURL: srv.URL,
+		APIKey:  "test-key",
+		Model:   "test",
+		// Use a non-zero delay so the "if delay > 0" guard is true and the
+		// timer select block is entered. 500 ms is long enough that the
+		// goroutine below can cancel reliably before the timer fires.
+		retryDelays: []time.Duration{500 * time.Millisecond},
+	}
+
+	// Cancel the context 50 ms after the first 429 response is received and
+	// the retry timer has started, so the ctx.Done() case fires mid-wait.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := client.sendRequest(ctx, map[string]string{"k": "v"})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error when context is cancelled during retry wait, got nil")
+	}
+	if !strings.Contains(err.Error(), "context cancelled awaiting retry") {
+		t.Errorf("expected 'context cancelled awaiting retry' in error, got: %v", err)
+	}
+	// The function should have returned well before the 500 ms delay expired.
+	// Allow 300 ms headroom for slow CI environments.
+	if elapsed >= 400*time.Millisecond {
+		t.Errorf("sendRequest took %v; expected early return on context cancellation", elapsed)
+	}
+}
+
+// TestSendRequest_RetryTimerFiresNaturally verifies that when a 429 response is
+// followed by a success on the next attempt, sendRequest lets the retry timer
+// fire naturally (the "case <-retryTimer.C:" case) and returns the successful
+// response. This covers the empty retryTimer.C case body at claude.go line 104
+// which is skipped by tests that use zero-duration delays (the "if delay > 0"
+// guard is false) and is not reached by the context-cancellation test (which
+// always hits ctx.Done() before the timer fires).
+func TestSendRequest_RetryTimerFiresNaturally(t *testing.T) {
+	var callCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := callCount.Add(1)
+		if n == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			fmt.Fprint(w, "rate limited")
+			return
+		}
+		// Second call: return a valid response so sendRequest succeeds.
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"content":[],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer srv.Close()
+
+	client := &ClaudeClient{
+		HTTP:    srv.Client(),
+		BaseURL: srv.URL,
+		APIKey:  "test-key",
+		Model:   "test",
+		// 1 ms delay: enters the "if delay > 0" timer block and fires almost
+		// immediately so the test stays fast.
+		retryDelays: []time.Duration{1 * time.Millisecond},
+	}
+
+	resp, err := client.sendRequest(context.Background(), map[string]string{"k": "v"})
+	if err != nil {
+		t.Fatalf("expected success after retry, got: %v", err)
+	}
+	if len(resp) == 0 {
+		t.Error("expected non-empty response body")
+	}
+	if callCount.Load() != 2 {
+		t.Errorf("expected 2 server calls (initial + 1 retry), got %d", callCount.Load())
+	}
+}
+
+// TestSendRequest_NetworkError_Retried verifies that when HTTP.Do itself fails
+// (e.g. the server closes the connection before sending any headers) and the
+// context is still live, sendRequest records the error and continues to the
+// next retry attempt rather than returning immediately. This covers the
+// `continue` statement at claude.go line 131, which is only reached when
+// doErr != nil and ctx.Err() == nil. It is not covered by
+// TestSendRequest_ReadBodyError (which fails during body reading, after Do
+// succeeds) or by the context-cancellation tests (which return early via
+// ctx.Err() != nil or hit the timer, not the Do path).
+func TestSendRequest_NetworkError_Retried(t *testing.T) {
+	var callCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := callCount.Add(1)
+		if n == 1 {
+			// First call: return 429 to trigger the retry path.
+			w.WriteHeader(http.StatusTooManyRequests)
+			fmt.Fprint(w, "rate limited")
+			return
+		}
+		// Second call: hijack and immediately close the connection without
+		// writing any bytes. The HTTP client will see an EOF while reading the
+		// status line and return a non-nil error from Do(), exercising the
+		// doErr != nil / continue branch at claude.go line 131.
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Error("server does not support hijacking")
+			return
+		}
+		conn, bufrw, hijackErr := hj.Hijack()
+		if hijackErr != nil {
+			t.Errorf("hijack failed: %v", hijackErr)
+			return
+		}
+		_ = bufrw.Flush()
+		_ = conn.Close()
+	}))
+	defer srv.Close()
+
+	client := &ClaudeClient{
+		// DisableKeepAlives ensures each attempt uses a fresh TCP connection so
+		// the hijacked close on attempt 2 cannot be "avoided" via conn reuse.
+		HTTP: &http.Client{
+			Transport: &http.Transport{DisableKeepAlives: true},
+			Timeout:   5 * time.Second,
+		},
+		BaseURL: srv.URL,
+		APIKey:  "test-key",
+		Model:   "test",
+		// Zero delay keeps the test fast; the "if delay > 0" guard is false so
+		// we skip the timer and reach the Do() call on attempt 2 immediately.
+		retryDelays: []time.Duration{0},
+	}
+
+	_, err := client.sendRequest(context.Background(), map[string]string{"k": "v"})
+	if err == nil {
+		t.Fatal("expected error from network failure on retry, got nil")
+	}
+	// The error must come from the Do() failure path (not a body-read error).
+	if !strings.Contains(err.Error(), "API request") {
+		t.Errorf("expected 'API request' error, got: %v", err)
+	}
+	if callCount.Load() != 2 {
+		t.Errorf("expected 2 server calls, got %d", callCount.Load())
+	}
+}
+
 // TestNtfyPublisher_Publish_CreateRequestError verifies that Publish returns a
 // "create request: ..." error when http.NewRequestWithContext fails because the
 // publisher's URL contains an invalid character (null byte). This covers the
