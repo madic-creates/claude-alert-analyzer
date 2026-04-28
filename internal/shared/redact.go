@@ -103,8 +103,24 @@ var sensitivePatterns = []sensitivePattern{
 		re:          regexp.MustCompile(`(?i)-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----`),
 		replacement: "[REDACTED]",
 	},
+	// Inline bearer/basic tokens that appear in log lines without an
+	// "Authorization:" header prefix. The character class includes:
+	//   A-Za-z0-9+/= — standard Base64 alphabet (opaque tokens, API keys)
+	//   .            — JWT segment separator (header.payload.signature)
+	//   -            — base64url and hyphenated token separators (RFC 4648 §5,
+	//                  e.g. "my-service-token-abc123", "eyJ...", RFC 9068)
+	//   _            — base64url alphabet (RFC 4648 §5, used by JWT and
+	//                  many API key formats like Stripe's "sk_live_" keys)
+	// Without these additions the pattern only redacts up to the first dot or
+	// hyphen: a JWT like "bearer eyJhbGci.payload.sig" would leave the payload
+	// segment (which may contain email, sub, roles) exposed as ".payload.sig",
+	// and a hyphenated token like "bearer my-svc-key-abc123def456ghi789" would
+	// not be redacted at all because the match stops at the first hyphen (2 chars
+	// < the 20-character minimum). The Authorization-header pattern above catches
+	// "Authorization: Bearer …" lines first; this pattern handles the remaining
+	// cases where the token appears inline in log or diagnostic output.
 	{
-		re:          regexp.MustCompile(`(?i)(basic|bearer)\s+[A-Za-z0-9+/=]{20,}`),
+		re:          regexp.MustCompile(`(?i)(basic|bearer)\s+[A-Za-z0-9+/=._-]{20,}`),
 		replacement: "[REDACTED]",
 	},
 	// DB connection strings must come before the generic email pattern, because

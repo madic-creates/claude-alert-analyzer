@@ -123,6 +123,77 @@ func TestRedactSecrets_BearerTokenShort(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_BearerTokenInlineLogLine verifies that bearer and basic
+// tokens appearing in log lines (without an "Authorization:" header prefix)
+// are fully redacted by the inline bearer/basic pattern. Two gap cases that
+// were missed by the previous character class [A-Za-z0-9+/=]:
+//
+//  1. JWT tokens: the old class excluded "." so the match stopped at the first
+//     segment separator, leaving the payload (which may contain email, sub,
+//     roles) and signature segments unredacted.
+//
+//  2. Hyphenated tokens: the old class excluded "-" so the match stopped at
+//     the first hyphen — typically after just 2–3 characters — and the 20-char
+//     minimum was never reached, leaving the entire token unredacted.
+//
+// The Authorization-header pattern (pattern 1) runs first and catches lines
+// containing "Authorization: Bearer …"; the inline pattern tested here handles
+// the remaining cases where the token appears in application log output.
+func TestRedactSecrets_BearerTokenInlineLogLine(t *testing.T) {
+	cases := []struct {
+		name string
+		// input must NOT contain "authorization:" so the Authorization-header
+		// pattern does not fire first, ensuring only the inline bearer pattern is
+		// exercised.
+		input string
+		leak  string // substring that must NOT remain in result
+	}{
+		{
+			// JWT token (header.payload.signature) after "bearer" in a log line.
+			// Previously only the header segment was redacted; the payload
+			// segment containing base64url-encoded claims was left intact.
+			name:  "JWT after bearer in log line",
+			input: "authentication failed: bearer eyJhbGciOiJSUzI1NiIsImtpZCI6IkZBS0UifQ.eyJzdWIiOiJ1c2VyQGV4YW1wbGUuY29tIn0.FAKESIG",
+			leak:  "eyJzdWIiOiJ1c2VyQGV4YW1wbGUuY29tIn0", // payload segment
+		},
+		{
+			// Hyphenated bearer token in a log line.
+			// Previously the match stopped at the first hyphen (only 2 chars
+			// matched), so the 20-character minimum was never reached and the
+			// entire token was left in the output unredacted.
+			name:  "hyphenated bearer token in log line",
+			input: "failed to call API: bearer my-service-api-token-abc123def456ghi789",
+			leak:  "my-service-api-token-abc123def456ghi789",
+		},
+		{
+			// Base64url token (underscore variant) after "bearer" in a log line.
+			// base64url uses "_" instead of "/" and "-" instead of "+".
+			// The input avoids "token:" before "bearer" so that the keyword=value
+			// pattern does not consume "bearer" as a value first.
+			name:  "base64url bearer token with underscores",
+			input: "authentication error: bearer eyJhbGciOiJFUzI1NiIsImtpZCI6ImZha2UifQ_eyJzdWIiOiJ1c2VyXzEyMyJ9_FAKEsig_abc123def456",
+			leak:  "eyJhbGciOiJFUzI1NiIsImtpZCI6ImZha2UifQ_eyJzdWIiOiJ1c2VyXzEyMyJ9_FAKEsig_abc123def456",
+		},
+		{
+			// "basic" scheme with a hyphenated credential in a log line.
+			name:  "basic scheme with hyphenated credential",
+			input: "basic auth attempt: basic dXNlcjpwYXNz-with-extra-hyphen-padding12345",
+			leak:  "dXNlcjpwYXNz-with-extra-hyphen-padding12345",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("token leaked in output:\n  input:  %s\n  output: %s\n  leaked: %s", tc.input, result, tc.leak)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
 // TestRedactSecrets_NonBearerAuthSchemes verifies that Authorization headers
 // using schemes other than Basic/Bearer (e.g. Token, ApiKey, Digest) are fully
 // redacted. Previously only Basic and Bearer were matched by the first pattern;
