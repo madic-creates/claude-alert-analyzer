@@ -911,6 +911,77 @@ func TestGetPodLogs_ExcessFailingPodsTruncationNote(t *testing.T) {
 	}
 }
 
+// TestGetPodLogs_APILimitHitTruncationNote verifies that getPodLogs appends
+// the "more may exist" note when the server-side Limit is reached
+// (len(podList.Items) >= maxLogPods*3), even when the number of failing pods
+// does not exceed maxLogPods (so the first OR branch in the condition does not
+// fire). This covers the distinct scenario where the API returned the maximum
+// allowed items and additional pods may exist in the namespace, but most
+// returned pods are healthy running pods that were filtered out.
+func TestGetPodLogs_APILimitHitTruncationNote(t *testing.T) {
+	// Build a pod list with exactly maxLogPods*3 (9) pods total:
+	//   failingCount (2) failing pods (Phase=Failed)
+	//   remaining (7) healthy Running pods with all containers Ready
+	// This satisfies:
+	//   len(failingPods) = 2 <= maxLogPods (3) → first  OR branch is false
+	//   len(podList.Items) = 9 >= maxLogPods*3 → second OR branch is true
+	const total = maxLogPods * 3
+	const failingCount = 2
+
+	podItems := make([]string, 0, total)
+	for i := 0; i < failingCount; i++ {
+		podItems = append(podItems, fmt.Sprintf(`{
+			"apiVersion": "v1", "kind": "Pod",
+			"metadata": {"name": "failing-pod-%d", "namespace": "testns", "resourceVersion": "1"},
+			"spec": {"containers": [{"name": "app", "image": "nginx"}]},
+			"status": {"phase": "Failed"}
+		}`, i))
+	}
+	for i := failingCount; i < total; i++ {
+		// Running pod with all containers Ready — filtered out as healthy.
+		podItems = append(podItems, fmt.Sprintf(`{
+			"apiVersion": "v1", "kind": "Pod",
+			"metadata": {"name": "healthy-pod-%d", "namespace": "testns", "resourceVersion": "1"},
+			"spec": {"containers": [{"name": "app", "image": "nginx"}]},
+			"status": {
+				"phase": "Running",
+				"containerStatuses": [{"name": "app", "ready": true, "restartCount": 0, "image": "nginx", "imageID": "docker://nginx"}]
+			}
+		}`, i))
+	}
+	podListJSON := fmt.Sprintf(`{
+		"apiVersion": "v1", "kind": "PodList",
+		"metadata": {"resourceVersion": "1"},
+		"items": [%s]
+	}`, strings.Join(podItems, ","))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/log") {
+			http.Error(w, "server error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, podListJSON) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	cs, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatalf("failed to create clientset: %v", err)
+	}
+
+	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	result := getPodLogs(context.Background(), cs, "testns", cfg)
+
+	if !strings.Contains(result, "more may exist") {
+		t.Errorf("expected 'more may exist' truncation note in pod logs output, got: %q", result)
+	}
+	// limit = min(len(failingPods), maxLogPods) = min(2, 3) = 2 = failingCount
+	if !strings.Contains(result, fmt.Sprintf("first %d failing pod(s)", failingCount)) {
+		t.Errorf("expected pod count %d in truncation note, got: %q", failingCount, result)
+	}
+}
+
 // captureAnalyzer is a shared.Analyzer that records the user prompt it receives.
 // Used by TestProcessAlert_AlertFieldsArePromptInjectionSafe to verify that
 // sanitized values (not raw attacker-controlled input) reach the Claude API.
