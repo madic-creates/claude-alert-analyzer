@@ -1930,6 +1930,28 @@ func TestIsDenied_BlocksTruncateAndShred(t *testing.T) {
 	}
 }
 
+// TestIsDenied_BlocksUnlinkAndFallocate verifies that unlink and fallocate are
+// denied by the default denylist. unlink deletes a single file via the
+// unlink(2) syscall directly (e.g. "unlink /etc/passwd") and is a separate
+// POSIX binary from rm — both must be blocked. fallocate can fill a filesystem
+// instantly ("fallocate -l 100G /tmp/fill") or punch holes that corrupt file
+// data ("fallocate --punch-hole ..."). Both are destructive write operations.
+func TestIsDenied_BlocksUnlinkAndFallocate(t *testing.T) {
+	cases := [][]string{
+		{"unlink", "/etc/passwd"},
+		{"unlink", "/var/log/auth.log"},
+		{"/usr/bin/unlink", "/tmp/file"},
+		{"fallocate", "-l", "100G", "/tmp/fill"},
+		{"fallocate", "--punch-hole", "-o", "0", "-l", "4096", "/etc/hosts"},
+		{"/usr/bin/fallocate", "-l", "1G", "/tmp/disk-fill"},
+	}
+	for _, argv := range cases {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected %v to be denied", argv)
+		}
+	}
+}
+
 // TestIsDenied_BlocksBusybox verifies that busybox is denied by
 // DefaultDeniedCommands. busybox is a multi-call binary that bundles nearly
 // every Unix utility (sh, rm, wget, nc, …) under a single executable. Because

@@ -100,6 +100,15 @@ var DefaultDeniedCommands = map[string]bool{
 	// content to prevent recovery — both are write operations that must be
 	// blocked even though they are not shells or privilege-escalation tools.
 	"truncate": true, "shred": true,
+	// unlink deletes a single file via the unlink(2) syscall directly
+	// (e.g. "unlink /etc/passwd"). rm is already blocked, but unlink is a
+	// separate POSIX binary present on all Linux systems (/usr/bin/unlink) that
+	// achieves the same result and must be explicitly denied.
+	// fallocate allocates or deallocates disk space for a file: it can fill a
+	// filesystem instantly ("fallocate -l 100G /tmp/fill") or punch holes that
+	// corrupt file data ("fallocate --punch-hole ..."). Both are destructive
+	// write operations that bypass the read-only intent of the diagnostic session.
+	"unlink": true, "fallocate": true,
 	"systemctl": true, // handled specially below
 	// Shells and interpreters: deny to prevent denylist bypass via
 	// "bash -c 'rm -rf /'", "python3 -c 'import os; os.system(...)'", etc.
