@@ -806,7 +806,7 @@ func RunAgenticDiagnostics(
 				output = shared.SanitizeOutput(output)
 				output = shared.RedactSecrets(output)
 				output = shared.Truncate(output, 4096)
-				return fmt.Sprintf("$ %s\n%s\n[exited: %v]", shellQuote(argv), output, err), nil
+				return fmt.Sprintf("$ %s\n%s\n[exited: %v]", logCmd, output, err), nil
 			}
 			return fmt.Sprintf("Command failed: %v", err), nil
 		}
@@ -815,7 +815,7 @@ func RunAgenticDiagnostics(
 		output = shared.RedactSecrets(output)
 		output = shared.Truncate(output, 4096)
 
-		return fmt.Sprintf("$ %s\n%s", shellQuote(argv), output), nil
+		return fmt.Sprintf("$ %s\n%s", logCmd, output), nil
 	}
 
 	analysis, err := client.RunToolLoop(
