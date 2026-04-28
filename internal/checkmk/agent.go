@@ -28,7 +28,7 @@ Guidelines:
 - You have NO root/sudo access — never attempt privilege escalation
 - Start broad (check logs, resource usage) then narrow down based on findings
 - You have a maximum of %d command rounds — use them wisely
-- Common useful commands: journalctl, df, free, top, ps, ss, ip, lsblk, cat/tail/head on log files, systemctl status/show, du, lsof, netstat, find, iptables -L/-S/-n/-v (read-only firewall rules)
+- Common useful commands: journalctl, df, free, top, ps, ss, ip, lsblk, cat/tail/head on log files, systemctl status/show, du, lsof, netstat, find, iptables -L/-S/-n/-v or nft list ruleset/tables/chains (read-only firewall rules)
 
 Output your final analysis in markdown (headings, bold, lists, code blocks — no tables):
 1. Root cause (most likely explanation based on evidence)
@@ -203,6 +203,16 @@ var iptablesReadOnlyOps = map[string]bool{
 	"-h": true, "--help": true,
 }
 
+// nftReadOnlySubcmds are nft(8) subcommands that only read firewall state
+// without modifying it. "nft list ..." (e.g. list ruleset, list tables, list
+// chains) is the only nft subcommand used for read-only firewall inspection.
+// All other nft subcommands (add, delete, flush, replace, create, rename,
+// import, export, monitor, describe) either modify firewall state or stream
+// output indefinitely, so only "list" is permitted.
+var nftReadOnlySubcmds = map[string]bool{
+	"list": true,
+}
+
 // iptablesWriteOps are iptables(8)/ip6tables(8) operation flags that modify
 // firewall state. Their presence in any argv causes the command to be denied
 // even if a read-only operation flag also appears.
@@ -296,6 +306,25 @@ func isDenied(denied map[string]bool, argv []string) bool {
 			}
 		}
 		return !readOnly // deny if no read-only operation flag found
+	}
+
+	// Special case: nft with the read-only "list" subcommand is allowed even
+	// when "nft" is in the denylist. nft(8) is the nftables control tool and
+	// the modern replacement for iptables on Linux 3.13+ (default on
+	// Debian/Ubuntu 21+, Fedora 34+, RHEL 8+). "nft list ..." only reads
+	// firewall state; all other subcommands (add, delete, flush, etc.) modify
+	// it. Global options (e.g. -n/--numeric, -j/--json) may appear before the
+	// subcommand, so skip leading dash-prefixed arguments to find it, matching
+	// the same pattern used for systemctl below.
+	if cmd == "nft" && denied["nft"] {
+		subcmd := ""
+		for _, arg := range argv[1:] {
+			if !strings.HasPrefix(arg, "-") {
+				subcmd = arg
+				break
+			}
+		}
+		return !nftReadOnlySubcmds[strings.ToLower(subcmd)]
 	}
 
 	// Special case: systemctl with read-only subcommands is allowed.
@@ -407,15 +436,18 @@ func isDenied(denied map[string]bool, argv []string) bool {
 	// heuristic only strips trailing digits, dots, and hyphens, so "iptables-legacy" is
 	// never reduced to "iptables" (it ends with 'y', not a digit or dot). Guard with
 	// denied["iptables"] / denied["ip6tables"] to respect custom denylists.
+	// Exception: any variant ending in "-save" (iptables-save, iptables-legacy-save,
+	// iptables-nft-save) only dumps rules to stdout and never modifies firewall state;
+	// allow these the same way the plain "iptables -S" read-only flag path is allowed.
 	if strings.HasPrefix(cmd, "iptables-") && len(cmd) > len("iptables-") && denied["iptables"] {
-		if cmd == "iptables-save" {
-			return false // iptables-save only reads rules; allow it
+		if strings.HasSuffix(cmd, "-save") {
+			return false // *-save variants only read rules; allow them
 		}
 		return true
 	}
 	if strings.HasPrefix(cmd, "ip6tables-") && len(cmd) > len("ip6tables-") && denied["ip6tables"] {
-		if cmd == "ip6tables-save" {
-			return false // ip6tables-save only reads rules; allow it
+		if strings.HasSuffix(cmd, "-save") {
+			return false // *-save variants only read rules; allow them
 		}
 		return true
 	}
@@ -458,6 +490,21 @@ func denyReason(denied map[string]bool, argv []string) string {
 	cmd := strings.ToLower(strings.TrimSpace(filepath.Base(argv[0])))
 
 	switch cmd {
+	case "nft":
+		// Find the first non-option argument as the subcommand, matching
+		// the same logic used in isDenied so the message targets the real reason.
+		subcmd := ""
+		for _, arg := range argv[1:] {
+			if !strings.HasPrefix(arg, "-") {
+				subcmd = arg
+				break
+			}
+		}
+		if subcmd != "" {
+			return fmt.Sprintf("Command denied: nft %s is not permitted; only the read-only %q subcommand is allowed (e.g. nft list ruleset, nft list tables, nft list chains)", subcmd, "list")
+		}
+		return "Command denied: nft requires a read-only subcommand; allowed subcommand: \"list\" (e.g. nft list ruleset)"
+
 	case "iptables", "ip6tables":
 		// iptables flags are case-sensitive — do not lowercase before lookup.
 		allowed := []string{"-L/--list", "-S/--list-rules", "-C/--check"}
@@ -547,11 +594,13 @@ func denyReason(denied map[string]bool, argv []string) string {
 	// ip6tables-legacy). isDenied blocks these when "iptables"/"ip6tables" is in the denylist.
 	// Give Claude a specific message so it understands why and does not retry with another variant.
 	if strings.HasPrefix(cmd, "iptables-") && len(cmd) > len("iptables-") && denied["iptables"] {
-		// iptables-save is allowed (read-only); it would not reach denyReason.
+		// *-save variants (iptables-save, iptables-legacy-save, iptables-nft-save) are
+		// allowed (read-only) and would not reach denyReason.
 		return fmt.Sprintf("Command denied: %q is a firewall variant of %q which is in the command denylist; use iptables -L/-S for read-only listing or iptables-save instead", cmd, "iptables")
 	}
 	if strings.HasPrefix(cmd, "ip6tables-") && len(cmd) > len("ip6tables-") && denied["ip6tables"] {
-		// ip6tables-save is allowed (read-only); it would not reach denyReason.
+		// *-save variants (ip6tables-save, ip6tables-legacy-save, ip6tables-nft-save) are
+		// allowed (read-only) and would not reach denyReason.
 		return fmt.Sprintf("Command denied: %q is a firewall variant of %q which is in the command denylist; use ip6tables -L/-S for read-only listing or ip6tables-save instead", cmd, "ip6tables")
 	}
 

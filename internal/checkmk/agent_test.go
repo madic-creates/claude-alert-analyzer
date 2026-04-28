@@ -706,6 +706,12 @@ func TestIsDenied_IptablesSpecialCases(t *testing.T) {
 		{"iptables-save"},
 		{"iptables-save", "-t", "nat"},
 		{"ip6tables-save"},
+		// Backend-specific save variants (e.g. iptables-legacy-save, iptables-nft-save)
+		// ship alongside /sbin/iptables on Debian/Ubuntu and are equally read-only.
+		{"iptables-legacy-save"},
+		{"iptables-nft-save"},
+		{"ip6tables-legacy-save"},
+		{"ip6tables-nft-save"},
 	}
 	for _, argv := range allowed {
 		if isDenied(DefaultDeniedCommands, argv) {
@@ -732,6 +738,43 @@ func TestIsDenied_IptablesSpecialCases(t *testing.T) {
 		{"iptables-nft"},
 		// iptables-save/ip6tables-save with --list flag style — no known op flag.
 		{"iptables", "--modprobe=foo"}, // only modifier, no operation — deny
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected denied: %v", argv)
+		}
+	}
+}
+
+func TestIsDenied_NftSpecialCases(t *testing.T) {
+	// "nft list ..." is the only read-only nft subcommand; it must be allowed
+	// even though "nft" is in DefaultDeniedCommands.
+	allowed := [][]string{
+		{"nft", "list", "ruleset"},
+		{"nft", "list", "tables"},
+		{"nft", "list", "chains"},
+		{"nft", "list", "chain", "inet", "filter", "input"},
+		{"nft", "-n", "list", "ruleset"},        // -n before subcommand
+		{"nft", "--numeric", "list", "ruleset"}, // long option before subcommand
+		{"nft", "-j", "list", "tables"},         // --json short form before subcommand
+		{"nft", "LIST", "ruleset"},              // subcommand match is case-insensitive
+	}
+	for _, argv := range allowed {
+		if isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected allowed: %v", argv)
+		}
+	}
+
+	// All non-list subcommands and subcommand-less invocations must be denied.
+	denied := [][]string{
+		{"nft", "add", "table", "inet", "filter"},
+		{"nft", "delete", "rule", "inet", "filter", "input", "handle", "5"},
+		{"nft", "flush", "ruleset"},
+		{"nft", "flush", "chain", "inet", "filter", "input"},
+		{"nft", "replace", "rule", "inet", "filter", "input", "handle", "3", "drop"},
+		{"nft"},                             // no subcommand — deny
+		{"nft", "--numeric"},                // only option, no subcommand — deny
+		{"nft", "-f", "/etc/nftables.conf"}, // -f applies rules from a file
 	}
 	for _, argv := range denied {
 		if !isDenied(DefaultDeniedCommands, argv) {
@@ -2744,6 +2787,60 @@ func TestDenyReason_IptablesWriteOpAndMissingOp(t *testing.T) {
 		}
 		if strings.Contains(msg, "not allowed (destructive or privileged command)") {
 			t.Errorf("expected targeted message for uppercase IPTABLES, got generic denial: %s", msg)
+		}
+	})
+
+	t.Run("nft write subcommand returns specific guidance naming the allowed subcommand", func(t *testing.T) {
+		// denyReason must name the denied subcommand and tell Claude that only
+		// "list" is allowed, so it can self-correct (e.g. replace "nft flush"
+		// with "nft list ruleset") rather than abandoning the diagnostic approach.
+		msg := denyReason(DefaultDeniedCommands, []string{"nft", "flush", "ruleset"})
+		if !strings.Contains(msg, "flush") {
+			t.Errorf("expected message to name the denied subcommand; got: %s", msg)
+		}
+		if !strings.Contains(msg, "list") {
+			t.Errorf("expected message to name the allowed 'list' subcommand; got: %s", msg)
+		}
+		if strings.Contains(msg, "not allowed (destructive or privileged command)") {
+			t.Errorf("expected targeted message, got generic denial: %s", msg)
+		}
+	})
+
+	t.Run("nft with add subcommand returns specific guidance", func(t *testing.T) {
+		msg := denyReason(DefaultDeniedCommands, []string{"nft", "add", "rule", "inet", "filter", "input", "drop"})
+		if !strings.Contains(msg, "add") {
+			t.Errorf("expected message to name the denied subcommand; got: %s", msg)
+		}
+		if !strings.Contains(msg, "list") {
+			t.Errorf("expected message to name the allowed 'list' subcommand; got: %s", msg)
+		}
+	})
+
+	t.Run("nft with no subcommand returns guidance listing the allowed subcommand", func(t *testing.T) {
+		// "nft" without a subcommand is denied with a message that tells Claude
+		// which subcommand to use, matching the guidance given for "systemctl"
+		// and "iptables" when no operation flag is provided.
+		msg := denyReason(DefaultDeniedCommands, []string{"nft"})
+		if !strings.Contains(msg, "nft") {
+			t.Errorf("expected message to mention nft; got: %s", msg)
+		}
+		if !strings.Contains(msg, "list") {
+			t.Errorf("expected message to name the allowed 'list' subcommand; got: %s", msg)
+		}
+		if strings.Contains(msg, "not allowed (destructive or privileged command)") {
+			t.Errorf("expected targeted message, got generic denial: %s", msg)
+		}
+	})
+
+	t.Run("nft with option only (no subcommand) returns guidance listing the allowed subcommand", func(t *testing.T) {
+		// Options like --numeric appear before the subcommand; when no subcommand
+		// follows, denyReason should produce the same "requires a subcommand" message.
+		msg := denyReason(DefaultDeniedCommands, []string{"nft", "--numeric"})
+		if !strings.Contains(msg, "list") {
+			t.Errorf("expected message to name the allowed 'list' subcommand; got: %s", msg)
+		}
+		if strings.Contains(msg, "not allowed (destructive or privileged command)") {
+			t.Errorf("expected targeted message, got generic denial: %s", msg)
 		}
 	})
 }
