@@ -41,13 +41,14 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	}()
 	hostname := alert.Fields["hostname"]
 	hostAddress := alert.Fields["host_address"]
-	// Sanitize the alert title once here so that all failure notification
-	// bodies are free of embedded control characters. The alert.Title is
+	// Sanitize the alert title once here so that all downstream uses —
+	// notification titles, notification bodies, log fields, and the Claude
+	// prompt — are free of embedded control characters. The alert.Title is
 	// derived from the webhook hostname and service_description, both of
 	// which are sanitized in GatherContext when they appear in the Claude
-	// prompt, but were previously injected unsanitized into failure message
-	// bodies. NtfyPublisher.Publish already sanitizes the title parameter,
-	// but not the body — this ensures consistency across all uses.
+	// prompt. NtfyPublisher.Publish sanitizes the HTTP title header itself,
+	// but other Publisher implementations may not, so we sanitize here
+	// before all uses (both title and body arguments to PublishAll).
 	safeTitle := shared.SanitizeAlertField(alert.Title)
 
 	slog.Info("processing CheckMK alert", "hostname", hostname, "service", alert.Fields["service_description"])
@@ -80,7 +81,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 			slog.Error("agentic diagnostics failed", "error", err)
 			deps.Metrics.RecordClaudeAPIError(alert.Source)
 			if notifyErr := shared.PublishAll(ctx, deps.Publishers,
-				fmt.Sprintf("Analysis FAILED: %s", alert.Title), "5",
+				fmt.Sprintf("Analysis FAILED: %s", safeTitle), "5",
 				fmt.Sprintf("**Agentic diagnostics failed** for %s: %v\n\nManual investigation needed.", safeTitle, err)); notifyErr != nil {
 				slog.Warn("failed to publish failure notification", "hostname", hostname, "error", notifyErr)
 			}
@@ -95,7 +96,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 			slog.Error("analysis failed", "error", err)
 			deps.Metrics.RecordClaudeAPIError(alert.Source)
 			if notifyErr := shared.PublishAll(ctx, deps.Publishers,
-				fmt.Sprintf("Analysis FAILED: %s", alert.Title), "5",
+				fmt.Sprintf("Analysis FAILED: %s", safeTitle), "5",
 				fmt.Sprintf("**Analysis failed** for %s: %v\n\nManual investigation needed.", safeTitle, err)); notifyErr != nil {
 				slog.Warn("failed to publish failure notification", "hostname", hostname, "error", notifyErr)
 			}
@@ -108,7 +109,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	if analysis == "" {
 		slog.Warn("analysis returned empty result, treating as failure", "hostname", hostname)
 		if notifyErr := shared.PublishAll(ctx, deps.Publishers,
-			fmt.Sprintf("Analysis FAILED: %s", alert.Title), "5",
+			fmt.Sprintf("Analysis FAILED: %s", safeTitle), "5",
 			fmt.Sprintf("**Analysis produced empty result** for %s.\n\nManual investigation needed.", safeTitle)); notifyErr != nil {
 			slog.Warn("failed to publish failure notification", "hostname", hostname, "error", notifyErr)
 		}
@@ -123,7 +124,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 		priority = "3"
 	}
 
-	title := fmt.Sprintf("Analysis: %s", alert.Title)
+	title := fmt.Sprintf("Analysis: %s", safeTitle)
 	if err := shared.PublishAll(ctx, deps.Publishers, title, priority, analysis); err != nil {
 		deps.Metrics.RecordNtfyPublishError(alert.Source)
 		deps.Cooldown.Clear(alert.Fingerprint)

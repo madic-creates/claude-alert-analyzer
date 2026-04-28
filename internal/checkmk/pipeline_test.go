@@ -804,6 +804,91 @@ func TestProcessAlert_FailureBodySanitizesTitle(t *testing.T) {
 	}
 }
 
+// TestProcessAlert_FailureTitleSanitizesTitle verifies that embedded control
+// characters in alert.Title do not appear in the notification title argument
+// passed to publishers. NtfyPublisher sanitizes the title HTTP header itself,
+// but other Publisher implementations may not — so ProcessAlert must pass a
+// sanitized string to PublishAll for both the title and the body.
+func TestProcessAlert_FailureTitleSanitizesTitle(t *testing.T) {
+	pub := &mockPublisher{}
+	metrics := new(shared.AlertMetrics)
+
+	deps := PipelineDeps{
+		Analyzer:   &mockAnalyzer{err: fmt.Errorf("api error")},
+		Publishers: []shared.Publisher{pub},
+		Cooldown:   shared.NewCooldownManager(),
+		Metrics:    metrics,
+		SSHEnabled: false,
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		ValidateHost: func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
+			return &HostInfo{}, nil
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "fp-title-ctrl",
+		Title:       "host1 - Disk\n## Injected Section",
+		Severity:    "warning",
+		Fields:      map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+	}
+	ProcessAlert(context.Background(), deps, alert)
+
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
+	}
+	// The newline must be stripped — a raw "\n" in an HTTP title header is
+	// invalid (RFC 7230 §3.2.6) and could split the header line in vulnerable
+	// HTTP stacks. SanitizeAlertField strips all C0 control characters.
+	if strings.ContainsRune(pub.calls[0].title, '\n') {
+		t.Errorf("newline from alert.Title leaked into notification title: %q", pub.calls[0].title)
+	}
+	if !strings.Contains(pub.calls[0].title, "host1 - Disk") {
+		t.Errorf("sanitized title should still appear in notification title, got: %q", pub.calls[0].title)
+	}
+}
+
+// TestProcessAlert_SuccessTitleSanitizesTitle verifies that embedded control
+// characters in alert.Title do not appear in the notification title for
+// successful analyses (the "Analysis: <title>" title passed to PublishAll).
+func TestProcessAlert_SuccessTitleSanitizesTitle(t *testing.T) {
+	pub := &mockPublisher{}
+	metrics := new(shared.AlertMetrics)
+
+	deps := PipelineDeps{
+		Analyzer:   &mockAnalyzer{result: "root cause: disk full"},
+		Publishers: []shared.Publisher{pub},
+		Cooldown:   shared.NewCooldownManager(),
+		Metrics:    metrics,
+		SSHEnabled: false,
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		ValidateHost: func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
+			return &HostInfo{}, nil
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "fp-success-ctrl",
+		Title:       "host1 - Disk\n## Injected",
+		Severity:    "critical",
+		Fields:      map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+	}
+	ProcessAlert(context.Background(), deps, alert)
+
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
+	}
+	if strings.Contains(pub.calls[0].title, "\n") {
+		t.Errorf("newline from alert.Title leaked into success notification title: %q", pub.calls[0].title)
+	}
+	if !strings.Contains(pub.calls[0].title, "host1 - Disk") {
+		t.Errorf("sanitized title should appear in success notification title, got: %q", pub.calls[0].title)
+	}
+}
+
 // TestProcessAlert_ValidationErrorNotLeakedToPrompt verifies that when host
 // validation fails, the raw error message (which contains attacker-controlled
 // values from the webhook payload like hostname and host_address) is NOT
