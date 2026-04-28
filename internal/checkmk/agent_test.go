@@ -513,6 +513,11 @@ func TestIsDenied_BlocksShellInterpreterBypass(t *testing.T) {
 		{"dash", "-c", "reboot"},
 		{"zsh", "-c", "kill -9 1"},
 		{"fish", "-c", "dd if=/dev/zero of=/dev/sda"},
+		{"tcsh", "-c", "rm -rf /"},
+		{"csh", "-c", "shutdown now"},
+		{"ksh", "-c", "kill -9 1"},
+		{"mksh", "-c", "reboot"},
+		{"ash", "-c", "dd if=/dev/zero of=/dev/sda"},
 		{"python", "-c", "import os; os.system('rm -rf /')"},
 		{"python2", "-c", "import os; os.system('rm -rf /')"},
 		{"python3", "-c", "import os; os.system('rm -rf /')"},
@@ -526,6 +531,39 @@ func TestIsDenied_BlocksShellInterpreterBypass(t *testing.T) {
 	for _, argv := range denied {
 		if !isDenied(DefaultDeniedCommands, argv) {
 			t.Errorf("shell/interpreter bypass not blocked: %v", argv)
+		}
+	}
+}
+
+// TestIsDenied_BlocksAdditionalShells verifies that tcsh, csh, ksh, mksh, and
+// ash are denied. These shells are present on many Linux and BSD systems and
+// all accept a -c flag that executes an arbitrary command string, making them
+// equivalent denylist-bypass vectors to the already-blocked bash/sh/zsh/dash/fish.
+//
+//	tcsh -c 'rm -rf /'        — RHEL/CentOS, FreeBSD default C shell
+//	csh  -c 'shutdown now'    — classic C shell (often a tcsh symlink)
+//	ksh  -c 'kill -9 1'       — Korn shell, standard on RHEL/CentOS (ksh93)
+//	mksh -c 'reboot'          — MirBSD Korn shell, default on Android & some Debian
+//	ash  -c 'dd if=/dev/zero of=/dev/sda' — Almquist shell on Alpine containers
+//
+// The versioned-variant heuristic automatically extends denial to ksh93
+// (TrimRight("ksh93","0123456789.") == "ksh" → denied["ksh"] == true).
+func TestIsDenied_BlocksAdditionalShells(t *testing.T) {
+	denied := [][]string{
+		{"tcsh", "-c", "rm -rf /"},
+		{"csh", "-c", "shutdown now"},
+		{"ksh", "-c", "kill -9 1"},
+		{"mksh", "-c", "reboot"},
+		{"ash", "-c", "dd if=/dev/zero of=/dev/sda"},
+		// Versioned ksh variant — covered by the versioned-variant heuristic.
+		{"ksh93", "-c", "rm -rf /"},
+		// Absolute paths must also be denied after filepath.Base normalization.
+		{"/bin/tcsh", "-c", "rm -rf /"},
+		{"/usr/bin/ksh", "-c", "reboot"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("additional shell bypass not blocked: %v", argv)
 		}
 	}
 }

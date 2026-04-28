@@ -105,7 +105,16 @@ var DefaultDeniedCommands = map[string]bool{
 	// "bash -c 'rm -rf /'", "python3 -c 'import os; os.system(...)'", etc.
 	// Claude's system prompt already restricts it to read-only commands;
 	// blocking these closes the gap for a hallucinatory or adversarial model.
+	// tcsh/csh are the classic C shell family present on RHEL/CentOS, FreeBSD,
+	// and many legacy Unix systems. ksh (Korn shell) and mksh (MirBSD Korn
+	// shell) are standard on RHEL/CentOS (ksh93) and Debian/Ubuntu (mksh).
+	// ash (Almquist shell) appears on Alpine containers as a separate binary
+	// alongside the busybox sh symlink. All of these shells accept a -c flag
+	// that executes an arbitrary command string, making them equivalent bypass
+	// vectors to bash/sh. The versioned-variant heuristic automatically extends
+	// the denial to versioned names (e.g. ksh93 → base "ksh" → denied).
 	"bash": true, "sh": true, "dash": true, "zsh": true, "fish": true,
+	"tcsh": true, "csh": true, "ksh": true, "mksh": true, "ash": true,
 	"python": true, "python2": true, "python3": true,
 	"perl": true, "ruby": true, "node": true, "nodejs": true,
 	// env and xargs can be used to invoke denied commands as a sub-process.
