@@ -92,6 +92,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	}
 
 	if err := shared.PublishAll(ctx, deps.Publishers, title, priority, analysis); err != nil {
+		slog.Error("failed to publish analysis", "alertname", alertname, "error", err)
 		deps.Metrics.RecordNtfyPublishError(alert.Source)
 		deps.Cooldown.Clear(alert.Fingerprint)
 		deps.Metrics.AlertsFailed.Add(1)
