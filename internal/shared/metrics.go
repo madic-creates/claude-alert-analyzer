@@ -105,6 +105,13 @@ func (m *AlertMetrics) MetricsHandler() http.HandlerFunc {
 	if m.Prom != nil {
 		promHandler = promhttp.HandlerFor(m.Prom.Registry(), promhttp.HandlerOpts{})
 	}
+	return m.metricsHandlerWith(promHandler)
+}
+
+// metricsHandlerWith is the testable core of MetricsHandler. It accepts an
+// optional promHandler so tests can inject a fake handler that returns a
+// non-200 status without needing a real Prometheus registry.
+func (m *AlertMetrics) metricsHandlerWith(promHandler http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var b strings.Builder
 		fmt.Fprintf(&b, "# HELP alert_analyzer_webhooks_received_total Total webhook requests received.\n")
@@ -133,11 +140,20 @@ func (m *AlertMetrics) MetricsHandler() http.HandlerFunc {
 		fmt.Fprintf(&b, "alert_analyzer_processing_duration_seconds_sum %f\n", float64(m.ProcessingDurationSum.Load())/1e6)
 		fmt.Fprintf(&b, "alert_analyzer_processing_duration_seconds_count %d\n", m.ProcessingDurationCount.Load())
 
-		// Append labeled Prometheus metrics when available.
+		// Append labeled Prometheus metrics when available. Only include the
+		// output if promhttp signalled success: a non-200 WriteHeader call means
+		// promhttp encountered a gather error and wrote an HTTP error body rather
+		// than valid Prometheus text. Appending that error body would corrupt the
+		// exposition format and cause scrapers to reject the entire response.
+		// bw.code is 0 when promhttp never calls WriteHeader (the normal success
+		// path), and http.StatusOK (200) when it explicitly confirms success.
 		if promHandler != nil {
 			var promBuf bytes.Buffer
-			promHandler.ServeHTTP(newBufferedResponseWriter(&promBuf), r)
-			b.Write(promBuf.Bytes())
+			bw := newBufferedResponseWriter(&promBuf)
+			promHandler.ServeHTTP(bw, r)
+			if bw.code == 0 || bw.code == http.StatusOK {
+				b.Write(promBuf.Bytes())
+			}
 		}
 
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")

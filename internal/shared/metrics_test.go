@@ -266,6 +266,63 @@ func TestBufferedResponseWriter_WriteHeader(t *testing.T) {
 	}
 }
 
+// TestMetricsHandlerWith_PromHandlerNon200_ExcludesErrorBody verifies that
+// when a promhttp-like handler signals an error by calling WriteHeader with a
+// non-200 status code, MetricsHandler omits the error body from the response
+// rather than appending it to the valid Prometheus text. Appending an HTTP
+// error body would produce invalid Prometheus exposition format and cause
+// scrapers to reject the entire /metrics response.
+func TestMetricsHandlerWith_PromHandlerNon200_ExcludesErrorBody(t *testing.T) {
+	var m AlertMetrics
+	const errBody = "prometheus gather error: some registry fault"
+
+	// Simulate a promhttp handler that encounters a gather error.
+	errHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, errBody)
+	})
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rr := httptest.NewRecorder()
+	m.metricsHandlerWith(errHandler)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("outer response status = %d, want 200 (hand-rolled metrics must still be served)", rr.Code)
+	}
+	body := rr.Body.String()
+
+	// The error body written by the failing promHandler must NOT appear.
+	if strings.Contains(body, errBody) {
+		t.Errorf("error body from failing promhttp handler leaked into output:\n%s", body)
+	}
+	// Hand-rolled metrics must still be present despite the promHandler error.
+	if !strings.Contains(body, "alert_analyzer_webhooks_received_total") {
+		t.Errorf("hand-rolled metrics missing from output after promHandler error:\n%s", body)
+	}
+}
+
+// TestMetricsHandlerWith_PromHandler200_IncludesOutput verifies that when the
+// injected handler explicitly calls WriteHeader(200), its output is still
+// included (covers the bw.code == http.StatusOK branch).
+func TestMetricsHandlerWith_PromHandler200_IncludesOutput(t *testing.T) {
+	var m AlertMetrics
+	const promBody = "# some_metric 1\n"
+
+	okHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, promBody)
+	})
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rr := httptest.NewRecorder()
+	m.metricsHandlerWith(okHandler)(rr, req)
+
+	body := rr.Body.String()
+	if !strings.Contains(body, promBody) {
+		t.Errorf("expected promHandler output in response body, got:\n%s", body)
+	}
+}
+
 func TestAlertMetrics_ConcurrentIncrements(t *testing.T) {
 	var m AlertMetrics
 	const n = 100
