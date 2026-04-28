@@ -188,7 +188,7 @@ func TestAnalyze_HTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3", retryDelays: []time.Duration{}}
 	_, err := client.Analyze(context.Background(), "sys", "user")
 	if err == nil {
 		t.Fatal("expected error for non-200 response")
@@ -453,7 +453,7 @@ func TestRunToolLoop_APIError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test", retryDelays: []time.Duration{}}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
 	_, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
@@ -764,7 +764,7 @@ func TestRunToolLoop_SummaryRequestFails(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
+	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test", retryDelays: []time.Duration{}}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
 	_, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
@@ -972,6 +972,7 @@ func TestSendRequest_DurationHistogramObservedOnNonOK(t *testing.T) {
 		APIKey:            "test-key",
 		Model:             "test",
 		durationHistogram: hist,
+		retryDelays:       []time.Duration{},
 	}
 	_, err := client.sendRequest(context.Background(), map[string]string{"k": "v"})
 	if err == nil {
@@ -989,6 +990,70 @@ func TestSendRequest_DurationHistogramObservedOnNonOK(t *testing.T) {
 	}
 	if m.Histogram.GetSampleSum() <= 0 {
 		t.Errorf("expected positive duration sum for failed round-trip, got %f", m.Histogram.GetSampleSum())
+	}
+}
+
+// TestSendRequest_RetriesOnTransientError verifies that sendRequest retries on
+// transient HTTP errors (5xx, 429) and succeeds when a later attempt returns 200.
+func TestSendRequest_RetriesOnTransientError(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+		if n < 3 {
+			// First two attempts fail with transient errors.
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, "temporarily unavailable")
+			return
+		}
+		// Third attempt succeeds.
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"content":[{"type":"text","text":"ok"}],"usage":{}}`)
+	}))
+	defer srv.Close()
+
+	client := &ClaudeClient{
+		HTTP:        srv.Client(),
+		BaseURL:     srv.URL,
+		APIKey:      "test-key",
+		Model:       "test",
+		retryDelays: []time.Duration{0, 0}, // zero-delay retries to keep test fast
+	}
+	result, err := client.Analyze(context.Background(), "sys", "user")
+	if err != nil {
+		t.Fatalf("expected success after retries, got error: %v", err)
+	}
+	if result != "ok" {
+		t.Errorf("expected result %q, got %q", "ok", result)
+	}
+	if n := calls.Load(); n != 3 {
+		t.Errorf("expected 3 attempts (1 initial + 2 retries), got %d", n)
+	}
+}
+
+// TestSendRequest_NoRetryOnClientError verifies that sendRequest does NOT retry
+// on 4xx client errors (except 429), since these indicate a permanent problem.
+func TestSendRequest_NoRetryOnClientError(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":{"type":"invalid_request_error","message":"bad"}}`)
+	}))
+	defer srv.Close()
+
+	client := &ClaudeClient{
+		HTTP:        srv.Client(),
+		BaseURL:     srv.URL,
+		APIKey:      "test-key",
+		Model:       "test",
+		retryDelays: []time.Duration{0, 0},
+	}
+	_, err := client.sendRequest(context.Background(), map[string]string{"k": "v"})
+	if err == nil {
+		t.Fatal("expected error for 400 response")
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("expected exactly 1 attempt for non-transient error, got %d", n)
 	}
 }
 

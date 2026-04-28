@@ -21,6 +21,20 @@ const anthropicVersion = "2023-06-01"
 // to prevent a malicious or buggy upstream from exhausting memory.
 const MaxResponseBytes = 2 * 1024 * 1024 // 2 MiB
 
+// defaultRetryDelays are the wait durations before each retry attempt for
+// transient API errors (429, 5xx). Two retries with 2 s and 4 s backoff give
+// a short grace period for transient blips while keeping total worst-case wait
+// well under the 120 s HTTP client timeout.
+var defaultRetryDelays = []time.Duration{2 * time.Second, 4 * time.Second}
+
+// isTransientStatus reports whether an HTTP status code indicates a transient
+// server-side condition worth retrying. 429 Too Many Requests and 5xx server
+// errors are retried. 4xx client errors (except 429) are permanent — retrying
+// them wastes quota and adds latency without any chance of success.
+func isTransientStatus(code int) bool {
+	return code == http.StatusTooManyRequests || (code >= 500 && code < 600)
+}
+
 // ClaudeClient holds the HTTP client and configuration needed
 // to talk to the Claude Messages API. It implements both Analyzer
 // and ToolLoopRunner.
@@ -29,6 +43,11 @@ type ClaudeClient struct {
 	BaseURL string
 	APIKey  string
 	Model   string
+
+	// retryDelays controls the wait before each retry attempt for transient
+	// API errors (429, 5xx). When nil, defaultRetryDelays is used. Set to
+	// []time.Duration{} to disable retries (useful in tests).
+	retryDelays []time.Duration
 
 	// durationHistogram records Claude API call latency. May be nil.
 	durationHistogram prometheus.Observer
@@ -54,57 +73,91 @@ func (c *ClaudeClient) WithPrometheusMetrics(m *AlertMetrics, source string) *Cl
 	return c
 }
 
-// sendRequest sends a JSON body to the Claude API and returns the raw response bytes.
-// It records call latency via durationHistogram and increments errorCounter on failure.
+// sendRequest sends a JSON body to the Claude API and returns the raw response
+// bytes. Transient errors (429, 5xx, network failures) are retried with
+// exponential backoff using c.retryDelays (defaultRetryDelays when nil).
+// Each HTTP round-trip is timed and recorded in durationHistogram.
 func (c *ClaudeClient) sendRequest(ctx context.Context, body any) ([]byte, error) {
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+	delays := c.retryDelays
+	if delays == nil {
+		delays = defaultRetryDelays
 	}
-	req.Header.Set("Content-Type", "application/json")
+	maxAttempts := len(delays) + 1
 
-	if isAnthropicURL(c.BaseURL) {
-		req.Header.Set("x-api-key", c.APIKey)
-		req.Header.Set("anthropic-version", anthropicVersion)
-	} else {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	var lastErr error
+	for attempt := range maxAttempts {
+		if attempt > 0 {
+			delay := delays[attempt-1]
+			slog.Info("retrying Claude API request",
+				"attempt", attempt+1, "maxAttempts", maxAttempts, "delay", delay)
+			if delay > 0 {
+				retryTimer := time.NewTimer(delay)
+				select {
+				case <-ctx.Done():
+					retryTimer.Stop()
+					return nil, fmt.Errorf("context cancelled awaiting retry: %w", ctx.Err())
+				case <-retryTimer.C:
+				}
+			}
+		}
+
+		req, reqErr := http.NewRequestWithContext(ctx, "POST", c.BaseURL, bytes.NewReader(bodyBytes))
+		if reqErr != nil {
+			return nil, fmt.Errorf("create request: %w", reqErr)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if isAnthropicURL(c.BaseURL) {
+			req.Header.Set("x-api-key", c.APIKey)
+			req.Header.Set("anthropic-version", anthropicVersion)
+		} else {
+			req.Header.Set("Authorization", "Bearer "+c.APIKey)
+		}
+
+		start := time.Now()
+		resp, doErr := c.HTTP.Do(req)
+		if doErr != nil {
+			// Network error: potentially transient. Do not retry when the
+			// context is already done — the error is caused by the
+			// cancellation itself, not a server-side failure.
+			lastErr = fmt.Errorf("API request: %w", doErr)
+			if ctx.Err() != nil {
+				return nil, lastErr
+			}
+			continue
+		}
+
+		respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBytes))
+		_ = resp.Body.Close()
+		if readErr != nil {
+			lastErr = fmt.Errorf("read response: %w", readErr)
+			continue
+		}
+
+		// Record full round-trip latency per attempt (after body read, not just
+		// header receipt). Recording on every attempt — including failed ones —
+		// lets operators see retry latency and correlate error spikes with
+		// latency changes (e.g. a fast 429 vs a slow 500).
+		if c.durationHistogram != nil {
+			c.durationHistogram.Observe(time.Since(start).Seconds())
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("API returned %d: %s", resp.StatusCode, Truncate(RedactSecrets(string(respBody)), 300))
+			if isTransientStatus(resp.StatusCode) {
+				continue
+			}
+			return nil, lastErr
+		}
+
+		return respBody, nil
 	}
 
-	start := time.Now()
-	resp, err := c.HTTP.Do(req)
-
-	if err != nil {
-		return nil, fmt.Errorf("API request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBytes))
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	// Measure the full round-trip latency for all completed round-trips,
-	// including non-200 responses. HTTP.Do returns after headers are received,
-	// not after the body is read — recording elapsed before io.ReadAll would
-	// capture only header latency, significantly undercounting true API call
-	// duration for large responses. Recording on error responses (e.g. 429,
-	// 500) lets operators correlate latency with error spikes and answer
-	// questions like "are rate-limit errors fast (typical) or slow (overloaded
-	// upstream)?". The claude_api_errors_total counter already tracks which
-	// calls failed; the histogram captures how long they took.
-	if c.durationHistogram != nil {
-		c.durationHistogram.Observe(time.Since(start).Seconds())
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned %d: %s", resp.StatusCode, Truncate(RedactSecrets(string(respBody)), 300))
-	}
-	return respBody, nil
+	return nil, lastErr
 }
 
 // Analyze sends a single-turn analysis request to the Claude API.
