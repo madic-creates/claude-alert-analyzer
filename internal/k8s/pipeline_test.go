@@ -439,6 +439,45 @@ func TestProcessAlert_FailureBodySanitizesTitle(t *testing.T) {
 	}
 }
 
+// TestProcessAlert_PromptSanitizesNamespace verifies that embedded control
+// characters in the label:namespace field are stripped from the user prompt
+// passed to the analyzer. alertname and namespace are sanitized at extraction
+// (not inline in the fmt.Sprintf), so this test confirms the invariant holds
+// for namespace after the extraction-point sanitization refactor.
+func TestProcessAlert_PromptSanitizesNamespace(t *testing.T) {
+	var capturedPrompt string
+	pub := &mockPublisher{}
+	metrics := new(shared.AlertMetrics)
+
+	deps := PipelineDeps{
+		Analyzer:     &capturePromptAnalyzer{result: "analysis", captured: &capturedPrompt},
+		Publishers:   []shared.Publisher{pub},
+		Cooldown:     shared.NewCooldownManager(),
+		Metrics:      metrics,
+		SystemPrompt: "test",
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "fp-ns-ctrl",
+		Title:       "HighCPU",
+		Severity:    "warning",
+		Fields: map[string]string{
+			"label:namespace": "production\n## Injected Section",
+		},
+	}
+	ProcessAlert(context.Background(), deps, alert)
+
+	if strings.Contains(capturedPrompt, "\n## Injected Section") {
+		t.Errorf("control character from namespace leaked into user prompt: %q", capturedPrompt)
+	}
+	if !strings.Contains(capturedPrompt, "production") {
+		t.Errorf("sanitized namespace should still appear in prompt, got:\n%s", capturedPrompt)
+	}
+}
+
 // TestProcessAlert_TitleFormatting verifies that the published title includes
 // the namespace when present and omits it when absent.
 func TestProcessAlert_TitleFormatting(t *testing.T) {
