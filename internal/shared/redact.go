@@ -103,6 +103,20 @@ var sensitivePatterns = []sensitivePattern{
 		re:          regexp.MustCompile(`(?i)-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----`),
 		replacement: "[REDACTED]",
 	},
+	// JWT tokens: every JWT header is a base64url-encoded JSON object that
+	// starts with '{"', which encodes to "eyJ". Requiring two dot separators
+	// (header.payload.signature) distinguishes full JWTs from short base64url
+	// strings that happen to start with "eyJ". The signature segment uses *
+	// (zero-or-more) to handle unsigned JWTs (alg="none") whose signature is
+	// empty. This pattern catches JWTs that appear bare in log lines — e.g.
+	// "token expired: eyJhbGci.payload.sig" — where neither the
+	// Authorization-header pattern nor the "bearer" inline pattern would fire
+	// because no keyword precedes the token. JWT payloads routinely contain
+	// PII (sub, email, roles) and must not reach the Claude API in clear text.
+	{
+		re:          regexp.MustCompile(`eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*`),
+		replacement: "[REDACTED]",
+	},
 	// Inline bearer/basic tokens that appear in log lines without an
 	// "Authorization:" header prefix. The character class includes:
 	//   A-Za-z0-9+/= — standard Base64 alphabet (opaque tokens, API keys)

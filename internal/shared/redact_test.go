@@ -194,6 +194,53 @@ func TestRedactSecrets_BearerTokenInlineLogLine(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_JWTBareInLogLine verifies that JWT tokens appearing in log
+// lines without a preceding "bearer" or "basic" keyword are still redacted.
+// JWT payloads routinely contain PII (sub, email, roles) and must not reach the
+// Claude API in clear text. The eyJ prefix (base64url of '{"') is a reliable
+// fingerprint; requiring two dot separators avoids false positives on short
+// base64url strings.
+func TestRedactSecrets_JWTBareInLogLine(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		leak  string // substring that must NOT remain in result
+	}{
+		{
+			// Full three-segment JWT after "token" keyword separated by a space
+			// (not "token:" or "token="), so the keyword=value pattern does not fire.
+			name:  "JWT after space-separated token keyword",
+			input: "authentication failed: token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyMTIzIn0.FAKESIG",
+			leak:  "eyJzdWIiOiJ1c2VyMTIzIn0", // payload with sub claim
+		},
+		{
+			// JWT appearing bare with no keyword at all, e.g. copied from a log.
+			name:  "bare JWT with no keyword prefix",
+			input: "expired: eyJhbGciOiJSUzI1NiIsImtpZCI6ImZha2UifQ.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20ifQ.FAKESIG2",
+			leak:  "eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20ifQ", // payload with email claim
+		},
+		{
+			// Unsigned JWT (alg=none): signature segment is empty, so the token
+			// ends with a trailing dot. The pattern uses * (zero-or-more) for the
+			// signature segment to handle this case.
+			name:  "unsigned JWT with empty signature segment",
+			input: "debug jwt: eyJhbGciOiJub25lIn0.eyJyb2xlIjoiYWRtaW4ifQ.",
+			leak:  "eyJyb2xlIjoiYWRtaW4ifQ", // payload with admin role
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("JWT payload leaked in output:\n  input:  %s\n  output: %s\n  leaked: %s", tc.input, result, tc.leak)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
 // TestRedactSecrets_NonBearerAuthSchemes verifies that Authorization headers
 // using schemes other than Basic/Bearer (e.g. Token, ApiKey, Digest) are fully
 // redacted. Previously only Basic and Bearer were matched by the first pattern;
