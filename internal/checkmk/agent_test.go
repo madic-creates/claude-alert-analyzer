@@ -3005,3 +3005,90 @@ func TestIsDenied_BlocksDebuggers(t *testing.T) {
 		}
 	}
 }
+
+// TestIsDenied_BlocksEbtablesAndArptables verifies that ebtables and arptables
+// are fully denied (no read-only exception) and that their dash-suffix variants
+// (ebtables-legacy, arptables-legacy) are also blocked when the base command is
+// in the denylist. *-save variants are allowed because they only read state.
+func TestIsDenied_BlocksEbtablesAndArptables(t *testing.T) {
+	denied := [][]string{
+		{"ebtables", "-F"},
+		{"ebtables", "-A", "FORWARD", "-j", "DROP"},
+		{"ebtables", "-P", "FORWARD", "DROP"},
+		{"ebtables", "-L"}, // ebtables has no read-only exception
+		{"ebtables"},
+		{"/sbin/ebtables", "-F"},
+		{"ebtables-legacy", "-F"},
+		{"ebtables-nft", "-F"},
+		{"ebtables-restore"},
+		{"arptables", "-F"},
+		{"arptables", "-A", "OUTPUT", "-j", "DROP"},
+		{"arptables"},
+		{"/sbin/arptables", "-F"},
+		{"arptables-legacy", "-F"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected denied: %v", argv)
+		}
+	}
+
+	// *-save variants are read-only and must be allowed.
+	allowed := [][]string{
+		{"ebtables-save"},
+		{"arptables-save"},
+	}
+	for _, argv := range allowed {
+		if isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected allowed (*-save variant): %v", argv)
+		}
+	}
+}
+
+// TestIsDenied_EbtablesArptablesRespectDenylist verifies that the ebtables/arptables
+// variant checks honour the custom denylist: if the base command is absent, variants
+// must not be blocked by these rules.
+func TestIsDenied_EbtablesArptablesRespectDenylist(t *testing.T) {
+	custom := map[string]bool{"rm": true, "dd": true} // neither ebtables nor arptables
+	allowed := [][]string{
+		{"ebtables-legacy", "-F"},
+		{"ebtables-nft", "-F"},
+		{"arptables-legacy", "-F"},
+	}
+	for _, argv := range allowed {
+		if isDenied(custom, argv) {
+			t.Errorf("expected %v to be allowed when base command is not in denylist", argv)
+		}
+	}
+
+	// With base commands in the denylist, variants must be denied.
+	withBase := map[string]bool{"ebtables": true, "arptables": true}
+	for _, argv := range allowed {
+		if !isDenied(withBase, argv) {
+			t.Errorf("expected %v to be denied when base command is in denylist", argv)
+		}
+	}
+}
+
+// TestDenyReason_EbtablesArptablesVariants verifies that denyReason returns a
+// targeted message (not the generic fallback) for ebtables-TYPE and arptables-TYPE
+// commands so Claude understands why the command was blocked.
+func TestDenyReason_EbtablesArptablesVariants(t *testing.T) {
+	cases := []struct {
+		argv    []string
+		wantStr string
+	}{
+		{[]string{"ebtables-legacy", "-F"}, "ebtables"},
+		{[]string{"ebtables-nft", "-F"}, "ebtables"},
+		{[]string{"arptables-legacy", "-F"}, "arptables"},
+	}
+	for _, tc := range cases {
+		msg := denyReason(DefaultDeniedCommands, tc.argv)
+		if !strings.Contains(msg, tc.wantStr) {
+			t.Errorf("denyReason(%v) = %q; expected %q in message", tc.argv, msg, tc.wantStr)
+		}
+		if strings.Contains(msg, "not allowed (destructive or privileged command)") {
+			t.Errorf("denyReason(%v) returned generic message: %q", tc.argv, msg)
+		}
+	}
+}

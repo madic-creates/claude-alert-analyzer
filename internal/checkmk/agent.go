@@ -92,6 +92,14 @@ var DefaultDeniedCommands = map[string]bool{
 	"useradd": true, "userdel": true, "usermod": true, "groupadd": true, "groupdel": true,
 	"passwd": true, "crontab": true,
 	"iptables": true, "ip6tables": true, "nft": true,
+	// ebtables manages Ethernet bridge firewall rules (layer-2 filtering).
+	// arptables manages ARP filtering rules (layer-2/3 boundary).
+	// Both can add/delete/flush rules and alter packet policy, making them
+	// as dangerous as iptables for network-state modification. They are not
+	// needed for general Linux diagnostics (unlike iptables -L which is
+	// explicitly listed in the agent system prompt), so they are blocked
+	// entirely rather than given a read-only exception.
+	"ebtables": true, "arptables": true,
 	"mount": true, "umount": true,
 	"mkswap": true, "swapon": true, "swapoff": true,
 	"insmod": true, "rmmod": true, "modprobe": true,
@@ -494,6 +502,26 @@ func isDenied(denied map[string]bool, argv []string) bool {
 		return true
 	}
 
+	// Block ebtables-TYPE Ethernet bridge firewall variants (e.g. ebtables-legacy,
+	// ebtables-nft) and arptables-TYPE ARP firewall variants. These are blocked
+	// when "ebtables"/"arptables" is in the denylist; the versioned-variant
+	// heuristic (TrimRight of digits/dots) does not reduce them to the base name
+	// because they contain letters after the dash (e.g. "legacy" ends in 'y').
+	// Exception: *-save variants (ebtables-save, arptables-save) only dump rules
+	// to stdout without modifying state; allow these the same way iptables-save is.
+	if strings.HasPrefix(cmd, "ebtables-") && len(cmd) > len("ebtables-") && denied["ebtables"] {
+		if strings.HasSuffix(cmd, "-save") {
+			return false // *-save variants only read rules; allow them
+		}
+		return true
+	}
+	if strings.HasPrefix(cmd, "arptables-") && len(cmd) > len("arptables-") && denied["arptables"] {
+		if strings.HasSuffix(cmd, "-save") {
+			return false // *-save variants only read rules; allow them
+		}
+		return true
+	}
+
 	// Deny versioned interpreter and tool variants (e.g. python3.11, ruby2.7,
 	// perl5.36, node20, python-3.11, bash-5.1). Strip a trailing version suffix
 	// (any combination of digits and dots, optionally preceded by a hyphen
@@ -654,6 +682,16 @@ func denyReason(denied map[string]bool, argv []string) string {
 		// *-save variants (ip6tables-save, ip6tables-legacy-save, ip6tables-nft-save) are
 		// allowed (read-only) and would not reach denyReason.
 		return fmt.Sprintf("Command denied: %q is a firewall variant of %q which is in the command denylist; use ip6tables -L/-S for read-only listing or ip6tables-save instead", cmd, "ip6tables")
+	}
+
+	// ebtables-TYPE Ethernet bridge firewall variant (e.g. ebtables-legacy, ebtables-nft).
+	// arptables-TYPE ARP firewall variant. Both are blocked when the base command is in the
+	// denylist; *-save variants are allowed (read-only) and would not reach denyReason.
+	if strings.HasPrefix(cmd, "ebtables-") && len(cmd) > len("ebtables-") && denied["ebtables"] {
+		return fmt.Sprintf("Command denied: %q is a firewall variant of %q which is in the command denylist; use ebtables-save for read-only rule listing instead", cmd, "ebtables")
+	}
+	if strings.HasPrefix(cmd, "arptables-") && len(cmd) > len("arptables-") && denied["arptables"] {
+		return fmt.Sprintf("Command denied: %q is a firewall variant of %q which is in the command denylist; use arptables-save for read-only rule listing instead", cmd, "arptables")
 	}
 
 	// Versioned interpreter or tool variant (e.g. python3.11, ruby2.7, node20,
