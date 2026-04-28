@@ -443,9 +443,15 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace s
 
 	// Filter: keep only pods that are actually failing.
 	// A Running pod is healthy when every container reports Ready=true; skip it.
+	// A Running pod with no ContainerStatuses yet is still being initialised by
+	// kubelet — it is not failing, so skip it too. Including it would waste one
+	// of the maxLogPods slots and produce an uninformative "(no logs)" entry.
 	var failingPods []corev1.Pod
 	for _, p := range podList.Items {
-		if p.Status.Phase == corev1.PodRunning && len(p.Status.ContainerStatuses) > 0 {
+		if p.Status.Phase == corev1.PodRunning {
+			if len(p.Status.ContainerStatuses) == 0 {
+				continue // still initializing — no container status yet
+			}
 			allReady := true
 			for _, cs := range p.Status.ContainerStatuses {
 				if !cs.Ready {

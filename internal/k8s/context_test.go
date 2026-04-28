@@ -642,6 +642,38 @@ func TestGetPodLogs_HealthyRunningPodsExcluded(t *testing.T) {
 	}
 }
 
+// TestGetPodLogs_RunningPodWithNoContainerStatuses verifies that getPodLogs does
+// not treat a Running pod with empty ContainerStatuses as a failing pod. Pods in
+// this state are still being initialised by kubelet (container status not yet
+// reported) and are not failing. Including them in the failing-pod list wastes
+// the maxLogPods budget and produces an uninformative "(no logs)" entry.
+func TestGetPodLogs_RunningPodWithNoContainerStatuses(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.PodList{Items: []corev1.Pod{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "init-pod", Namespace: "prod"},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+				Status: corev1.PodStatus{
+					Phase:             corev1.PodRunning,
+					ContainerStatuses: nil,
+				},
+			},
+		}}, nil
+	})
+
+	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	result := getPodLogs(context.Background(), cs, "prod", cfg)
+
+	if !strings.Contains(result, "no failing pods") {
+		t.Errorf("expected '(no failing pods)' for Running pod with no ContainerStatuses, got: %q", result)
+	}
+	if strings.Contains(result, "init-pod") {
+		t.Error("Running pod with empty ContainerStatuses must not appear in pod logs output")
+	}
+}
+
 func TestGetKubeContext_Events_WarningEventListed(t *testing.T) {
 	cs := fake.NewSimpleClientset(
 		&corev1.Event{
