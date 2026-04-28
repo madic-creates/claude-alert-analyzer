@@ -372,9 +372,22 @@ func isDenied(denied map[string]bool, argv []string) bool {
 		// because the arg starts with "--" and is skipped entirely, allowing the
 		// real subcommand (e.g. "status") to be found and incorrectly permitted.
 		// Checking both forms here closes that gap and makes the intent explicit.
+		// Additionally, getopt allows -Hvalue (value appended without a space)
+		// and combined short flags like -qH as valid equivalents of -H value and
+		// -q -H value respectively. Both forms embed 'H' or 'M' inside a single
+		// argument that starts with '-' and is therefore skipped by the subcommand
+		// loop below, allowing -Huser@remote or -qHuser@remote to reach a valid
+		// subcommand like "status" and bypass the remote-host check. Detecting any
+		// short-flag argument that contains 'H' (host) or 'M' (machine) closes
+		// this gap while leaving all other short flags (e.g. -q, -l, -T) unaffected.
 		for _, arg := range argv[1:] {
-			if arg == "--host" || arg == "-H" || strings.HasPrefix(arg, "--host=") ||
-				arg == "--machine" || arg == "-M" || strings.HasPrefix(arg, "--machine=") {
+			if arg == "--host" || strings.HasPrefix(arg, "--host=") ||
+				arg == "--machine" || strings.HasPrefix(arg, "--machine=") {
+				return true
+			}
+			// Short flag: -H, -Huser@remote, -qH, -qHuser@remote, -M, etc.
+			if len(arg) >= 2 && arg[0] == '-' && arg[1] != '-' &&
+				(strings.ContainsRune(arg[1:], 'H') || strings.ContainsRune(arg[1:], 'M')) {
 				return true
 			}
 		}
@@ -549,11 +562,21 @@ func denyReason(denied map[string]bool, argv []string) string {
 		// matching the same order as isDenied so the message targets the real
 		// reason the command was blocked.
 		for _, arg := range argv[1:] {
-			if arg == "--host" || arg == "-H" || strings.HasPrefix(arg, "--host=") {
+			if arg == "--host" || strings.HasPrefix(arg, "--host=") {
 				return "Command denied: systemctl --host/-H targets a remote system via SSH; run diagnostic commands directly on the affected host instead"
 			}
-			if arg == "--machine" || arg == "-M" || strings.HasPrefix(arg, "--machine=") {
+			if arg == "--machine" || strings.HasPrefix(arg, "--machine=") {
 				return "Command denied: systemctl --machine/-M targets a container; connect to the container directly for container-level diagnostics"
+			}
+			// Short-flag forms: -H, -Hvalue, -qH, -qHvalue (host) and
+			// -M, -Mvalue, -qM, -qMvalue (machine).
+			if len(arg) >= 2 && arg[0] == '-' && arg[1] != '-' {
+				if strings.ContainsRune(arg[1:], 'H') {
+					return "Command denied: systemctl --host/-H targets a remote system via SSH; run diagnostic commands directly on the affected host instead"
+				}
+				if strings.ContainsRune(arg[1:], 'M') {
+					return "Command denied: systemctl --machine/-M targets a container; connect to the container directly for container-level diagnostics"
+				}
 			}
 		}
 		subcmd := ""

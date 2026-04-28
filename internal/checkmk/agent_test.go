@@ -1381,6 +1381,51 @@ func TestIsDenied_SystemctlRemoteAndContainerFlagsDenied(t *testing.T) {
 	}
 }
 
+// TestIsDenied_SystemctlShortFlagCombinedAndAppended covers getopt short-flag
+// forms that embed 'H' (--host) or 'M' (--machine) inside a single argument:
+//   - value appended without space:  -Huser@remote  (equivalent to -H user@remote)
+//   - combined with another flag:    -qH user@remote (equivalent to -q -H user@remote)
+//   - combined + value appended:     -qHuser@remote
+//
+// These forms bypass the exact arg == "-H" / arg == "-M" checks because the
+// argument is not identical to the flag name alone; the subcommand loop then
+// skips the whole arg (starts with '-') and finds a valid subcommand like
+// "status", incorrectly allowing the command.
+func TestIsDenied_SystemctlShortFlagCombinedAndAppended(t *testing.T) {
+	denied := [][]string{
+		// Value appended directly to -H (no space) — equivalent to "-H user@remote".
+		{"systemctl", "-Huser@remote", "status", "nginx"},
+		// Combined short flags with -H embedded; value is separate next arg.
+		{"systemctl", "-qH", "user@remote", "status"},
+		// Combined short flags with -H and value appended.
+		{"systemctl", "-qHuser@remote", "status", "nginx"},
+		// Value appended directly to -M.
+		{"systemctl", "-Mmycontainer", "status", "nginx"},
+		// Combined short flags with -M embedded.
+		{"systemctl", "-qM", "mycontainer", "status"},
+		// Combined short flags with -M and value appended.
+		{"systemctl", "-qMmycontainer", "status", "nginx"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected denied (combined/appended short flag): %v", argv)
+		}
+	}
+
+	// Short flags that do NOT contain 'H' or 'M' must remain allowed when
+	// paired with a read-only subcommand.
+	allowed := [][]string{
+		{"systemctl", "-q", "status", "nginx"},
+		{"systemctl", "-ql", "list-units"},
+		{"systemctl", "-la", "status", "sshd"},
+	}
+	for _, argv := range allowed {
+		if isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected allowed (non-host short flag): %v", argv)
+		}
+	}
+}
+
 func TestDenyReason_SystemctlRemoteAndContainerFlags(t *testing.T) {
 	// denyReason must produce a targeted message for --host and --machine flags
 	// so Claude understands why the command was blocked and can self-correct.
@@ -1399,6 +1444,18 @@ func TestDenyReason_SystemctlRemoteAndContainerFlags(t *testing.T) {
 			t.Errorf("expected --host/-H in message; got: %s", msg)
 		}
 	})
+	t.Run("-Hvalue form names the flag", func(t *testing.T) {
+		msg := denyReason(DefaultDeniedCommands, []string{"systemctl", "-Huser@remote", "status"})
+		if !strings.Contains(msg, "--host") || !strings.Contains(msg, "-H") {
+			t.Errorf("expected --host/-H in message; got: %s", msg)
+		}
+	})
+	t.Run("-qH combined form names the flag", func(t *testing.T) {
+		msg := denyReason(DefaultDeniedCommands, []string{"systemctl", "-qHuser@remote", "status"})
+		if !strings.Contains(msg, "--host") || !strings.Contains(msg, "-H") {
+			t.Errorf("expected --host/-H in message; got: %s", msg)
+		}
+	})
 	t.Run("--machine= form names the flag", func(t *testing.T) {
 		msg := denyReason(DefaultDeniedCommands, []string{"systemctl", "--machine=mybox", "status"})
 		if !strings.Contains(msg, "--machine") {
@@ -1407,6 +1464,12 @@ func TestDenyReason_SystemctlRemoteAndContainerFlags(t *testing.T) {
 	})
 	t.Run("-M form names the flag", func(t *testing.T) {
 		msg := denyReason(DefaultDeniedCommands, []string{"systemctl", "-M", "mybox", "status"})
+		if !strings.Contains(msg, "--machine") || !strings.Contains(msg, "-M") {
+			t.Errorf("expected --machine/-M in message; got: %s", msg)
+		}
+	})
+	t.Run("-Mvalue form names the flag", func(t *testing.T) {
+		msg := denyReason(DefaultDeniedCommands, []string{"systemctl", "-Mmycontainer", "status"})
 		if !strings.Contains(msg, "--machine") || !strings.Contains(msg, "-M") {
 			t.Errorf("expected --machine/-M in message; got: %s", msg)
 		}
