@@ -57,11 +57,12 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 			// string covers host-level notifications where ServiceState is "".
 			for _, state := range []string{"CRITICAL", "WARNING", "UNKNOWN", "OK", ""} {
 				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "PROBLEM", state))
-				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "FLAPPING START", state))
-				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "FLAPPING STOP", state))
+				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "FLAPPINGSTART", state))
+				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "FLAPPINGSTOP", state))
 				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "ACKNOWLEDGEMENT", state))
-				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "DOWNTIME START", state))
-				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "DOWNTIME END", state))
+				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "DOWNTIMESTART", state))
+				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "DOWNTIMEEND", state))
+				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "DOWNTIMECANCELLED", state))
 				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "CUSTOM", state))
 			}
 			slog.Info("skipping recovery, cleared alert cooldowns",

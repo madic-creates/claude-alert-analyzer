@@ -191,8 +191,8 @@ func TestCheckmkHandleWebhook_RecoveryClearsFlapCooldown(t *testing.T) {
 		return true
 	}, nil)
 
-	// FLAPPING START: should be enqueued and set a cooldown keyed on "FLAPPING START".
-	flap := makeNotification("host1", "Disk", "WARNING", "FLAPPING START")
+	// FLAPPING START: should be enqueued and set a cooldown keyed on "FLAPPINGSTART".
+	flap := makeNotification("host1", "Disk", "WARNING", "FLAPPINGSTART")
 	postCheckmkWebhook(t, handler, "test-secret", flap)
 	if enqueued.Load() != 1 {
 		t.Fatalf("expected 1 enqueued after FLAPPING START, got %d", enqueued.Load())
@@ -715,7 +715,7 @@ func TestCheckmkHandleWebhook_RecoveryClearsDowntimeCooldown(t *testing.T) {
 	}, nil)
 
 	// DOWNTIME START notification: queued and sets a cooldown.
-	downtime := makeNotification("host1", "HTTP", "WARNING", "DOWNTIME START")
+	downtime := makeNotification("host1", "HTTP", "WARNING", "DOWNTIMESTART")
 	postCheckmkWebhook(t, handler, "test-secret", downtime)
 	if enqueued.Load() != 1 {
 		t.Fatalf("expected 1 enqueued after DOWNTIME START, got %d", enqueued.Load())
@@ -754,7 +754,7 @@ func TestCheckmkHandleWebhook_RecoveryClearsOKStateCooldown(t *testing.T) {
 	}, nil)
 
 	// DOWNTIME START on a service that is currently OK: sets a cooldown keyed on "OK".
-	downtime := makeNotification("host1", "HTTP", "OK", "DOWNTIME START")
+	downtime := makeNotification("host1", "HTTP", "OK", "DOWNTIMESTART")
 	postCheckmkWebhook(t, handler, "test-secret", downtime)
 	if enqueued.Load() != 1 {
 		t.Fatalf("expected 1 enqueued after DOWNTIME START, got %d", enqueued.Load())
@@ -810,6 +810,44 @@ func TestCheckmkHandleWebhook_RecoveryClearsCustomCooldown(t *testing.T) {
 	postCheckmkWebhook(t, handler, "test-secret", custom)
 	if enqueued.Load() != 2 {
 		t.Errorf("expected 2 enqueued after second CUSTOM (cooldown cleared by RECOVERY), got %d", enqueued.Load())
+	}
+}
+
+// TestCheckmkHandleWebhook_RecoveryClearsDowntimeCancelledCooldown verifies that a
+// RECOVERY notification clears cooldown entries set by DOWNTIMECANCELLED notifications.
+// CheckMK sends DOWNTIMECANCELLED when a scheduled downtime window is cancelled
+// before it ends; without clearing this fingerprint, the next real PROBLEM within
+// the TTL window would be silently suppressed.
+func TestCheckmkHandleWebhook_RecoveryClearsDowntimeCancelledCooldown(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cfg.CooldownSeconds = 60
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	}, nil)
+
+	// DOWNTIMECANCELLED notification: queued and sets a cooldown.
+	dtCancel := makeNotification("host1", "HTTP", "WARNING", "DOWNTIMECANCELLED")
+	postCheckmkWebhook(t, handler, "test-secret", dtCancel)
+	if enqueued.Load() != 1 {
+		t.Fatalf("expected 1 enqueued after DOWNTIMECANCELLED, got %d", enqueued.Load())
+	}
+
+	// RECOVERY: must clear the DOWNTIMECANCELLED cooldown.
+	recovery := makeNotification("host1", "HTTP", "OK", "RECOVERY")
+	postCheckmkWebhook(t, handler, "test-secret", recovery)
+	if enqueued.Load() != 1 {
+		t.Errorf("RECOVERY should not be enqueued, still expect 1, got %d", enqueued.Load())
+	}
+
+	// New PROBLEM within original TTL: must be enqueued because RECOVERY cleared
+	// the DOWNTIMECANCELLED cooldown. Without the fix this would be suppressed.
+	problem := makeNotification("host1", "HTTP", "CRITICAL", "PROBLEM")
+	postCheckmkWebhook(t, handler, "test-secret", problem)
+	if enqueued.Load() != 2 {
+		t.Errorf("expected 2 enqueued after PROBLEM (cooldown cleared by RECOVERY), got %d", enqueued.Load())
 	}
 }
 
