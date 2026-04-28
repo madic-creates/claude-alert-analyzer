@@ -666,6 +666,16 @@ func denyReason(denied map[string]bool, argv []string) string {
 			}
 		}
 		// sed is in the custom denylist without in-place flags — fall through to generic message.
+
+	case "pip", "pipx", "npm", "npx", "yarn", "gem":
+		// Package managers are blocked because installing a package executes
+		// arbitrary code during the install step (Python build hooks, Node.js
+		// package.json scripts, Ruby extconf.rb install hooks). npx and pipx
+		// are the most direct bypass: they fetch and execute a remote package in
+		// a single command without a prior install step. Use read-only
+		// diagnostic commands (dpkg -l, rpm -qa, pip list, gem list, npm list)
+		// to inspect already-installed packages instead of installing new ones.
+		return fmt.Sprintf("Command denied: %q is a package manager; installing packages executes arbitrary code (build hooks); use read-only commands such as \"pip list\", \"npm list\", \"gem list\", \"dpkg -l\", or \"rpm -qa\" to inspect installed packages instead", cmd)
 	}
 
 	// mkfs.TYPE filesystem-specific formatting tool (e.g. mkfs.ext4, mkfs.btrfs,
