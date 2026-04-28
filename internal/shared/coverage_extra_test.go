@@ -251,10 +251,11 @@ func TestSendRequest_ReadBodyError(t *testing.T) {
 	defer srv.Close()
 
 	client := &ClaudeClient{
-		HTTP:    srv.Client(),
-		BaseURL: srv.URL,
-		APIKey:  "test-key",
-		Model:   "test",
+		HTTP:        srv.Client(),
+		BaseURL:     srv.URL,
+		APIKey:      "test-key",
+		Model:       "test",
+		retryDelays: []time.Duration{0, 0}, // zero-delay retries to keep test fast
 	}
 
 	_, err := client.sendRequest(context.Background(), map[string]string{"k": "v"})
