@@ -310,10 +310,12 @@ func (c *ClaudeClient) RunToolLoop(
 
 	const summaryPrompt = "You have reached the maximum number of diagnostic rounds. Do NOT call any more tools. Provide your final analysis now based on all information gathered so far. Start directly with the analysis — no preamble or meta-commentary."
 
-	// The loop always appends a []ContentBlock user message (line 243) on every
-	// tool round, so this type assertion must always succeed. A panic here would
-	// indicate a broken loop invariant, making the bug immediately visible rather
-	// than silently corrupting the conversation with two consecutive user messages.
+	// Each iteration appends a ToolMessage{Role:"user", Content:[]ContentBlock{…}}
+	// at the end of the for-loop body above, so by the time all rounds complete,
+	// messages[lastIdx].Content is always a []ContentBlock. The type assertion
+	// must therefore always succeed. A panic here would indicate a broken loop
+	// invariant, making the bug immediately visible rather than silently
+	// corrupting the conversation with two consecutive user messages.
 	lastIdx := len(messages) - 1
 	toolResults := messages[lastIdx].Content.([]ContentBlock)
 	messages[lastIdx].Content = append(toolResults, ContentBlock{
