@@ -134,7 +134,14 @@ func (c *ClaudeClient) sendRequest(ctx context.Context, body any) ([]byte, error
 		respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBytes))
 		_ = resp.Body.Close()
 		if readErr != nil {
+			// Body read failed: potentially transient (connection drop mid-response).
+			// Do not retry when the context is already done — the read failure is
+			// caused by the cancellation itself, not a server-side failure. This
+			// mirrors the same ctx.Err() guard applied to doErr above.
 			lastErr = fmt.Errorf("read response: %w", readErr)
+			if ctx.Err() != nil {
+				return nil, lastErr
+			}
 			continue
 		}
 

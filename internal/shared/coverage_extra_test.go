@@ -267,6 +267,78 @@ func TestSendRequest_ReadBodyError(t *testing.T) {
 	}
 }
 
+// TestSendRequest_ContextCancelledDuringBodyRead verifies that sendRequest
+// returns immediately when the context is cancelled during the response body
+// read (io.ReadAll), rather than continuing to retry after the unnecessary
+// delay. This covers the ctx.Err() guard added to the readErr path (mirroring
+// the same guard already present on the doErr / network-error path).
+func TestSendRequest_ContextCancelledDuringBodyRead(t *testing.T) {
+	// bodyStarted is closed when the server has started writing the response
+	// body so we can cancel the context at the right moment.
+	bodyStarted := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Error("server does not support hijacking")
+			http.Error(w, "no hijack", 500)
+			return
+		}
+		conn, bufrw, err := hj.Hijack()
+		if err != nil {
+			t.Errorf("hijack failed: %v", err)
+			return
+		}
+		// Write headers and a partial body so the client starts reading,
+		// then signal that the body has started and wait before closing.
+		_, _ = bufrw.WriteString("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10000\r\n\r\n{")
+		_ = bufrw.Flush()
+		close(bodyStarted) // signal: context can now be cancelled
+		// Hold the connection open briefly so the client is actually blocked
+		// inside io.ReadAll when the context is cancelled.
+		<-r.Context().Done()
+		_ = conn.Close()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Cancel the context as soon as the server signals it has started sending
+	// the body — this ensures cancellation happens while io.ReadAll is blocked.
+	go func() {
+		<-bodyStarted
+		cancel()
+	}()
+
+	client := &ClaudeClient{
+		HTTP:        srv.Client(),
+		BaseURL:     srv.URL,
+		APIKey:      "test-key",
+		Model:       "test",
+		retryDelays: []time.Duration{10 * time.Second}, // long enough to detect if a retry is attempted
+	}
+
+	start := time.Now()
+	_, err := client.sendRequest(ctx, map[string]string{"k": "v"})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error when context is cancelled mid-body-read, got nil")
+	}
+	// The function must return well before the retry delay (10 s). A generous
+	// upper bound of 5 s is still well below the 10 s retry delay, so any
+	// spurious retry would be caught even on a slow CI machine.
+	if elapsed > 5*time.Second {
+		t.Errorf("sendRequest took %v — looks like it waited for the retry delay instead of returning immediately on ctx cancellation", elapsed)
+	}
+	// The error should mention either "read response" (body read failed) or
+	// the context cancellation, depending on which path was taken.
+	if !strings.Contains(err.Error(), "read response") && !strings.Contains(err.Error(), "context") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
 // TestSendRequest_ContextCancelledDuringRetry verifies that when the context is
 // cancelled while sendRequest is waiting inside the retry-delay timer select,
 // the function returns immediately with a "context cancelled awaiting retry"
