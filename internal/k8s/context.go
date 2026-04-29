@@ -504,6 +504,20 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace s
 				break
 			}
 		}
+		// If no regular container statuses exist the main containers have not
+		// started yet. A failing init container is typically the root cause;
+		// collect its logs instead so the analysis has actionable output.
+		if len(p.Status.ContainerStatuses) == 0 {
+			for _, ics := range p.Status.InitContainerStatuses {
+				if !ics.Ready {
+					targetContainer = ics.Name
+					if ics.State.Waiting != nil && ics.State.Waiting.Reason == "CrashLoopBackOff" {
+						opts.Previous = true
+					}
+					break
+				}
+			}
+		}
 		if targetContainer != "" {
 			opts.Container = targetContainer
 		}

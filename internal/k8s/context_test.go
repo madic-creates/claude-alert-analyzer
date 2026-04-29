@@ -674,6 +674,130 @@ func TestGetPodLogs_RunningPodWithNoContainerStatuses(t *testing.T) {
 	}
 }
 
+// TestGetPodLogs_InitContainerCrashLoopBackOff verifies that getPodLogs targets
+// the failing init container when the pod is Pending and main containers have
+// not started yet (ContainerStatuses is empty). The init container is in
+// CrashLoopBackOff so Previous must be set to true to retrieve the last
+// terminated instance's logs.
+func TestGetPodLogs_InitContainerCrashLoopBackOff(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.PodList{Items: []corev1.Pod{{
+			ObjectMeta: metav1.ObjectMeta{Name: "init-crasher", Namespace: "prod"},
+			Spec: corev1.PodSpec{
+				InitContainers: []corev1.Container{{Name: "init-db"}},
+				Containers:     []corev1.Container{{Name: "app"}},
+			},
+			Status: corev1.PodStatus{
+				Phase:             corev1.PodPending,
+				ContainerStatuses: nil,
+				InitContainerStatuses: []corev1.ContainerStatus{
+					{
+						Name:         "init-db",
+						Ready:        false,
+						RestartCount: 3,
+						State: corev1.ContainerState{
+							Waiting: &corev1.ContainerStateWaiting{
+								Reason: "CrashLoopBackOff",
+							},
+						},
+					},
+				},
+			},
+		}}}, nil
+	})
+
+	var capturedOpts *corev1.PodLogOptions
+	cs.PrependReactor("get", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		ga, ok := action.(k8stesting.GenericAction)
+		if !ok || action.GetSubresource() != "log" {
+			return false, nil, nil
+		}
+		if opts, ok := ga.GetValue().(*corev1.PodLogOptions); ok {
+			capturedOpts = opts
+		}
+		return false, nil, nil
+	})
+
+	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	result := getPodLogs(context.Background(), cs, "prod", cfg)
+
+	if strings.Contains(result, "no failing pods") {
+		t.Error("Pending pod with failing init container must not be excluded from pod logs")
+	}
+	if capturedOpts == nil {
+		t.Fatal("GetLogs was not called for pod with failing init container")
+	}
+	if capturedOpts.Container != "init-db" {
+		t.Errorf("expected Container=%q, got %q — logs should target the failing init container", "init-db", capturedOpts.Container)
+	}
+	if !capturedOpts.Previous {
+		t.Error("Previous must be true for init container in CrashLoopBackOff")
+	}
+}
+
+// TestGetPodLogs_InitContainerError verifies that getPodLogs targets the failing
+// init container when it has terminated with an error (non-CrashLoopBackOff).
+// Previous must be false because the terminated instance's logs are current.
+func TestGetPodLogs_InitContainerError(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.PodList{Items: []corev1.Pod{{
+			ObjectMeta: metav1.ObjectMeta{Name: "init-error-pod", Namespace: "prod"},
+			Spec: corev1.PodSpec{
+				InitContainers: []corev1.Container{{Name: "init-migrate"}},
+				Containers:     []corev1.Container{{Name: "app"}},
+			},
+			Status: corev1.PodStatus{
+				Phase:             corev1.PodPending,
+				ContainerStatuses: nil,
+				InitContainerStatuses: []corev1.ContainerStatus{
+					{
+						Name:  "init-migrate",
+						Ready: false,
+						State: corev1.ContainerState{
+							Terminated: &corev1.ContainerStateTerminated{
+								ExitCode: 1,
+								Reason:   "Error",
+							},
+						},
+					},
+				},
+			},
+		}}}, nil
+	})
+
+	var capturedOpts *corev1.PodLogOptions
+	cs.PrependReactor("get", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		ga, ok := action.(k8stesting.GenericAction)
+		if !ok || action.GetSubresource() != "log" {
+			return false, nil, nil
+		}
+		if opts, ok := ga.GetValue().(*corev1.PodLogOptions); ok {
+			capturedOpts = opts
+		}
+		return false, nil, nil
+	})
+
+	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	result := getPodLogs(context.Background(), cs, "prod", cfg)
+
+	if strings.Contains(result, "no failing pods") {
+		t.Error("Pending pod with errored init container must not be excluded from pod logs")
+	}
+	if capturedOpts == nil {
+		t.Fatal("GetLogs was not called for pod with errored init container")
+	}
+	if capturedOpts.Container != "init-migrate" {
+		t.Errorf("expected Container=%q, got %q — logs should target the errored init container", "init-migrate", capturedOpts.Container)
+	}
+	if capturedOpts.Previous {
+		t.Error("Previous must be false for init container in Terminated/Error state")
+	}
+}
+
 func TestGetKubeContext_Events_WarningEventListed(t *testing.T) {
 	cs := fake.NewSimpleClientset(
 		&corev1.Event{
