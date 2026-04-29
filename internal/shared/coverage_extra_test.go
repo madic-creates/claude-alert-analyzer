@@ -1037,3 +1037,82 @@ func TestServer_Run_MetricsListenAndServeFails(t *testing.T) {
 		t.Errorf("subprocess exit code = %d, want 1\nstderr: %s", exitErr.ExitCode(), stderr.String())
 	}
 }
+
+// TestSendRequest_CtxCancelledAfterBodyReadBegins is a deterministic companion
+// to TestSendRequest_ContextCancelledDuringBodyRead. The hijack-based test has an
+// inherent race: context cancellation may fire before HTTP.Do() receives response
+// headers, hitting the doErr path instead of the readErr+ctx.Err() path. This
+// test eliminates the race by using a fake http.RoundTripper that returns a
+// response synchronously — so Do() always returns before the context is cancelled.
+// The response body blocks on its first Read() call until the context is cancelled,
+// deterministically covering the `return nil, lastErr` statement inside the
+// `if ctx.Err() != nil` guard of the readErr path in sendRequest.
+func TestSendRequest_CtxCancelledAfterBodyReadBegins(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// readStarted is closed the first time Read() is called, signalling that
+	// HTTP.Do() has returned and io.ReadAll is now blocked waiting for body data.
+	readStarted := make(chan struct{})
+
+	fakeTransport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       &ctxBlockBody{ctx: ctx, readStarted: readStarted},
+			Request:    req,
+		}, nil
+	})
+
+	// Cancel the context the moment the body Read() is first invoked.
+	go func() {
+		<-readStarted
+		cancel()
+	}()
+
+	client := &ClaudeClient{
+		HTTP:        &http.Client{Transport: fakeTransport},
+		BaseURL:     "http://fake.test/",
+		APIKey:      "test-key",
+		Model:       "test",
+		retryDelays: []time.Duration{10 * time.Second}, // long to detect any spurious retry
+	}
+
+	start := time.Now()
+	_, err := client.sendRequest(ctx, map[string]string{"k": "v"})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error when context is cancelled during body read, got nil")
+	}
+	// Must return well before the 10 s retry delay — a spurious retry would block
+	// waiting for the timer or for the second Do() to complete.
+	if elapsed > 5*time.Second {
+		t.Errorf("sendRequest took %v — did not return immediately on context cancellation", elapsed)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected errors.Is(err, context.Canceled), got: %v", err)
+	}
+}
+
+// roundTripperFunc is a functional http.RoundTripper used in tests.
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// ctxBlockBody is an io.ReadCloser whose Read blocks until its context is
+// cancelled. readStarted is closed the first time Read is called, allowing
+// tests to synchronize context cancellation with the start of body reading.
+type ctxBlockBody struct {
+	ctx         context.Context
+	readStarted chan struct{}
+	once        sync.Once
+}
+
+func (b *ctxBlockBody) Read(p []byte) (int, error) {
+	b.once.Do(func() { close(b.readStarted) })
+	<-b.ctx.Done()
+	return 0, b.ctx.Err()
+}
+
+func (b *ctxBlockBody) Close() error { return nil }
