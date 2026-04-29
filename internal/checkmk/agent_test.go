@@ -2425,10 +2425,12 @@ func TestDenyReason(t *testing.T) {
 			// arbitrary code via build hooks (setup.py, package.json scripts,
 			// extconf.rb). denyReason must explain this clearly so Claude does
 			// not retry with a different package manager, and must suggest
-			// read-only alternatives (pip list, npm list, gem list, dpkg -l).
-			// The generic "destructive or privileged" label is misleading here
-			// because package managers are blocked as code-execution vectors,
-			// not because they are intrinsically privileged or destructive.
+			// OS-level read-only alternatives (dpkg -l, rpm -qa). Note: pip,
+			// npm, and gem are themselves blocked, so they must not be suggested
+			// as alternatives. The generic "destructive or privileged" label is
+			// misleading here because package managers are blocked as
+			// code-execution vectors, not because they are intrinsically
+			// privileged or destructive.
 			msg := denyReason(DefaultDeniedCommands, []string{pkgMgr, "install", "evil-package"})
 			if !strings.Contains(msg, pkgMgr) {
 				t.Errorf("%s: expected message to name the command; got: %s", pkgMgr, msg)
@@ -2439,11 +2441,10 @@ func TestDenyReason(t *testing.T) {
 			if strings.Contains(msg, "destructive or privileged") {
 				t.Errorf("%s: expected message NOT to use generic 'destructive or privileged' phrasing; got: %s", pkgMgr, msg)
 			}
-			// Must suggest at least one read-only inspection alternative.
-			hasAlternative := strings.Contains(msg, "pip list") ||
-				strings.Contains(msg, "npm list") ||
-				strings.Contains(msg, "gem list") ||
-				strings.Contains(msg, "dpkg") ||
+			// Must suggest at least one OS-level read-only inspection alternative.
+			// pip list, npm list, and gem list must NOT be suggested because
+			// pip, npm, and gem are themselves in DefaultDeniedCommands.
+			hasAlternative := strings.Contains(msg, "dpkg") ||
 				strings.Contains(msg, "rpm")
 			if !hasAlternative {
 				t.Errorf("%s: expected message to suggest a read-only inspection alternative; got: %s", pkgMgr, msg)
