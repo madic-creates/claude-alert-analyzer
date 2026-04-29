@@ -148,7 +148,10 @@ func main() {
 
 	slog.Info("CheckMK Alert Analyzer started",
 		"port", cfg.Port, "metricsPort", cfg.MetricsPort, "model", cfg.ClaudeModel,
-		"checkmkAPI", cfg.CheckMKAPIURL)
+		"apiBaseURL", cfg.APIBaseURL,
+		"checkmkAPI", cfg.CheckMKAPIURL,
+		"sshEnabled", cfg.SSHEnabled,
+		"maxAgentRounds", cfg.MaxAgentRounds)
 
 	handler := checkmk.HandleWebhook(cfg, cooldownMgr, srv.Enqueue, metrics)
 	srv.Run(handler)
