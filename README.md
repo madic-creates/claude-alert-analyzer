@@ -8,6 +8,13 @@ Instead of staring at a 3 AM "DiskPressure" alert and manually running ten `kube
 
 <br clear="left">
 
+## Blog Posts
+
+Background and development story (in German):
+
+- [KI-gestützte Alert-Analyse für Kubernetes und CheckMK](https://www.geekbundle.org/ki-gestuetzte-alert-analyse-fuer-kubernetes-und-checkmk/)
+- [Claude Analyzer — Entwicklung](https://www.geekbundle.org/claude-analyzer-entwicklung/)
+
 ## How It Works
 
 ```
