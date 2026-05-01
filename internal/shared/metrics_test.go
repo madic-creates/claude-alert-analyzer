@@ -230,7 +230,7 @@ func TestWithPrometheusMetrics_RecordsCallDuration(t *testing.T) {
 	}
 	client.WithPrometheusMetrics(m, "k8s")
 
-	_, err := client.Analyze(context.Background(), "system", "user")
+	_, err := client.Analyze(context.Background(), "test-model", "system", "user")
 	if err != nil {
 		t.Fatalf("Analyze returned error: %v", err)
 	}

@@ -409,6 +409,7 @@ func RunAgenticDiagnostics(
 	metrics *shared.AlertMetrics,
 	userPrompt string,
 	maxRounds int,
+	model string,
 ) (string, error) {
 	slog.Info("starting agentic k8s diagnostics", "maxRounds", maxRounds)
 
@@ -442,6 +443,7 @@ func RunAgenticDiagnostics(
 
 	analysis, rounds, exhausted, err := runner.RunToolLoop(
 		ctx,
+		model,
 		agentSystemPromptForRounds(maxRounds),
 		userPrompt,
 		[]shared.Tool{kubectlTool, promqlTool},

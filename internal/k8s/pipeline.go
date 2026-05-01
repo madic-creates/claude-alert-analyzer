@@ -18,7 +18,10 @@ type PipelineDeps struct {
 	Cooldown       *shared.CooldownManager
 	Metrics        *shared.AlertMetrics
 	MaxAgentRounds int
-	GatherContext  func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext
+	// ClaudeModel is the model name passed to RunToolLoop calls.
+	// Temporary field — will be replaced by policy-derived model in a later task.
+	ClaudeModel   string
+	GatherContext func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext
 }
 
 // ProcessAlert gathers context, analyzes via Claude, and publishes results.
@@ -57,7 +60,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 		shared.SanitizeAlertField(alert.Fields["startsAt"]),
 		actx.FormatForPrompt())
 
-	analysis, err := RunAgenticDiagnostics(ctx, deps.ToolRunner, deps.KubectlRunner, deps.Prom, deps.Metrics, userPrompt, deps.MaxAgentRounds)
+	analysis, err := RunAgenticDiagnostics(ctx, deps.ToolRunner, deps.KubectlRunner, deps.Prom, deps.Metrics, userPrompt, deps.MaxAgentRounds, deps.ClaudeModel)
 	if err != nil {
 		slog.Error("analysis failed", "alertname", alertname, "error", err)
 		deps.Metrics.RecordClaudeAPIError(alert.Source)

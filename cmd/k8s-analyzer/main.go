@@ -104,6 +104,7 @@ func main() {
 		Cooldown:       cooldownMgr,
 		Metrics:        metrics,
 		MaxAgentRounds: cfg.MaxAgentRounds,
+		ClaudeModel:    cfg.ClaudeModel,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return k8s.GatherContext(ctx, promClient, clientset, k8s.AlertPayloadToAlert(alert), cfg)
 		},

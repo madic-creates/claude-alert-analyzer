@@ -168,9 +168,13 @@ func (c *ClaudeClient) sendRequest(ctx context.Context, body any) ([]byte, error
 }
 
 // Analyze sends a single-turn analysis request to the Claude API.
-func (c *ClaudeClient) Analyze(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+// model is the model to use for this request; if empty, c.Model is used as fallback.
+func (c *ClaudeClient) Analyze(ctx context.Context, model, systemPrompt, userPrompt string) (string, error) {
+	if model == "" {
+		model = c.Model
+	}
 	reqBody := ToolRequest{
-		Model:     c.Model,
+		Model:     model,
 		MaxTokens: 2048,
 		System:    []SystemBlock{{Type: "text", Text: systemPrompt}},
 		Messages:  []ToolMessage{{Role: "user", Content: userPrompt}},
@@ -191,7 +195,7 @@ func (c *ClaudeClient) Analyze(ctx context.Context, systemPrompt, userPrompt str
 	}
 
 	slog.Info("Claude analysis complete",
-		"model", c.Model,
+		"model", model,
 		"inputTokens", result.Usage.InputTokens,
 		"outputTokens", result.Usage.OutputTokens)
 
@@ -204,7 +208,7 @@ func (c *ClaudeClient) Analyze(ctx context.Context, systemPrompt, userPrompt str
 	if result.StopReason != "" && result.StopReason != "end_turn" {
 		slog.Warn("analysis response may be truncated",
 			"stop_reason", result.StopReason,
-			"model", c.Model,
+			"model", model,
 			"outputTokens", result.Usage.OutputTokens)
 	}
 
@@ -220,12 +224,16 @@ func (c *ClaudeClient) Analyze(ctx context.Context, systemPrompt, userPrompt str
 // "roles must alternate").
 func (c *ClaudeClient) RunToolLoop(
 	ctx context.Context,
+	model string,
 	systemPrompt string,
 	userPrompt string,
 	tools []Tool,
 	maxRounds int,
 	handleTool func(name string, input json.RawMessage) (string, error),
 ) (string, int, bool, error) {
+	if model == "" {
+		model = c.Model
+	}
 	if maxRounds <= 0 {
 		return "", 0, false, fmt.Errorf("maxRounds must be at least 1, got %d", maxRounds)
 	}
@@ -237,7 +245,7 @@ func (c *ClaudeClient) RunToolLoop(
 		slog.Info("tool loop round", "round", round+1, "maxRounds", maxRounds)
 
 		reqBody := ToolRequest{
-			Model:     c.Model,
+			Model:     model,
 			MaxTokens: 4096,
 			System:    []SystemBlock{{Type: "text", Text: systemPrompt}},
 			Tools:     tools,
@@ -331,7 +339,7 @@ func (c *ClaudeClient) RunToolLoop(
 	})
 
 	reqBody := ToolRequest{
-		Model:      c.Model,
+		Model:      model,
 		MaxTokens:  4096,
 		System:     []SystemBlock{{Type: "text", Text: systemPrompt}},
 		Tools:      tools,

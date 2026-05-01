@@ -495,7 +495,7 @@ type fakeToolLoopRunner struct {
 }
 
 func (f *fakeToolLoopRunner) RunToolLoop(
-	ctx context.Context, system, user string,
+	ctx context.Context, model, system, user string,
 	tools []shared.Tool, maxRounds int,
 	handleTool func(name string, input json.RawMessage) (string, error),
 ) (string, int, bool, error) {
@@ -547,7 +547,7 @@ func TestRunAgenticDiagnostics_HappyPath(t *testing.T) {
 
 	got, err := RunAgenticDiagnostics(
 		context.Background(), runner, kc, pq, metrics,
-		"## Alert: Foo\nbody", 10,
+		"## Alert: Foo\nbody", 10, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -580,7 +580,7 @@ func TestRunAgenticDiagnostics_PromQLDispatch(t *testing.T) {
 			return "ok", nil
 		},
 	}
-	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10); err != nil {
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(pq.calls) != 1 || pq.calls[0] != "up" {
@@ -608,7 +608,7 @@ func TestRunAgenticDiagnostics_ValidationRejected(t *testing.T) {
 			return "stopped early", nil
 		},
 	}
-	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10); err != nil {
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -627,7 +627,7 @@ func TestRunAgenticDiagnostics_UnknownTool(t *testing.T) {
 			return "ok", nil
 		},
 	}
-	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10); err != nil {
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -645,7 +645,7 @@ func TestRunAgenticDiagnostics_RecordsMetrics(t *testing.T) {
 			return "done", nil
 		},
 	}
-	_, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10)
+	_, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10, "test-model")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -693,7 +693,7 @@ func TestRunAgenticDiagnostics_PanicRecovery(t *testing.T) {
 
 	out, err := RunAgenticDiagnostics(
 		context.Background(), runner, panickyKubectlRunner{}, pq, metrics,
-		"ctx", 10,
+		"ctx", 10, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("loop should not return error after recovered panic: %v", err)
@@ -721,7 +721,7 @@ type fakeToolLoopRunnerExhausted struct {
 }
 
 func (f *fakeToolLoopRunnerExhausted) RunToolLoop(
-	ctx context.Context, system, user string,
+	ctx context.Context, model, system, user string,
 	tools []shared.Tool, maxRounds int,
 	handleTool func(name string, input json.RawMessage) (string, error),
 ) (string, int, bool, error) {
@@ -734,7 +734,7 @@ func TestRunAgenticDiagnostics_ForcedSummary(t *testing.T) {
 	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
 	runner := &fakeToolLoopRunnerExhausted{maxRounds: 10}
 
-	out, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10)
+	out, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10, "test-model")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -775,7 +775,7 @@ func TestRunAgenticDiagnostics_RBACForbidden(t *testing.T) {
 			return "ok", nil
 		},
 	}
-	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10); err != nil {
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 

@@ -11,14 +11,17 @@ import (
 
 // PipelineDeps holds all dependencies for CheckMK alert processing.
 type PipelineDeps struct {
-	Analyzer      shared.Analyzer
-	ToolRunner    shared.ToolLoopRunner
-	Publishers    []shared.Publisher
-	Cooldown      *shared.CooldownManager
-	Metrics       *shared.AlertMetrics
-	SSHEnabled    bool
-	SSHDialer     Dialer
-	SSHConfig     Config
+	Analyzer   shared.Analyzer
+	ToolRunner shared.ToolLoopRunner
+	Publishers []shared.Publisher
+	Cooldown   *shared.CooldownManager
+	Metrics    *shared.AlertMetrics
+	SSHEnabled bool
+	SSHDialer  Dialer
+	SSHConfig  Config
+	// ClaudeModel is the model name passed to Analyze/RunToolLoop calls.
+	// Temporary field — will be replaced by policy-derived model in a later task.
+	ClaudeModel   string
 	GatherContext func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext
 	ValidateHost  func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error)
 }
@@ -76,7 +79,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 
 	if sshOK {
 		var err error
-		analysis, err = RunAgenticDiagnostics(ctx, deps.SSHConfig, deps.ToolRunner, deps.SSHDialer, deps.Metrics, hostname, hostInfo.VerifiedIP, alertContext, deps.SSHConfig.MaxAgentRounds)
+		analysis, err = RunAgenticDiagnostics(ctx, deps.SSHConfig, deps.ToolRunner, deps.SSHDialer, deps.Metrics, hostname, hostInfo.VerifiedIP, alertContext, deps.SSHConfig.MaxAgentRounds, deps.ClaudeModel)
 		if err != nil {
 			slog.Error("agentic diagnostics failed", "error", err)
 			deps.Metrics.RecordClaudeAPIError(alert.Source)
@@ -91,7 +94,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 		}
 	} else {
 		var err error
-		analysis, err = deps.Analyzer.Analyze(ctx, StaticAnalysisSystemPrompt, alertContext)
+		analysis, err = deps.Analyzer.Analyze(ctx, deps.ClaudeModel, StaticAnalysisSystemPrompt, alertContext)
 		if err != nil {
 			slog.Error("analysis failed", "error", err)
 			deps.Metrics.RecordClaudeAPIError(alert.Source)

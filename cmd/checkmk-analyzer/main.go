@@ -119,14 +119,15 @@ func main() {
 	}
 
 	deps := checkmk.PipelineDeps{
-		Analyzer:   claudeClient,
-		ToolRunner: claudeClient,
-		Publishers: publishers,
-		Cooldown:   cooldownMgr,
-		Metrics:    metrics,
-		SSHEnabled: cfg.SSHEnabled,
-		SSHDialer:  sshDialer,
-		SSHConfig:  cfg,
+		Analyzer:    claudeClient,
+		ToolRunner:  claudeClient,
+		Publishers:  publishers,
+		Cooldown:    cooldownMgr,
+		Metrics:     metrics,
+		SSHEnabled:  cfg.SSHEnabled,
+		SSHDialer:   sshDialer,
+		SSHConfig:   cfg,
+		ClaudeModel: cfg.ClaudeModel,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *checkmk.HostInfo) shared.AnalysisContext {
 			return checkmk.GatherContext(ctx, apiClient, alert, hostInfo)
 		},

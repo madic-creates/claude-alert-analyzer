@@ -19,13 +19,13 @@ type mockAnalyzer struct {
 	capturedUserPrompt string
 }
 
-func (m *mockAnalyzer) Analyze(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+func (m *mockAnalyzer) Analyze(ctx context.Context, model, systemPrompt, userPrompt string) (string, error) {
 	m.capturedPrompt = systemPrompt
 	m.capturedUserPrompt = userPrompt
 	return m.result, m.err
 }
 
-func (m *mockAnalyzer) RunToolLoop(ctx context.Context, systemPrompt, userPrompt string,
+func (m *mockAnalyzer) RunToolLoop(ctx context.Context, model, systemPrompt, userPrompt string,
 	tools []shared.Tool, maxRounds int, handleTool func(string, json.RawMessage) (string, error)) (string, int, bool, error) {
 	m.capturedPrompt = systemPrompt
 	m.capturedUserPrompt = userPrompt
@@ -34,7 +34,7 @@ func (m *mockAnalyzer) RunToolLoop(ctx context.Context, systemPrompt, userPrompt
 
 type panicAnalyzer struct{}
 
-func (p *panicAnalyzer) Analyze(_ context.Context, _, _ string) (string, error) {
+func (p *panicAnalyzer) Analyze(_ context.Context, _, _, _ string) (string, error) {
 	panic("simulated analysis panic")
 }
 
@@ -42,7 +42,7 @@ func (p *panicAnalyzer) Analyze(_ context.Context, _, _ string) (string, error) 
 // can verify the deferred recovery in ProcessAlert fires on the SSH agentic path.
 type panicToolRunner struct{}
 
-func (p *panicToolRunner) RunToolLoop(_ context.Context, _, _ string,
+func (p *panicToolRunner) RunToolLoop(_ context.Context, _, _, _ string,
 	_ []shared.Tool, _ int, _ func(string, json.RawMessage) (string, error)) (string, int, bool, error) {
 	panic("simulated tool-loop panic")
 }
