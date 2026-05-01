@@ -20,6 +20,9 @@ FROM scratch AS k8s-analyzer
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /k8s-analyzer /k8s-analyzer
 COPY --from=builder /kubectl /usr/local/bin/kubectl
+# kubectl writes its discovery cache to $HOME/.kube/cache. Provide a HOME the
+# nobody user can write to. /tmp is conventionally tmpfs in k8s pods.
+ENV HOME=/tmp
 USER 65534:65534
 EXPOSE 8080
 ENTRYPOINT ["/k8s-analyzer"]
