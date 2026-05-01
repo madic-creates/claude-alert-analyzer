@@ -116,6 +116,13 @@ func main() {
 		},
 	}
 
+	if deps.Analyzer == nil || deps.ToolRunner == nil || deps.Policy == nil ||
+		deps.Cooldown == nil || deps.Metrics == nil || deps.GatherContext == nil ||
+		deps.KubectlRunner == nil || deps.Prom == nil {
+		slog.Error("k8s pipeline deps incomplete — refusing to start")
+		os.Exit(1)
+	}
+
 	srv := shared.NewServer(shared.ServerConfig{
 		Port:         cfg.Port,
 		MetricsPort:  cfg.MetricsPort,

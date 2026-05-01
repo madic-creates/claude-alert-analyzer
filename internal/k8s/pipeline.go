@@ -10,6 +10,10 @@ import (
 )
 
 // PipelineDeps holds all dependencies for alert processing.
+//
+// Invariants: Analyzer, ToolRunner, Policy, Cooldown, Metrics, GatherContext,
+// KubectlRunner, and Prom must all be non-nil. Construction in cmd/k8s-analyzer
+// validates this at startup; the pipeline does not re-check at runtime.
 type PipelineDeps struct {
 	// Analyzer is used for the static-only path (rounds==0): no kubectl/promql
 	// tools, just the gathered context. In production both Analyzer and
