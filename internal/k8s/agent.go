@@ -19,10 +19,10 @@ const (
 	maxKubectlPromQLen = 4096 // also used by parsePromQLInput in Task 8
 )
 
-// parseKubectlInput validates the argv from a kubectl_exec tool call. It does
-// NOT yet check the verb allowlist or global-flag denylist — those gates are
-// applied by separate helpers (Tasks 6 and 7). The split keeps each concern in
-// its own table test.
+// parseKubectlInput validates the argv from a kubectl_exec tool call. It
+// checks structural constraints (length, control characters) then delegates to
+// validateKubectlFlags (global-flag denylist, Task 7) and validateKubectlVerb
+// (verb allowlist, Task 6). The split keeps each concern in its own table test.
 func parseKubectlInput(input json.RawMessage) ([]string, error) {
 	var parsed struct {
 		Command []string `json:"command"`
@@ -59,6 +59,9 @@ func parseKubectlInput(input json.RawMessage) ([]string, error) {
 	}
 	if totalBytes > maxTotalArgBytes {
 		return nil, fmt.Errorf("command total size %d bytes exceeds maximum of %d bytes", totalBytes, maxTotalArgBytes)
+	}
+	if err := validateKubectlFlags(parsed.Command); err != nil {
+		return nil, err
 	}
 	if err := validateKubectlVerb(parsed.Command); err != nil {
 		return nil, err
@@ -140,4 +143,52 @@ func allowedSubVerbList(verb string) string {
 	}
 	sort.Strings(keys)
 	return strings.Join(keys, ", ")
+}
+
+// deniedKubectlGlobalFlags lists flags that swap the cluster identity, target
+// server, or auth credentials. They are rejected anywhere in argv before the
+// verb is even examined: an allowed verb (get) used with an alternate
+// kubeconfig defeats RBAC entirely.
+var deniedKubectlGlobalFlags = map[string]bool{
+	"--kubeconfig":               true,
+	"--server":                   true,
+	"-s":                         true, // short alias for --server
+	"--token":                    true,
+	"--token-file":               true,
+	"--as":                       true,
+	"--as-group":                 true,
+	"--as-uid":                   true,
+	"--user":                     true,
+	"--cluster":                  true,
+	"--context":                  true,
+	"--certificate-authority":    true,
+	"--client-certificate":       true,
+	"--client-key":               true,
+	"--insecure-skip-tls-verify": true,
+	"--password":                 true,
+	"--username":                 true,
+	"--tls-server-name":          true,
+}
+
+// validateKubectlFlags rejects any argv element that names a denied global flag,
+// in either the "--flag value" form (exact-token match) or the "--flag=value"
+// form (prefix match up to the "="). The single-dash "-s" form is matched only
+// as an exact token so that per-subcommand short flags like "--since" or "-c"
+// are unaffected.
+func validateKubectlFlags(argv []string) error {
+	for _, a := range argv {
+		// Exact-token match (covers "--kubeconfig" alone before its value, and "-s")
+		if deniedKubectlGlobalFlags[a] {
+			return fmt.Errorf("command denied: %s is not permitted; the in-cluster ServiceAccount is the only allowed identity (other denied flags include --kubeconfig, --server, --token, --as, --user, --cluster, --context, --client-*, --certificate-authority, --insecure-skip-tls-verify, --password, --username)", a)
+		}
+		// "--flag=value" form: split on the first "=" and check the head.
+		if strings.HasPrefix(a, "--") {
+			if eq := strings.IndexByte(a, '='); eq != -1 {
+				if deniedKubectlGlobalFlags[a[:eq]] {
+					return fmt.Errorf("command denied: %s is not permitted; the in-cluster ServiceAccount is the only allowed identity", a[:eq])
+				}
+			}
+		}
+	}
+	return nil
 }

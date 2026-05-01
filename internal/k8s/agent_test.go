@@ -192,3 +192,57 @@ func TestParseKubectlInput_VerbAllowlist(t *testing.T) {
 		})
 	}
 }
+
+func TestParseKubectlInput_GlobalFlagDenylist(t *testing.T) {
+	deniedFlags := []string{
+		"--kubeconfig", "--server", "--token", "--token-file",
+		"--as", "--as-group", "--as-uid",
+		"--user", "--cluster", "--context",
+		"--certificate-authority",
+		"--client-certificate", "--client-key",
+		"--insecure-skip-tls-verify",
+		"--password", "--username",
+		"--tls-server-name",
+	}
+	for _, f := range deniedFlags {
+		// --flag value form
+		t.Run("space:"+f, func(t *testing.T) {
+			argv := `["get","pods","` + f + `","value"]`
+			_, err := parseKubectlInput(json.RawMessage(`{"command":` + argv + `}`))
+			if err == nil || !strings.Contains(err.Error(), f) {
+				t.Errorf("expected rejection naming %q, got %v", f, err)
+			}
+		})
+		// --flag=value form
+		t.Run("equals:"+f, func(t *testing.T) {
+			argv := `["get","pods","` + f + `=value"]`
+			_, err := parseKubectlInput(json.RawMessage(`{"command":` + argv + `}`))
+			if err == nil || !strings.Contains(err.Error(), f) {
+				t.Errorf("expected rejection naming %q, got %v", f, err)
+			}
+		})
+		// flag before verb form
+		t.Run("before-verb:"+f, func(t *testing.T) {
+			argv := `["` + f + `=value","get","pods"]`
+			_, err := parseKubectlInput(json.RawMessage(`{"command":` + argv + `}`))
+			if err == nil || !strings.Contains(err.Error(), f) {
+				t.Errorf("expected rejection naming %q, got %v", f, err)
+			}
+		})
+	}
+
+	t.Run("short -s flag", func(t *testing.T) {
+		_, err := parseKubectlInput(json.RawMessage(`{"command":["get","pods","-s","https://attacker"]}`))
+		if err == nil || !strings.Contains(err.Error(), "-s") {
+			t.Errorf("expected rejection naming -s, got %v", err)
+		}
+	})
+	t.Run("short -s does not match longer flags", func(t *testing.T) {
+		// Make sure substring matching does NOT happen — argv element "--since"
+		// must not be rejected as if it were "-s".
+		_, err := parseKubectlInput(json.RawMessage(`{"command":["logs","prom-0","--since=10m"]}`))
+		if err != nil {
+			t.Errorf("expected no rejection for --since, got %v", err)
+		}
+	})
+}
