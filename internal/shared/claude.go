@@ -225,9 +225,9 @@ func (c *ClaudeClient) RunToolLoop(
 	tools []Tool,
 	maxRounds int,
 	handleTool func(name string, input json.RawMessage) (string, error),
-) (string, error) {
+) (string, int, bool, error) {
 	if maxRounds <= 0 {
-		return "", fmt.Errorf("maxRounds must be at least 1, got %d", maxRounds)
+		return "", 0, false, fmt.Errorf("maxRounds must be at least 1, got %d", maxRounds)
 	}
 	messages := []ToolMessage{{Role: "user", Content: userPrompt}}
 
@@ -246,16 +246,16 @@ func (c *ClaudeClient) RunToolLoop(
 
 		respBody, err := c.sendRequest(ctx, reqBody)
 		if err != nil {
-			return "", fmt.Errorf("round %d: %w", round+1, err)
+			return "", round + 1, false, fmt.Errorf("round %d: %w", round+1, err)
 		}
 
 		var resp ToolResponse
 		if err := json.Unmarshal(respBody, &resp); err != nil {
-			return "", fmt.Errorf("round %d parse: %w", round+1, err)
+			return "", round + 1, false, fmt.Errorf("round %d parse: %w", round+1, err)
 		}
 
 		if resp.Error != nil {
-			return "", fmt.Errorf("round %d API error: %s: %s", round+1, resp.Error.Type, resp.Error.Message)
+			return "", round + 1, false, fmt.Errorf("round %d API error: %s: %s", round+1, resp.Error.Type, resp.Error.Message)
 		}
 
 		totalInput += resp.Usage.InputTokens
@@ -269,7 +269,7 @@ func (c *ClaudeClient) RunToolLoop(
 				"rounds", round+1,
 				"totalInputTokens", totalInput,
 				"totalOutputTokens", totalOutput)
-			return extractText(resp.Content), nil
+			return extractText(resp.Content), round + 1, false, nil
 		}
 
 		// Process tool calls
@@ -302,7 +302,7 @@ func (c *ClaudeClient) RunToolLoop(
 		if len(toolResults) == 0 {
 			slog.Warn("tool loop: no tool_use blocks found, returning text as final answer",
 				"stop_reason", resp.StopReason, "round", round+1)
-			return extractText(resp.Content), nil
+			return extractText(resp.Content), round + 1, false, nil
 		}
 
 		messages = append(messages, ToolMessage{Role: "user", Content: toolResults})
@@ -341,16 +341,16 @@ func (c *ClaudeClient) RunToolLoop(
 
 	respBody, err := c.sendRequest(ctx, reqBody)
 	if err != nil {
-		return "", fmt.Errorf("summary request: %w", err)
+		return "", maxRounds, true, fmt.Errorf("summary request: %w", err)
 	}
 
 	var resp ToolResponse
 	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return "", fmt.Errorf("summary parse: %w", err)
+		return "", maxRounds, true, fmt.Errorf("summary parse: %w", err)
 	}
 
 	if resp.Error != nil {
-		return "", fmt.Errorf("summary API error: %s: %s", resp.Error.Type, resp.Error.Message)
+		return "", maxRounds, true, fmt.Errorf("summary API error: %s: %s", resp.Error.Type, resp.Error.Message)
 	}
 
 	totalInput += resp.Usage.InputTokens
@@ -368,7 +368,7 @@ func (c *ClaudeClient) RunToolLoop(
 		slog.Warn("forced summary produced empty analysis", "contentBlocks", len(resp.Content))
 	}
 
-	return analysis, nil
+	return analysis, maxRounds, true, nil
 }
 
 // isAnthropicURL returns true when rawURL targets the Anthropic API directly

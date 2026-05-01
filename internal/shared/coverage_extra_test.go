@@ -54,7 +54,7 @@ func TestRunToolLoop_RoundParseError(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	_, err := client.RunToolLoop(
+	_, _, _, err := client.RunToolLoop(
 		// context.Background is fine — the request will complete, just with bad JSON
 		t.Context(),
 		"system", "user prompt", tools, 10,
@@ -102,7 +102,7 @@ func TestRunToolLoop_SummaryParseError(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	_, err := client.RunToolLoop(
+	_, _, _, err := client.RunToolLoop(
 		t.Context(),
 		"system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "ok", nil },
@@ -155,7 +155,7 @@ func TestRunToolLoop_ForcedSummaryEmptyContent(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	result, err := client.RunToolLoop(
+	result, _, _, err := client.RunToolLoop(
 		t.Context(),
 		"system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil },
@@ -182,7 +182,7 @@ func TestRunToolLoop_ZeroMaxRounds(t *testing.T) {
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
 	for _, rounds := range []int{0, -1, -100} {
-		_, err := client.RunToolLoop(
+		_, _, _, err := client.RunToolLoop(
 			t.Context(),
 			"system", "user prompt", tools, rounds,
 			func(name string, input json.RawMessage) (string, error) { return "", nil },

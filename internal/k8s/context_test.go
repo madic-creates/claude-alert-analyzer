@@ -51,7 +51,7 @@ func makePromServer(t *testing.T, result []PromResult) *httptest.Server {
 
 func TestGetKubeContext_InvalidNamespace(t *testing.T) {
 	cs := fake.NewSimpleClientset()
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	invalidNamespaces := []string{
 		`default"}[5m]) or up{namespace="evil`,
@@ -78,7 +78,7 @@ func TestGetKubeContext_InvalidNamespace(t *testing.T) {
 func TestGetKubeContext_NoNamespace(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	alert := makeAlertWithLabels(map[string]string{})
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	events, pods, logs := GetKubeContext(context.Background(), cs, alert, cfg)
 	if events != "(no namespace in alert)" {
@@ -95,7 +95,7 @@ func TestGetKubeContext_NoNamespace(t *testing.T) {
 func TestGetKubeContext_EmptyNamespace_NoEvents(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	alert := makeAlertWithLabels(map[string]string{"namespace": "mynamespace"})
-	cfg := Config{AllowedNamespaces: []string{"mynamespace"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	events, pods, logs := GetKubeContext(context.Background(), cs, alert, cfg)
 	if events != "(no warning events)" {
@@ -130,7 +130,7 @@ func TestGetKubeContext_PodStatusListed(t *testing.T) {
 		},
 	)
 	alert := makeAlertWithLabels(map[string]string{"namespace": "prod"})
-	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	_, pods, _ := GetKubeContext(context.Background(), cs, alert, cfg)
 	if !strings.Contains(pods, "web-abc") {
@@ -170,7 +170,7 @@ func TestGetKubeContext_PodPhaseSanitized(t *testing.T) {
 		},
 	)
 	alert := makeAlertWithLabels(map[string]string{"namespace": "prod"})
-	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	_, pods, _ := GetKubeContext(context.Background(), cs, alert, cfg)
 
@@ -188,28 +188,6 @@ func TestGetKubeContext_PodPhaseSanitized(t *testing.T) {
 	}
 }
 
-func TestGetKubeContext_LogsSkipped_WhenNamespaceNotAllowed(t *testing.T) {
-	cs := fake.NewSimpleClientset()
-	alert := makeAlertWithLabels(map[string]string{"namespace": "restricted"})
-	cfg := Config{AllowedNamespaces: []string{"allowed-only"}, MaxLogBytes: 4096}
-
-	_, _, logs := GetKubeContext(context.Background(), cs, alert, cfg)
-	if !strings.Contains(logs, "not in log allowlist") {
-		t.Errorf("expected not-in-allowlist message, got %q", logs)
-	}
-}
-
-func TestGetKubeContext_LogsSkipped_WhenNoAllowlist(t *testing.T) {
-	cs := fake.NewSimpleClientset()
-	alert := makeAlertWithLabels(map[string]string{"namespace": "myns"})
-	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
-
-	_, _, logs := GetKubeContext(context.Background(), cs, alert, cfg)
-	if !strings.Contains(logs, "not in log allowlist") {
-		t.Errorf("expected not-in-allowlist message for empty allowlist, got %q", logs)
-	}
-}
-
 func TestGetKubeContext_LogsAllowed_NoFailingPods(t *testing.T) {
 	cs := fake.NewSimpleClientset(
 		&corev1.Pod{
@@ -218,8 +196,7 @@ func TestGetKubeContext_LogsAllowed_NoFailingPods(t *testing.T) {
 		},
 	)
 	alert := makeAlertWithLabels(map[string]string{"namespace": "app"})
-	// Wildcard allowlist so logs are attempted
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	_, _, logs := GetKubeContext(context.Background(), cs, alert, cfg)
 	// No failing pods — the fake client field-selector filter won't exclude the Running pod
@@ -230,15 +207,15 @@ func TestGetKubeContext_LogsAllowed_NoFailingPods(t *testing.T) {
 	_ = logs
 }
 
-func TestGetKubeContext_WildcardAllowlistPermitsLogs(t *testing.T) {
+func TestGetKubeContext_LogsCollected_NoFailingPods(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	alert := makeAlertWithLabels(map[string]string{"namespace": "anything"})
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	_, _, logs := GetKubeContext(context.Background(), cs, alert, cfg)
-	// With wildcard and no failing pods, expect "(no failing pods)"
+	// With no failing pods, expect "(no failing pods)"
 	if logs != "(no failing pods)" {
-		// The fake client doesn't support field selectors, so the second pod list
+		// The fake client doesn't support field selectors, so the pod list
 		// may return all pods. If there are none, we should get "(no failing pods)".
 		// Accept either "(no failing pods)" or a log entry (for the fake client path).
 		if !strings.Contains(logs, "no failing pods") && !strings.Contains(logs, "no logs") {
@@ -258,7 +235,7 @@ func TestGetKubeContext_PodLogsAPIError(t *testing.T) {
 		return true, nil, errors.New("kube api unavailable")
 	})
 	alert := makeAlertWithLabels(map[string]string{"namespace": "prod"})
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	_, _, logs := GetKubeContext(context.Background(), cs, alert, cfg)
 	if strings.Contains(logs, "no failing pods") {
@@ -301,7 +278,7 @@ func TestGetPodLogs_LimitBytesPassedToAPI(t *testing.T) {
 		return false, nil, nil // let default handler proceed (returns empty body)
 	})
 
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: wantMaxLogBytes}
+	cfg := Config{MaxLogBytes: wantMaxLogBytes}
 	getPodLogs(context.Background(), cs, "testns", cfg)
 
 	if capturedOpts == nil {
@@ -360,7 +337,7 @@ func TestGetPodLogs_MultiContainerPod(t *testing.T) {
 		return false, nil, nil
 	})
 
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 	getPodLogs(context.Background(), cs, "prod", cfg)
 
 	if capturedOpts == nil {
@@ -399,7 +376,7 @@ func TestGetPodLogs_SingleContainerPod(t *testing.T) {
 		return false, nil, nil
 	})
 
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 	getPodLogs(context.Background(), cs, "prod", cfg)
 
 	if capturedOpts == nil {
@@ -432,7 +409,7 @@ func TestGetPodLogs_FetchBoundedToMaxLogPods(t *testing.T) {
 		return true, &corev1.PodList{Items: items}, nil
 	})
 
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 	result := getPodLogs(context.Background(), cs, "prod", cfg)
 
 	// Count pod entries in the output. Each pod appears as "--- fail-pod-N ---".
@@ -488,7 +465,7 @@ func TestGetPodLogs_APILimitReachedFewFailures(t *testing.T) {
 		return true, &corev1.PodList{Items: items}, nil
 	})
 
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 	result := getPodLogs(context.Background(), cs, "prod", cfg)
 
 	// The one failing pod's logs must appear.
@@ -531,7 +508,7 @@ func TestGetPodLogs_NoFalsePositiveNoteWhenAllFailingPodsShown(t *testing.T) {
 		return true, &corev1.PodList{Items: items}, nil
 	})
 
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 	result := getPodLogs(context.Background(), cs, "prod", cfg)
 
 	// All maxLogPods failing pods must appear in the output.
@@ -595,7 +572,7 @@ func TestGetPodLogs_CrashLoopBackOff(t *testing.T) {
 		return false, nil, nil
 	})
 
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 	result := getPodLogs(context.Background(), cs, "prod", cfg)
 
 	if strings.Contains(result, "no failing pods") {
@@ -631,7 +608,7 @@ func TestGetPodLogs_HealthyRunningPodsExcluded(t *testing.T) {
 		}}, nil
 	})
 
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 	result := getPodLogs(context.Background(), cs, "prod", cfg)
 
 	if !strings.Contains(result, "no failing pods") {
@@ -663,7 +640,7 @@ func TestGetPodLogs_RunningPodWithNoContainerStatuses(t *testing.T) {
 		}}, nil
 	})
 
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 	result := getPodLogs(context.Background(), cs, "prod", cfg)
 
 	if !strings.Contains(result, "no failing pods") {
@@ -720,7 +697,7 @@ func TestGetPodLogs_InitContainerCrashLoopBackOff(t *testing.T) {
 		return false, nil, nil
 	})
 
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 	result := getPodLogs(context.Background(), cs, "prod", cfg)
 
 	if strings.Contains(result, "no failing pods") {
@@ -781,7 +758,7 @@ func TestGetPodLogs_InitContainerError(t *testing.T) {
 		return false, nil, nil
 	})
 
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 	result := getPodLogs(context.Background(), cs, "prod", cfg)
 
 	if strings.Contains(result, "no failing pods") {
@@ -814,7 +791,7 @@ func TestGetKubeContext_Events_WarningEventListed(t *testing.T) {
 		},
 	)
 	alert := makeAlertWithLabels(map[string]string{"namespace": "prod"})
-	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	events, _, _ := GetKubeContext(context.Background(), cs, alert, cfg)
 	if !strings.Contains(events, "BackOff") {
@@ -847,7 +824,7 @@ func TestGetKubeContext_Events_MessageSanitized(t *testing.T) {
 		},
 	)
 	alert := makeAlertWithLabels(map[string]string{"namespace": "prod"})
-	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	events, _, _ := GetKubeContext(context.Background(), cs, alert, cfg)
 
@@ -981,7 +958,7 @@ func TestGetEvents_LimitSetInListOptions(t *testing.T) {
 	})
 
 	alert := makeAlertWithLabels(map[string]string{"namespace": "busy"})
-	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	events, _, _ := GetKubeContext(context.Background(), cs, alert, cfg)
 
@@ -1030,7 +1007,7 @@ func TestGetEvents_APILimitNote(t *testing.T) {
 	})
 
 	alert := makeAlertWithLabels(map[string]string{"namespace": "busy"})
-	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	events, _, _ := GetKubeContext(context.Background(), cs, alert, cfg)
 
@@ -1068,7 +1045,7 @@ func TestGetEvents_NoAPILimitNote(t *testing.T) {
 	})
 
 	alert := makeAlertWithLabels(map[string]string{"namespace": "small"})
-	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	events, _, _ := GetKubeContext(context.Background(), cs, alert, cfg)
 
@@ -1389,9 +1366,8 @@ func TestGatherContext_ReturnsFourSections(t *testing.T) {
 		"namespace": "testns",
 	})
 	cfg := Config{
-		PrometheusURL:     srv.URL,
-		AllowedNamespaces: []string{},
-		MaxLogBytes:       4096,
+		PrometheusURL: srv.URL,
+		MaxLogBytes:   4096,
 	}
 
 	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
@@ -1417,8 +1393,7 @@ func TestGatherContext_SectionsNotEmpty(t *testing.T) {
 		"namespace": "prod",
 	})
 	cfg := Config{
-		AllowedNamespaces: []string{"prod"},
-		MaxLogBytes:       4096,
+		MaxLogBytes: 4096,
 	}
 
 	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
@@ -1442,8 +1417,7 @@ func TestGatherContext_PrometheusUnreachable_StillReturnsKubeContext(t *testing.
 		"namespace": "myns",
 	})
 	cfg := Config{
-		AllowedNamespaces: []string{},
-		MaxLogBytes:       4096,
+		MaxLogBytes: 4096,
 	}
 
 	prom := &PrometheusClient{HTTP: &http.Client{Timeout: time.Second}, URL: "http://127.0.0.1:1"}
@@ -1474,9 +1448,8 @@ func TestGatherContext_PrometheusTimeoutIsEnforced(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	alert := makeAlertWithLabels(map[string]string{"alertname": "Test", "namespace": "ns"})
 	cfg := Config{
-		AllowedNamespaces: []string{},
-		MaxLogBytes:       4096,
-		PromTimeout:       150 * time.Millisecond, // short deadline to trigger fast
+		MaxLogBytes: 4096,
+		PromTimeout: 150 * time.Millisecond, // short deadline to trigger fast
 	}
 
 	prom := &PrometheusClient{HTTP: slow.Client(), URL: slow.URL}
@@ -1508,7 +1481,7 @@ func TestGatherContext_CancelledContext(t *testing.T) {
 
 	cs := fake.NewSimpleClientset()
 	alert := makeAlertWithLabels(map[string]string{"alertname": "Test", "namespace": "ns"})
-	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
@@ -1536,7 +1509,7 @@ func (panicTransport) RoundTrip(*http.Request) (*http.Response, error) {
 func TestGatherContext_PrometheusPanic(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	alert := makeAlertWithLabels(map[string]string{"alertname": "Test", "namespace": "ns"})
-	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	prom := &PrometheusClient{
 		HTTP: &http.Client{Transport: panicTransport{}},
@@ -1771,9 +1744,8 @@ func TestGetKubeContext_RespectsDeadlineFromConfig(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	alert := makeAlertWithLabels(map[string]string{"namespace": "prod"})
 	cfg := Config{
-		AllowedNamespaces: []string{"*"},
-		MaxLogBytes:       4096,
-		KubeAPITimeout:    50 * time.Millisecond,
+		MaxLogBytes:    4096,
+		KubeAPITimeout: 50 * time.Millisecond,
 	}
 
 	// Verify that a non-zero KubeAPITimeout is used instead of the default.
@@ -1794,9 +1766,8 @@ func TestGetKubeContext_DefaultTimeoutApplied(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	alert := makeAlertWithLabels(map[string]string{"namespace": "prod"})
 	cfg := Config{
-		AllowedNamespaces: []string{"*"},
-		MaxLogBytes:       4096,
-		KubeAPITimeout:    0, // should fall back to defaultKubeAPITimeout (30s)
+		MaxLogBytes:    4096,
+		KubeAPITimeout: 0, // should fall back to defaultKubeAPITimeout (30s)
 	}
 
 	events, pods, logs := GetKubeContext(context.Background(), cs, alert, cfg)
@@ -2112,8 +2083,7 @@ func TestGatherContext_PrometheusResultPreferredWhenTimeoutRaces(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	alert := makeAlertWithLabels(map[string]string{"alertname": "TestRace"})
 	cfg := Config{
-		AllowedNamespaces: []string{},
-		MaxLogBytes:       4096,
+		MaxLogBytes: 4096,
 		// Very short timeout so the goroutine and the deadline race on every call.
 		PromTimeout: 1 * time.Millisecond,
 	}
@@ -2182,5 +2152,24 @@ func TestGetMetrics_NoNamespace_AlertnameQueryRunsConcurrently(t *testing.T) {
 	}
 	if !strings.Contains(result, "Node Conditions") {
 		t.Errorf("expected 'Node Conditions' section for node alertname, got: %q", result)
+	}
+}
+
+func TestPrometheusClient_Query(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/query" {
+			t.Errorf("expected /api/v1/query, got %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("query") != "up" {
+			t.Errorf("expected query=up, got %s", r.URL.Query().Get("query"))
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"job":"prom"},"value":[0,"1"]}]}}`))
+	}))
+	defer server.Close()
+
+	c := NewPrometheusClient(server.URL)
+	got := c.Query(context.Background(), "up")
+	if !strings.Contains(got, "job=prom") || !strings.Contains(got, ": 1") {
+		t.Errorf("unexpected Query output: %q", got)
 	}
 }

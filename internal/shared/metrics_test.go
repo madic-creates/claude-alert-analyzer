@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestAlertMetrics_InitialCountersAreZero(t *testing.T) {
@@ -320,6 +321,45 @@ func TestMetricsHandlerWith_PromHandler200_IncludesOutput(t *testing.T) {
 	body := rr.Body.String()
 	if !strings.Contains(body, promBody) {
 		t.Errorf("expected promHandler output in response body, got:\n%s", body)
+	}
+}
+
+func TestRecordAgentToolCall(t *testing.T) {
+	m := &AlertMetrics{Prom: NewPrometheusMetrics()}
+	m.RecordAgentToolCall("k8s", "kubectl_exec", "ok", 250*time.Millisecond)
+	m.RecordAgentToolCall("k8s", "kubectl_exec", "rejected_verb", 1*time.Millisecond)
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rr := httptest.NewRecorder()
+	m.MetricsHandler()(rr, req)
+	body := rr.Body.String()
+
+	if !strings.Contains(body, `agent_tool_calls_total{outcome="ok",source="k8s",tool="kubectl_exec"} 1`) {
+		t.Errorf("missing ok counter line; body:\n%s", body)
+	}
+	if !strings.Contains(body, `agent_tool_calls_total{outcome="rejected_verb",source="k8s",tool="kubectl_exec"} 1`) {
+		t.Errorf("missing rejected_verb counter line; body:\n%s", body)
+	}
+	if !strings.Contains(body, `agent_tool_duration_seconds_bucket{source="k8s",tool="kubectl_exec",le=`) {
+		t.Errorf("missing duration histogram; body:\n%s", body)
+	}
+}
+
+func TestRecordAgentRounds(t *testing.T) {
+	m := &AlertMetrics{Prom: NewPrometheusMetrics()}
+	m.RecordAgentRounds("k8s", 3, false)
+	m.RecordAgentRounds("k8s", 10, true)
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rr := httptest.NewRecorder()
+	m.MetricsHandler()(rr, req)
+	body := rr.Body.String()
+
+	if !strings.Contains(body, `agent_rounds_used_count{source="k8s"} 2`) {
+		t.Errorf("missing rounds_used count; body:\n%s", body)
+	}
+	if !strings.Contains(body, `agent_rounds_exhausted_total{source="k8s"} 1`) {
+		t.Errorf("missing exhausted counter; body:\n%s", body)
 	}
 }
 

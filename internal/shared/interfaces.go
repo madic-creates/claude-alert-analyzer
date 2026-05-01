@@ -15,5 +15,5 @@ type ToolLoopRunner interface {
 	RunToolLoop(ctx context.Context, systemPrompt, userPrompt string,
 		tools []Tool, maxRounds int,
 		handleTool func(name string, input json.RawMessage) (string, error),
-	) (string, error)
+	) (analysis string, rounds int, exhausted bool, err error)
 }

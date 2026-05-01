@@ -59,18 +59,6 @@ func isValidNamespace(s string) bool {
 	return validK8sName.MatchString(s)
 }
 
-func isNamespaceAllowed(namespace string, allowed []string) bool {
-	if len(allowed) == 0 {
-		return false // deny by default if no allowlist
-	}
-	for _, ns := range allowed {
-		if ns == namespace || ns == "*" {
-			return true
-		}
-	}
-	return false
-}
-
 func (p *PrometheusClient) query(ctx context.Context, queryStr string) string {
 	u := fmt.Sprintf("%s/api/v1/query?query=%s", p.URL, url.QueryEscape(queryStr))
 	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
@@ -151,6 +139,15 @@ func (p *PrometheusClient) query(ctx context.Context, queryStr string) string {
 		lines = append(lines[:maxPromResultLines], fmt.Sprintf("... [%d more results truncated]", total-maxPromResultLines))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// Query is the public entry point for the agent loop. It delegates to the
+// existing private query method, which already applies result-line truncation,
+// label/value sanitization, and JSON parsing. Errors and timeouts are returned
+// as human-readable strings prefixed with "(...)" so the agent can surface them
+// to Claude as tool results.
+func (p *PrometheusClient) Query(ctx context.Context, queryStr string) string {
+	return p.query(ctx, queryStr)
 }
 
 // GetMetrics queries Prometheus for metrics related to the alert.
@@ -419,10 +416,6 @@ func getPodStatus(ctx context.Context, clientset kubernetes.Interface, namespace
 }
 
 func getPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace string, cfg Config) string {
-	if !isNamespaceAllowed(namespace, cfg.AllowedNamespaces) {
-		return fmt.Sprintf("(namespace %q not in log allowlist)", namespace)
-	}
-
 	// Fetch Running and non-Succeeded pods. We intentionally include Running
 	// pods here because containers in CrashLoopBackOff remain in the Running
 	// phase between crash/restart cycles — a FieldSelector excluding Running

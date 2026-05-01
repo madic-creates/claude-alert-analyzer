@@ -121,7 +121,7 @@ func TestGetEvents_ZeroLastTimestamp(t *testing.T) {
 	})
 
 	alert := makeAlertWithLabels(map[string]string{"namespace": "testns"})
-	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	events, _, _ := GetKubeContext(context.Background(), cs, alert, cfg)
 	if events == "(no warning events)" {
@@ -158,7 +158,7 @@ func TestGetEvents_NonZeroLastTimestamp(t *testing.T) {
 	})
 
 	alert := makeAlertWithLabels(map[string]string{"namespace": "testns"})
-	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	events, _, _ := GetKubeContext(context.Background(), cs, alert, cfg)
 	if events == "(no warning events)" {
@@ -183,7 +183,7 @@ func TestGetEvents_ListError(t *testing.T) {
 	})
 
 	alert := makeAlertWithLabels(map[string]string{"namespace": "testns"})
-	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	events, _, _ := GetKubeContext(context.Background(), cs, alert, cfg)
 	if !strings.Contains(events, "failed") {
@@ -231,7 +231,7 @@ func TestGetPodLogs_NoLogsOnGetLogsError(t *testing.T) {
 		t.Fatalf("failed to create clientset: %v", err)
 	}
 
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 	result := getPodLogs(context.Background(), cs, "testns", cfg)
 
 	if !strings.Contains(result, "errorpod") {
@@ -268,7 +268,7 @@ func TestGetEvents_MessageRedacted(t *testing.T) {
 	})
 
 	alert := makeAlertWithLabels(map[string]string{"namespace": "testns"})
-	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	events, _, _ := GetKubeContext(context.Background(), cs, alert, cfg)
 	if strings.Contains(events, "ghp_SECRETTOKEN123") {
@@ -325,11 +325,17 @@ func TestK8sProcessAlert_AnalysisFails_PublishFailureNotification(t *testing.T) 
 	metrics := new(shared.AlertMetrics)
 
 	deps := PipelineDeps{
-		Analyzer:     &mockAnalyzer{err: fmt.Errorf("claude timeout")},
-		Publishers:   []shared.Publisher{failPub},
-		Cooldown:     cooldown,
-		Metrics:      metrics,
-		SystemPrompt: "test",
+		ToolRunner: &fakeToolLoopRunner{
+			driver: func(_ func(string, json.RawMessage) (string, error)) (string, error) {
+				return "", fmt.Errorf("claude timeout")
+			},
+		},
+		KubectlRunner:  &fakeKubectlRunner{},
+		Prom:           &fakePromQLQuerier{},
+		Publishers:     []shared.Publisher{failPub},
+		Cooldown:       cooldown,
+		Metrics:        metrics,
+		MaxAgentRounds: 10,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -370,7 +376,7 @@ func TestGetKubeContext_GoroutinePanicRecovery(t *testing.T) {
 			})
 
 			alert := makeAlertWithLabels(map[string]string{"namespace": "testns"})
-			cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+			cfg := Config{MaxLogBytes: 4096}
 
 			// Must not panic the test process.
 			events, pods, _ := GetKubeContext(context.Background(), cs, alert, cfg)
@@ -423,7 +429,7 @@ func TestGetKubeContext_PodLogsGoroutinePanicRecovery(t *testing.T) {
 	})
 
 	alert := makeAlertWithLabels(map[string]string{"namespace": "testns"})
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	// Must not panic the test process.
 	events, pods, logs := GetKubeContext(context.Background(), cs, alert, cfg)
@@ -448,11 +454,17 @@ func TestK8sProcessAlert_EmptyAnalysis_PublishFailureNotification(t *testing.T) 
 	metrics := new(shared.AlertMetrics)
 
 	deps := PipelineDeps{
-		Analyzer:     &mockAnalyzer{result: "", err: nil},
-		Publishers:   []shared.Publisher{failPub},
-		Cooldown:     cooldown,
-		Metrics:      metrics,
-		SystemPrompt: "test",
+		ToolRunner: &fakeToolLoopRunner{
+			driver: func(_ func(string, json.RawMessage) (string, error)) (string, error) {
+				return "", nil
+			},
+		},
+		KubectlRunner:  &fakeKubectlRunner{},
+		Prom:           &fakePromQLQuerier{},
+		Publishers:     []shared.Publisher{failPub},
+		Cooldown:       cooldown,
+		Metrics:        metrics,
+		MaxAgentRounds: 10,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -479,8 +491,6 @@ func TestK8sProcessAlert_EmptyAnalysis_PublishFailureNotification(t *testing.T) 
 // TestGetKubeContext_PodLogsAPIError — both peer context-gathering functions
 // have their list-error paths explicitly asserted; this test fills the same
 // coverage gap for getPodStatus.
-// Using an empty AllowedNamespaces ensures getPodLogs returns early without
-// calling Pods().List(), so the reactor is triggered solely by getPodStatus.
 func TestGetPodStatus_ListError(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
@@ -488,7 +498,7 @@ func TestGetPodStatus_ListError(t *testing.T) {
 	})
 
 	alert := makeAlertWithLabels(map[string]string{"namespace": "testns"})
-	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	_, pods, _ := GetKubeContext(context.Background(), cs, alert, cfg)
 	if !strings.Contains(pods, "failed") {
@@ -529,7 +539,7 @@ func TestGetEvents_EventTimeUsedWhenLastTimestampZero(t *testing.T) {
 	})
 
 	alert := makeAlertWithLabels(map[string]string{"namespace": "testns"})
-	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	events, _, _ := GetKubeContext(context.Background(), cs, alert, cfg)
 	if events == "(no warning events)" {
@@ -680,7 +690,7 @@ func (panicingMetricsGetter) GetMetrics(_ context.Context, _ Alert) string {
 func TestGatherContext_PrometheusGetMetricsPanic(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	alert := makeAlertWithLabels(map[string]string{"alertname": "PanicTest", "namespace": "ns"})
-	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	done := make(chan struct{})
 	var actx shared.AnalysisContext
@@ -717,8 +727,7 @@ func TestGetPodStatus_PodNameSanitized(t *testing.T) {
 	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		la, ok := action.(k8stesting.ListAction)
 		// getPodStatus calls List with no FieldSelector; getPodLogs uses one.
-		// Only intercept the getPodStatus call so getPodLogs exits early via
-		// the namespace allowlist check.
+		// Only intercept the getPodStatus call.
 		if ok && la.GetListRestrictions().Fields.String() == "" {
 			return true, &corev1.PodList{Items: []corev1.Pod{
 				{
@@ -731,7 +740,7 @@ func TestGetPodStatus_PodNameSanitized(t *testing.T) {
 	})
 
 	alert := makeAlertWithLabels(map[string]string{"namespace": "testns"})
-	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	_, pods, _ := GetKubeContext(context.Background(), cs, alert, cfg)
 
@@ -778,7 +787,7 @@ func TestGetPodLogs_PodNameSanitized(t *testing.T) {
 		t.Fatalf("failed to create clientset: %v", err)
 	}
 
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 	result := getPodLogs(context.Background(), cs, "testns", cfg)
 
 	if strings.Contains(result, "\n## INJECTED LOG SECTION") {
@@ -818,7 +827,7 @@ func TestGetEvents_APILimitTruncationNote(t *testing.T) {
 	})
 
 	alert := makeAlertWithLabels(map[string]string{"namespace": "testns"})
-	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	events, _, _ := GetKubeContext(context.Background(), cs, alert, cfg)
 	if !strings.Contains(events, "API limit reached") {
@@ -831,9 +840,7 @@ func TestGetEvents_APILimitTruncationNote(t *testing.T) {
 
 // TestGetPodStatus_APILimitTruncationNote verifies that getPodStatus appends an
 // "API limit reached" note when exactly maxPods (50) pods are returned by the
-// API. The empty AllowedNamespaces list prevents getPodLogs from issuing its own
-// pod List call, so the reactor fires only for the getPodStatus List request
-// (which has no FieldSelector).
+// The reactor fires only for the getPodStatus List request (which has no FieldSelector).
 func TestGetPodStatus_APILimitTruncationNote(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
@@ -852,7 +859,7 @@ func TestGetPodStatus_APILimitTruncationNote(t *testing.T) {
 	})
 
 	alert := makeAlertWithLabels(map[string]string{"namespace": "testns"})
-	cfg := Config{AllowedNamespaces: []string{}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 
 	_, pods, _ := GetKubeContext(context.Background(), cs, alert, cfg)
 	if !strings.Contains(pods, "API limit reached") {
@@ -900,7 +907,7 @@ func TestGetPodLogs_ExcessFailingPodsTruncationNote(t *testing.T) {
 		t.Fatalf("failed to create clientset: %v", err)
 	}
 
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 	result := getPodLogs(context.Background(), cs, "testns", cfg)
 
 	if !strings.Contains(result, "more may exist") {
@@ -970,7 +977,7 @@ func TestGetPodLogs_APILimitHitTruncationNote(t *testing.T) {
 		t.Fatalf("failed to create clientset: %v", err)
 	}
 
-	cfg := Config{AllowedNamespaces: []string{"*"}, MaxLogBytes: 4096}
+	cfg := Config{MaxLogBytes: 4096}
 	result := getPodLogs(context.Background(), cs, "testns", cfg)
 
 	if !strings.Contains(result, "more may exist") {
@@ -982,19 +989,6 @@ func TestGetPodLogs_APILimitHitTruncationNote(t *testing.T) {
 	}
 }
 
-// captureAnalyzer is a shared.Analyzer that records the user prompt it receives.
-// Used by TestProcessAlert_AlertFieldsArePromptInjectionSafe to verify that
-// sanitized values (not raw attacker-controlled input) reach the Claude API.
-type captureAnalyzer struct {
-	capturedUserPrompt string
-	result             string
-}
-
-func (c *captureAnalyzer) Analyze(_ context.Context, _, userPrompt string) (string, error) {
-	c.capturedUserPrompt = userPrompt
-	return c.result, nil
-}
-
 // TestProcessAlert_AlertFieldsArePromptInjectionSafe verifies that control
 // characters embedded in the k8s alert fields (alertname, severity, status,
 // namespace) are stripped before they reach the Claude user prompt.
@@ -1004,17 +998,23 @@ func (c *captureAnalyzer) Analyze(_ context.Context, _, userPrompt string) (stri
 // left when sanitizeAlertField was introduced in the CheckMK context gatherer
 // but not applied to the k8s prompt-construction path.
 func TestProcessAlert_AlertFieldsArePromptInjectionSafe(t *testing.T) {
-	analyzer := &captureAnalyzer{result: "analysis"}
+	runner := &fakeToolLoopRunner{
+		driver: func(_ func(string, json.RawMessage) (string, error)) (string, error) {
+			return "analysis", nil
+		},
+	}
 	pub := &mockPublisher{}
 	cooldown := shared.NewCooldownManager()
 	metrics := new(shared.AlertMetrics)
 
 	deps := PipelineDeps{
-		Analyzer:     analyzer,
-		Publishers:   []shared.Publisher{pub},
-		Cooldown:     cooldown,
-		Metrics:      metrics,
-		SystemPrompt: "test",
+		ToolRunner:     runner,
+		KubectlRunner:  &fakeKubectlRunner{},
+		Prom:           &fakePromQLQuerier{},
+		Publishers:     []shared.Publisher{pub},
+		Cooldown:       cooldown,
+		Metrics:        metrics,
+		MaxAgentRounds: 10,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -1038,7 +1038,7 @@ func TestProcessAlert_AlertFieldsArePromptInjectionSafe(t *testing.T) {
 
 	ProcessAlert(context.Background(), deps, alert)
 
-	prompt := analyzer.capturedUserPrompt
+	prompt := runner.captured
 	// The dangerous pattern is a newline followed by a Markdown heading prefix
 	// ("\n## PAYLOAD"). Without sanitization, embedded newlines in field values
 	// would produce exactly this pattern, allowing the attacker to start a new

@@ -333,7 +333,7 @@ func TestRunToolLoop_EndTurnImmediately(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	result, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
+	result, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) {
 			t.Fatal("tool handler should not be called")
 			return "", nil
@@ -377,7 +377,7 @@ func TestRunToolLoop_OneToolRoundThenEnd(t *testing.T) {
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
 	var toolCalls int
-	result, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
+	result, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) {
 			toolCalls++
 			if name != "execute_command" {
@@ -429,7 +429,7 @@ func TestRunToolLoop_MaxRoundsForcesSummary(t *testing.T) {
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
 	var toolCalls int
-	result, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 2,
+	result, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 2,
 		func(name string, input json.RawMessage) (string, error) {
 			toolCalls++
 			return "up 5 days", nil
@@ -456,7 +456,7 @@ func TestRunToolLoop_APIError(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test", retryDelays: []time.Duration{}}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	_, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
+	_, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) { return "", nil })
 
 	if err == nil {
@@ -477,7 +477,7 @@ func TestRunToolLoop_APIErrorInBody(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	_, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
+	_, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) { return "", nil })
 
 	if err == nil {
@@ -535,7 +535,7 @@ func TestRunToolLoop_ToolHandlerError(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	result, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 5,
+	result, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 5,
 		func(name string, input json.RawMessage) (string, error) {
 			return "", fmt.Errorf("command not allowed")
 		})
@@ -582,7 +582,7 @@ func TestRunToolLoop_MultipleToolsInOneRound(t *testing.T) {
 	}
 
 	var calledTools []string
-	result, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 5,
+	result, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 5,
 		func(name string, input json.RawMessage) (string, error) {
 			calledTools = append(calledTools, name)
 			return "ok", nil
@@ -631,7 +631,7 @@ func TestRunToolLoop_MaxTokensStopReason(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	result, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
+	result, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) {
 			t.Fatal("tool handler should not be called on max_tokens response")
 			return "", nil
@@ -695,7 +695,7 @@ func TestRunToolLoop_MaxRounds_NoConsecutiveUserMessages(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	result, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
+	result, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil })
 
 	if err != nil {
@@ -767,7 +767,7 @@ func TestRunToolLoop_SummaryRequestFails(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test", retryDelays: []time.Duration{}}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	_, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
+	_, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "ok", nil })
 
 	if err == nil {
@@ -820,7 +820,7 @@ func TestRunToolLoop_SummaryRequestHasToolChoiceNone(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	result, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
+	result, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil })
 
 	if err != nil {
@@ -870,7 +870,7 @@ func TestRunToolLoop_SummaryAPIErrorInBody(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	_, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
+	_, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil })
 
 	if err == nil {
@@ -1112,7 +1112,7 @@ func TestRunToolLoop_SummaryParseFailure(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	_, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
+	_, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil })
 
 	if err == nil {
@@ -1136,7 +1136,7 @@ func TestRunToolLoop_FallbackWhenNoToolRoundsOccurred(t *testing.T) {
 	// any API calls. Previously the for loop silently skipped and the
 	// forced-summary path appended a second consecutive user message, which the
 	// Anthropic API rejects with 400 "roles must alternate".
-	_, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 0,
+	_, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 0,
 		func(_ string, _ json.RawMessage) (string, error) {
 			t.Fatal("tool handler must not be called when maxRounds=0")
 			return "", nil

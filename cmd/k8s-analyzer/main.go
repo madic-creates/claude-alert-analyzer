@@ -13,17 +13,6 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-const systemPrompt = `You are a Kubernetes SRE analyst for a k3s home cluster with Prometheus, Grafana, Longhorn storage, Traefik ingress, and Cilium CNI.
-
-Analyze the provided alert with its cluster context and produce a concise root-cause analysis:
-1. Identify the most likely root cause
-2. Assess severity and blast radius
-3. Suggest concrete remediation steps (kubectl commands, config changes)
-4. Note correlations with other active alerts
-
-Keep response under 500 words. Use markdown for formatting (headings, bold, lists, code blocks) but never use markdown tables. Use bullet lists instead of tables. Reference actual metric values and pod names.
-Start directly with the analysis — no preamble, meta-commentary, or introductory sentences like "I have enough data" or "Let me analyze this".`
-
 func loadConfig() k8s.Config {
 	cooldown, err := shared.ParseIntEnv("COOLDOWN_SECONDS", "300", 0, 86400)
 	if err != nil {
@@ -35,14 +24,10 @@ func loadConfig() k8s.Config {
 		slog.Error("invalid config", "error", err)
 		os.Exit(1)
 	}
-
-	allowedNS := shared.EnvOrDefault("ALLOWED_NAMESPACES", "monitoring,databases,media")
-	var nsList []string
-	for _, ns := range strings.Split(allowedNS, ",") {
-		ns = strings.TrimSpace(ns)
-		if ns != "" {
-			nsList = append(nsList, ns)
-		}
+	maxAgentRounds, err := shared.ParseIntEnv("MAX_AGENT_ROUNDS", "10", 1, 50)
+	if err != nil {
+		slog.Error("invalid config", "error", err)
+		os.Exit(1)
 	}
 
 	webhookSecret, err := shared.RequireEnv("WEBHOOK_SECRET")
@@ -57,17 +42,17 @@ func loadConfig() k8s.Config {
 	}
 
 	return k8s.Config{
-		PrometheusURL:     shared.EnvOrDefault("PROMETHEUS_URL", "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"),
-		ClaudeModel:       shared.EnvOrDefault("CLAUDE_MODEL", "claude-sonnet-4-6"),
-		CooldownSeconds:   cooldown,
-		SkipResolved:      shared.EnvOrDefault("SKIP_RESOLVED", "true") != "false",
-		Port:              shared.EnvOrDefault("PORT", "8080"),
-		MetricsPort:       shared.EnvOrDefault("METRICS_PORT", "9101"),
-		WebhookSecret:     webhookSecret,
-		AllowedNamespaces: nsList,
-		MaxLogBytes:       maxLogBytes,
-		APIBaseURL:        shared.EnvOrDefault("API_BASE_URL", "https://api.anthropic.com/v1/messages"),
-		APIKey:            apiKey,
+		PrometheusURL:   shared.EnvOrDefault("PROMETHEUS_URL", "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"),
+		ClaudeModel:     shared.EnvOrDefault("CLAUDE_MODEL", "claude-sonnet-4-6"),
+		CooldownSeconds: cooldown,
+		SkipResolved:    shared.EnvOrDefault("SKIP_RESOLVED", "true") != "false",
+		Port:            shared.EnvOrDefault("PORT", "8080"),
+		MetricsPort:     shared.EnvOrDefault("METRICS_PORT", "9101"),
+		WebhookSecret:   webhookSecret,
+		MaxLogBytes:     maxLogBytes,
+		APIBaseURL:      shared.EnvOrDefault("API_BASE_URL", "https://api.anthropic.com/v1/messages"),
+		APIKey:          apiKey,
+		MaxAgentRounds:  maxAgentRounds,
 	}
 }
 
@@ -112,11 +97,13 @@ func main() {
 	}
 
 	deps := k8s.PipelineDeps{
-		Analyzer:     claudeClient,
-		Publishers:   publishers,
-		Cooldown:     cooldownMgr,
-		Metrics:      metrics,
-		SystemPrompt: systemPrompt,
+		ToolRunner:     claudeClient,
+		KubectlRunner:  k8s.NewKubectlSubprocess(""),
+		Prom:           promClient,
+		Publishers:     publishers,
+		Cooldown:       cooldownMgr,
+		Metrics:        metrics,
+		MaxAgentRounds: cfg.MaxAgentRounds,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return k8s.GatherContext(ctx, promClient, clientset, k8s.AlertPayloadToAlert(alert), cfg)
 		},
@@ -136,7 +123,7 @@ func main() {
 	slog.Info("K8s Alert Analyzer started",
 		"port", cfg.Port, "metricsPort", cfg.MetricsPort, "model", cfg.ClaudeModel,
 		"apiBaseURL", cfg.APIBaseURL,
-		"allowedNamespaces", cfg.AllowedNamespaces)
+		"maxAgentRounds", cfg.MaxAgentRounds)
 
 	handler := k8s.HandleWebhook(cfg, cooldownMgr, srv.Enqueue, metrics)
 	srv.Run(handler)

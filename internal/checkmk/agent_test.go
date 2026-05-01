@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -34,7 +35,7 @@ func (r *capturingToolRunner) RunToolLoop(
 	_ context.Context, systemPrompt, _ string,
 	_ []shared.Tool, maxRounds int,
 	handleTool func(string, json.RawMessage) (string, error),
-) (string, error) {
+) (string, int, bool, error) {
 	r.capturedSystemPrompt = systemPrompt
 	r.capturedMaxRounds = maxRounds
 	for _, call := range r.calls {
@@ -42,7 +43,8 @@ func (r *capturingToolRunner) RunToolLoop(
 		r.toolOutputs = append(r.toolOutputs, out)
 		r.toolErrors = append(r.toolErrors, err)
 	}
-	return r.result, r.err
+	// Test fakes: return placeholder rounds=1, exhausted=false.
+	return r.result, 1, false, r.err
 }
 
 // fixedDialer always returns the same pre-connected SSH client (or error).
@@ -59,7 +61,7 @@ func TestRunAgenticDiagnostics_DialFailure(t *testing.T) {
 	dialer := &fixedDialer{err: fmt.Errorf("connection refused")}
 	runner := &capturingToolRunner{result: "should not reach"}
 
-	_, err := RunAgenticDiagnostics(context.Background(), Config{}, runner, dialer, "host1", "10.0.0.1", "ctx", 3)
+	_, err := RunAgenticDiagnostics(context.Background(), Config{}, runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3)
 	if err == nil {
 		t.Fatal("expected error when dial fails")
 	}
@@ -83,7 +85,7 @@ func TestRunAgenticDiagnostics_DeniedCommandBlocked(t *testing.T) {
 
 	analysis, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -120,7 +122,7 @@ func TestRunAgenticDiagnostics_AllowedCommandExecuted(t *testing.T) {
 
 	analysis, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -161,7 +163,7 @@ func TestRunAgenticDiagnostics_SpaceArgShellQuoted(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -193,7 +195,7 @@ func TestRunAgenticDiagnostics_UnknownToolReturnsError(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected top-level error: %v", err)
@@ -224,7 +226,7 @@ func TestRunAgenticDiagnostics_OutputRedacted(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -267,7 +269,7 @@ func TestRunAgenticDiagnostics_OutputControlCharsStripped(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -313,7 +315,7 @@ func TestRunAgenticDiagnostics_NonZeroExitControlCharsStripped(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -356,7 +358,7 @@ func TestRunAgenticDiagnostics_NonZeroExitIncludesOutput(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -399,7 +401,7 @@ func TestRunAgenticDiagnostics_NonZeroExitNoOutput(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected top-level error: %v", err)
@@ -436,7 +438,7 @@ func TestRunAgenticDiagnostics_InvalidCommandInputReturnsError(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected top-level error: %v", err)
@@ -1655,7 +1657,7 @@ func TestRunAgenticDiagnostics_SystemPromptContainsMaxRounds(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", customRounds,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", customRounds,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1669,6 +1671,42 @@ func TestRunAgenticDiagnostics_SystemPromptContainsMaxRounds(t *testing.T) {
 	if runner.capturedMaxRounds != customRounds {
 		t.Errorf("RunToolLoop received maxRounds=%d, want %d",
 			runner.capturedMaxRounds, customRounds)
+	}
+}
+
+// TestRunAgenticDiagnostics_RecordsMetrics verifies that agent_tool_calls_total
+// and agent_rounds_used metrics are emitted with source="checkmk" after a
+// successful agentic loop. This ensures symmetry with the k8s analyzer metrics.
+func TestRunAgenticDiagnostics_RecordsMetrics(t *testing.T) {
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		_, _ = io.WriteString(ch, "Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1 50G 20G 30G 40% /\n")
+		sendExitStatus(ch, 0)
+	})
+	dialer := &fixedDialer{client: client}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+
+	runner := &capturingToolRunner{
+		calls:  []agentToolCall{{name: "execute_command", input: `{"command": ["df", "-h"]}`}},
+		result: "disk analysis",
+	}
+
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, dialer, metrics, "host1", "10.0.0.1", "ctx", 10,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	metrics.MetricsHandler()(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `agent_tool_calls_total{outcome="ok",source="checkmk",tool="execute_command"}`) {
+		t.Errorf("missing agent_tool_calls_total ok counter for checkmk; body:\n%s", body)
+	}
+	if !strings.Contains(body, `agent_rounds_used_count{source="checkmk"} 1`) {
+		t.Errorf("missing agent_rounds_used metric for checkmk; body:\n%s", body)
 	}
 }
 
@@ -3163,5 +3201,42 @@ func TestDenyReason_EbtablesArptablesVariants(t *testing.T) {
 		if strings.Contains(msg, "not allowed (destructive or privileged command)") {
 			t.Errorf("denyReason(%v) returned generic message: %q", tc.argv, msg)
 		}
+	}
+}
+
+// TestRunAgenticDiagnostics_NonZeroExitMetricClassification verifies that when
+// a command exits with a non-zero status and produces output (the "[exited: ...]"
+// format), wrappedHandleTool correctly classifies the metric outcome as
+// "nonzero_exit" rather than "ok". Before the fix, strings.HasPrefix(out, "Command
+// failed:") missed this case because the output starts with "$ <cmd>", not
+// "Command failed:".
+func TestRunAgenticDiagnostics_NonZeroExitMetricClassification(t *testing.T) {
+	const cmdOutput = "Active: failed (Result: exit-code)\n"
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		_, _ = io.WriteString(ch, cmdOutput)
+		sendExitStatus(ch, 3) // systemctl status exits 3 for stopped/failed units
+	})
+
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	runner := &capturingToolRunner{
+		calls:  []agentToolCall{{name: "execute_command", input: `{"command": ["systemctl", "status", "nginx"]}`}},
+		result: "analysis",
+	}
+	dialer := &fixedDialer{client: client}
+
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, dialer, metrics, "host1", "10.0.0.1", "ctx", 3,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	metrics.MetricsHandler()(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `agent_tool_calls_total{outcome="nonzero_exit",source="checkmk",tool="execute_command"} 1`) {
+		t.Errorf("expected nonzero_exit metric for non-zero exit with output; body:\n%s", body)
 	}
 }

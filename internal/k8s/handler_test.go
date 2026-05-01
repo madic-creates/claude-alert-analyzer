@@ -449,26 +449,6 @@ func TestHandleWebhook_BodyTooLarge_Returns413(t *testing.T) {
 	}
 }
 
-func TestIsNamespaceAllowed(t *testing.T) {
-	cases := []struct {
-		ns      string
-		allowed []string
-		want    bool
-	}{
-		{"production", []string{"production", "staging"}, true},
-		{"production", []string{"staging"}, false},
-		{"anything", []string{"*"}, true},
-		{"anything", []string{}, false},
-		{"", []string{"production"}, false},
-	}
-	for _, tc := range cases {
-		got := isNamespaceAllowed(tc.ns, tc.allowed)
-		if got != tc.want {
-			t.Errorf("isNamespaceAllowed(%q, %v) = %v, want %v", tc.ns, tc.allowed, got, tc.want)
-		}
-	}
-}
-
 func TestPromqlQuery_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/query" {

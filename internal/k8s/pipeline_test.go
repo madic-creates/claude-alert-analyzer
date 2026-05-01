@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -9,21 +10,6 @@ import (
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
-
-type mockAnalyzer struct {
-	result string
-	err    error
-}
-
-func (m *mockAnalyzer) Analyze(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
-	return m.result, m.err
-}
-
-type panicAnalyzer struct{}
-
-func (p *panicAnalyzer) Analyze(_ context.Context, _, _ string) (string, error) {
-	panic("simulated analysis panic")
-}
 
 type publishCall struct {
 	title    string
@@ -54,15 +40,20 @@ func (m *mockPublisher) published() []string {
 
 func TestProcessAlert_Success(t *testing.T) {
 	pub := &mockPublisher{}
-	cooldown := shared.NewCooldownManager()
 	metrics := new(shared.AlertMetrics)
 
 	deps := PipelineDeps{
-		Analyzer:     &mockAnalyzer{result: "root cause: OOM"},
-		Publishers:   []shared.Publisher{pub},
-		Cooldown:     cooldown,
-		Metrics:      metrics,
-		SystemPrompt: "test prompt",
+		ToolRunner: &fakeToolLoopRunner{
+			driver: func(_ func(string, json.RawMessage) (string, error)) (string, error) {
+				return "root cause: OOM", nil
+			},
+		},
+		KubectlRunner:  &fakeKubectlRunner{},
+		Prom:           &fakePromQLQuerier{},
+		Publishers:     []shared.Publisher{pub},
+		Cooldown:       shared.NewCooldownManager(),
+		Metrics:        metrics,
+		MaxAgentRounds: 10,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{
 				Sections: []shared.ContextSection{{Name: "Test", Content: "data"}},
@@ -98,11 +89,17 @@ func TestProcessAlert_AnalysisFails(t *testing.T) {
 	metrics := new(shared.AlertMetrics)
 
 	deps := PipelineDeps{
-		Analyzer:     &mockAnalyzer{err: context.DeadlineExceeded},
-		Publishers:   []shared.Publisher{pub},
-		Cooldown:     cooldown,
-		Metrics:      metrics,
-		SystemPrompt: "test",
+		ToolRunner: &fakeToolLoopRunner{
+			driver: func(_ func(string, json.RawMessage) (string, error)) (string, error) {
+				return "", context.DeadlineExceeded
+			},
+		},
+		KubectlRunner:  &fakeKubectlRunner{},
+		Prom:           &fakePromQLQuerier{},
+		Publishers:     []shared.Publisher{pub},
+		Cooldown:       cooldown,
+		Metrics:        metrics,
+		MaxAgentRounds: 10,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -129,11 +126,17 @@ func TestProcessAlert_PublishFails(t *testing.T) {
 	metrics := new(shared.AlertMetrics)
 
 	deps := PipelineDeps{
-		Analyzer:     &mockAnalyzer{result: "some analysis"},
-		Publishers:   []shared.Publisher{pub},
-		Cooldown:     cooldown,
-		Metrics:      metrics,
-		SystemPrompt: "test",
+		ToolRunner: &fakeToolLoopRunner{
+			driver: func(_ func(string, json.RawMessage) (string, error)) (string, error) {
+				return "some analysis", nil
+			},
+		},
+		KubectlRunner:  &fakeKubectlRunner{},
+		Prom:           &fakePromQLQuerier{},
+		Publishers:     []shared.Publisher{pub},
+		Cooldown:       cooldown,
+		Metrics:        metrics,
+		MaxAgentRounds: 10,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -164,11 +167,17 @@ func TestProcessAlert_PublishFails_RecordsPrometheusCounter(t *testing.T) {
 	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
 
 	deps := PipelineDeps{
-		Analyzer:     &mockAnalyzer{result: "some analysis"},
-		Publishers:   []shared.Publisher{pub},
-		Cooldown:     shared.NewCooldownManager(),
-		Metrics:      metrics,
-		SystemPrompt: "test",
+		ToolRunner: &fakeToolLoopRunner{
+			driver: func(_ func(string, json.RawMessage) (string, error)) (string, error) {
+				return "some analysis", nil
+			},
+		},
+		KubectlRunner:  &fakeKubectlRunner{},
+		Prom:           &fakePromQLQuerier{},
+		Publishers:     []shared.Publisher{pub},
+		Cooldown:       shared.NewCooldownManager(),
+		Metrics:        metrics,
+		MaxAgentRounds: 10,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -190,19 +199,26 @@ func TestProcessAlert_PublishFails_RecordsPrometheusCounter(t *testing.T) {
 }
 
 // TestProcessAlert_AnalysisFails_RecordsClaudeAPIErrorCounter verifies that
-// when Analyze returns an error and Prom is non-nil, the claude_api_errors_total
-// Prometheus counter is incremented. The counter is used to alert on sustained
-// Claude API outages; without this call the metric is permanently zero.
+// when RunAgenticDiagnostics returns an error and Prom is non-nil, the
+// claude_api_errors_total Prometheus counter is incremented. The counter is
+// used to alert on sustained Claude API outages; without this call the metric
+// is permanently zero.
 func TestProcessAlert_AnalysisFails_RecordsClaudeAPIErrorCounter(t *testing.T) {
 	pub := &mockPublisher{}
 	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
 
 	deps := PipelineDeps{
-		Analyzer:     &mockAnalyzer{err: context.DeadlineExceeded},
-		Publishers:   []shared.Publisher{pub},
-		Cooldown:     shared.NewCooldownManager(),
-		Metrics:      metrics,
-		SystemPrompt: "test",
+		ToolRunner: &fakeToolLoopRunner{
+			driver: func(_ func(string, json.RawMessage) (string, error)) (string, error) {
+				return "", context.DeadlineExceeded
+			},
+		},
+		KubectlRunner:  &fakeKubectlRunner{},
+		Prom:           &fakePromQLQuerier{},
+		Publishers:     []shared.Publisher{pub},
+		Cooldown:       shared.NewCooldownManager(),
+		Metrics:        metrics,
+		MaxAgentRounds: 10,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -223,20 +239,27 @@ func TestProcessAlert_AnalysisFails_RecordsClaudeAPIErrorCounter(t *testing.T) {
 	}
 }
 
-// TestProcessAlert_EmptyAnalysis verifies that when Analyze returns ("", nil) —
-// which can happen if Claude produces no text content blocks — the pipeline
-// treats it as a failure: cooldown is cleared and AlertsFailed is incremented.
+// TestProcessAlert_EmptyAnalysis verifies that when RunAgenticDiagnostics
+// returns ("", nil) — which can happen if Claude produces no text content
+// blocks — the pipeline treats it as a failure: cooldown is cleared and
+// AlertsFailed is incremented.
 func TestProcessAlert_EmptyAnalysis(t *testing.T) {
 	pub := &mockPublisher{}
 	cooldown := shared.NewCooldownManager()
 	metrics := new(shared.AlertMetrics)
 
 	deps := PipelineDeps{
-		Analyzer:     &mockAnalyzer{result: "", err: nil},
-		Publishers:   []shared.Publisher{pub},
-		Cooldown:     cooldown,
-		Metrics:      metrics,
-		SystemPrompt: "test",
+		ToolRunner: &fakeToolLoopRunner{
+			driver: func(_ func(string, json.RawMessage) (string, error)) (string, error) {
+				return "", nil
+			},
+		},
+		KubectlRunner:  &fakeKubectlRunner{},
+		Prom:           &fakePromQLQuerier{},
+		Publishers:     []shared.Publisher{pub},
+		Cooldown:       cooldown,
+		Metrics:        metrics,
+		MaxAgentRounds: 10,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -273,11 +296,17 @@ func TestProcessAlert_PanicClearsCooldown(t *testing.T) {
 	metrics := new(shared.AlertMetrics)
 
 	deps := PipelineDeps{
-		Analyzer:     &panicAnalyzer{},
-		Publishers:   []shared.Publisher{pub},
-		Cooldown:     cooldown,
-		Metrics:      metrics,
-		SystemPrompt: "test",
+		ToolRunner: &fakeToolLoopRunner{
+			driver: func(_ func(string, json.RawMessage) (string, error)) (string, error) {
+				panic("simulated analysis panic")
+			},
+		},
+		KubectlRunner:  &fakeKubectlRunner{},
+		Prom:           &fakePromQLQuerier{},
+		Publishers:     []shared.Publisher{pub},
+		Cooldown:       cooldown,
+		Metrics:        metrics,
+		MaxAgentRounds: 10,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -322,11 +351,17 @@ func TestProcessAlert_PriorityMapping(t *testing.T) {
 			metrics := new(shared.AlertMetrics)
 
 			deps := PipelineDeps{
-				Analyzer:     &mockAnalyzer{result: "analysis"},
-				Publishers:   []shared.Publisher{pub},
-				Cooldown:     shared.NewCooldownManager(),
-				Metrics:      metrics,
-				SystemPrompt: "test",
+				ToolRunner: &fakeToolLoopRunner{
+					driver: func(_ func(string, json.RawMessage) (string, error)) (string, error) {
+						return "analysis", nil
+					},
+				},
+				KubectlRunner:  &fakeKubectlRunner{},
+				Prom:           &fakePromQLQuerier{},
+				Publishers:     []shared.Publisher{pub},
+				Cooldown:       shared.NewCooldownManager(),
+				Metrics:        metrics,
+				MaxAgentRounds: 10,
 				GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 					return shared.AnalysisContext{}
 				},
@@ -355,16 +390,22 @@ func TestProcessAlert_PriorityMapping(t *testing.T) {
 // when the alert fired, which is useful for correlating with deployments or
 // other events that happened around the same time.
 func TestProcessAlert_StartsAtInPrompt(t *testing.T) {
-	var capturedPrompt string
+	runner := &fakeToolLoopRunner{
+		driver: func(_ func(string, json.RawMessage) (string, error)) (string, error) {
+			return "analysis", nil
+		},
+	}
 	pub := &mockPublisher{}
 	metrics := new(shared.AlertMetrics)
 
 	deps := PipelineDeps{
-		Analyzer:     &capturePromptAnalyzer{result: "analysis", captured: &capturedPrompt},
-		Publishers:   []shared.Publisher{pub},
-		Cooldown:     shared.NewCooldownManager(),
-		Metrics:      metrics,
-		SystemPrompt: "test",
+		ToolRunner:     runner,
+		KubectlRunner:  &fakeKubectlRunner{},
+		Prom:           &fakePromQLQuerier{},
+		Publishers:     []shared.Publisher{pub},
+		Cooldown:       shared.NewCooldownManager(),
+		Metrics:        metrics,
+		MaxAgentRounds: 10,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -382,22 +423,18 @@ func TestProcessAlert_StartsAtInPrompt(t *testing.T) {
 	}
 	ProcessAlert(context.Background(), deps, alert)
 
-	if !strings.Contains(capturedPrompt, "2024-01-15T03:00:00Z") {
-		t.Errorf("expected startsAt timestamp in user prompt, got:\n%s", capturedPrompt)
+	// Lock down the full alert-header prefix verbatim. Any future refactor
+	// that drops alertname/status/severity/namespace/StartsAt or reorders
+	// them will now fail this test.
+	wantPrefix := "## Alert: HighCPU\n" +
+		"- Status: firing\n" +
+		"- Severity: warning\n" +
+		"- Namespace: production\n" +
+		"- StartsAt: 2024-01-15T03:00:00Z\n" +
+		"\n"
+	if !strings.HasPrefix(runner.captured, wantPrefix) {
+		t.Errorf("user prompt header mismatch.\nwant prefix:\n%q\ngot:\n%q", wantPrefix, runner.captured)
 	}
-	if !strings.Contains(capturedPrompt, "StartsAt") {
-		t.Errorf("expected 'StartsAt' label in user prompt, got:\n%s", capturedPrompt)
-	}
-}
-
-type capturePromptAnalyzer struct {
-	result   string
-	captured *string
-}
-
-func (c *capturePromptAnalyzer) Analyze(_ context.Context, _, userPrompt string) (string, error) {
-	*c.captured = userPrompt
-	return c.result, nil
 }
 
 // TestProcessAlert_FailureBodySanitizesTitle verifies that embedded control
@@ -410,11 +447,17 @@ func TestProcessAlert_FailureBodySanitizesTitle(t *testing.T) {
 	metrics := new(shared.AlertMetrics)
 
 	deps := PipelineDeps{
-		Analyzer:     &mockAnalyzer{err: fmt.Errorf("api error")},
-		Publishers:   []shared.Publisher{pub},
-		Cooldown:     shared.NewCooldownManager(),
-		Metrics:      metrics,
-		SystemPrompt: "test",
+		ToolRunner: &fakeToolLoopRunner{
+			driver: func(_ func(string, json.RawMessage) (string, error)) (string, error) {
+				return "", fmt.Errorf("api error")
+			},
+		},
+		KubectlRunner:  &fakeKubectlRunner{},
+		Prom:           &fakePromQLQuerier{},
+		Publishers:     []shared.Publisher{pub},
+		Cooldown:       shared.NewCooldownManager(),
+		Metrics:        metrics,
+		MaxAgentRounds: 10,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -445,16 +488,22 @@ func TestProcessAlert_FailureBodySanitizesTitle(t *testing.T) {
 // (not inline in the fmt.Sprintf), so this test confirms the invariant holds
 // for namespace after the extraction-point sanitization refactor.
 func TestProcessAlert_PromptSanitizesNamespace(t *testing.T) {
-	var capturedPrompt string
+	runner := &fakeToolLoopRunner{
+		driver: func(_ func(string, json.RawMessage) (string, error)) (string, error) {
+			return "analysis", nil
+		},
+	}
 	pub := &mockPublisher{}
 	metrics := new(shared.AlertMetrics)
 
 	deps := PipelineDeps{
-		Analyzer:     &capturePromptAnalyzer{result: "analysis", captured: &capturedPrompt},
-		Publishers:   []shared.Publisher{pub},
-		Cooldown:     shared.NewCooldownManager(),
-		Metrics:      metrics,
-		SystemPrompt: "test",
+		ToolRunner:     runner,
+		KubectlRunner:  &fakeKubectlRunner{},
+		Prom:           &fakePromQLQuerier{},
+		Publishers:     []shared.Publisher{pub},
+		Cooldown:       shared.NewCooldownManager(),
+		Metrics:        metrics,
+		MaxAgentRounds: 10,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -470,11 +519,20 @@ func TestProcessAlert_PromptSanitizesNamespace(t *testing.T) {
 	}
 	ProcessAlert(context.Background(), deps, alert)
 
-	if strings.Contains(capturedPrompt, "\n## Injected Section") {
-		t.Errorf("control character from namespace leaked into user prompt: %q", capturedPrompt)
-	}
-	if !strings.Contains(capturedPrompt, "production") {
-		t.Errorf("sanitized namespace should still appear in prompt, got:\n%s", capturedPrompt)
+	// Lock down the full alert-header prefix verbatim. Any future refactor
+	// that drops alertname/status/severity/namespace/StartsAt or reorders
+	// them will now fail this test. The namespace fixture is
+	// "production\n## Injected Section"; SanitizeAlertField strips only the
+	// leading \n control character, yielding "production## Injected Section".
+	// status and startsAt are absent from the fixture, so they are empty strings.
+	wantPrefix := "## Alert: HighCPU\n" +
+		"- Status: \n" +
+		"- Severity: warning\n" +
+		"- Namespace: production## Injected Section\n" +
+		"- StartsAt: \n" +
+		"\n"
+	if !strings.HasPrefix(runner.captured, wantPrefix) {
+		t.Errorf("user prompt header mismatch.\nwant prefix:\n%q\ngot:\n%q", wantPrefix, runner.captured)
 	}
 }
 
@@ -497,11 +555,17 @@ func TestProcessAlert_TitleFormatting(t *testing.T) {
 			metrics := new(shared.AlertMetrics)
 
 			deps := PipelineDeps{
-				Analyzer:     &mockAnalyzer{result: "analysis"},
-				Publishers:   []shared.Publisher{pub},
-				Cooldown:     shared.NewCooldownManager(),
-				Metrics:      metrics,
-				SystemPrompt: "test",
+				ToolRunner: &fakeToolLoopRunner{
+					driver: func(_ func(string, json.RawMessage) (string, error)) (string, error) {
+						return "analysis", nil
+					},
+				},
+				KubectlRunner:  &fakeKubectlRunner{},
+				Prom:           &fakePromQLQuerier{},
+				Publishers:     []shared.Publisher{pub},
+				Cooldown:       shared.NewCooldownManager(),
+				Metrics:        metrics,
+				MaxAgentRounds: 10,
 				GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 					return shared.AnalysisContext{}
 				},
