@@ -2184,3 +2184,22 @@ func TestGetMetrics_NoNamespace_AlertnameQueryRunsConcurrently(t *testing.T) {
 		t.Errorf("expected 'Node Conditions' section for node alertname, got: %q", result)
 	}
 }
+
+func TestPrometheusClient_Query(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/query" {
+			t.Errorf("expected /api/v1/query, got %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("query") != "up" {
+			t.Errorf("expected query=up, got %s", r.URL.Query().Get("query"))
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"job":"prom"},"value":[0,"1"]}]}}`))
+	}))
+	defer server.Close()
+
+	c := NewPrometheusClient(server.URL)
+	got := c.Query(context.Background(), "up")
+	if !strings.Contains(got, "job=prom") || !strings.Contains(got, ": 1") {
+		t.Errorf("unexpected Query output: %q", got)
+	}
+}

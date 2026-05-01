@@ -153,6 +153,15 @@ func (p *PrometheusClient) query(ctx context.Context, queryStr string) string {
 	return strings.Join(lines, "\n")
 }
 
+// Query is the public entry point for the agent loop. It delegates to the
+// existing private query method, which already applies result-line truncation,
+// label/value sanitization, and JSON parsing. Errors and timeouts are returned
+// as human-readable strings prefixed with "(...)" so the agent can surface them
+// to Claude as tool results.
+func (p *PrometheusClient) Query(ctx context.Context, queryStr string) string {
+	return p.query(ctx, queryStr)
+}
+
 // GetMetrics queries Prometheus for metrics related to the alert.
 func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	namespace := alert.Labels["namespace"]
