@@ -15,7 +15,7 @@ type AnalysisPolicy struct {
 	ModelOverrides   map[Severity]string
 	DefaultMaxRounds int
 	RoundsOverrides  map[Severity]int
-	GroupCooldownTTL time.Duration // Phase 2; unused in Phase 1, parsed for forward compat
+	GroupCooldownTTL time.Duration // unused in Phase 1; field reserved for Phase 2 group dedup
 }
 
 // ModelFor returns the configured model for a given severity, falling back
