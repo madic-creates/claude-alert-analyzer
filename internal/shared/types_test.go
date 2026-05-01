@@ -2,6 +2,7 @@ package shared
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -9,7 +10,7 @@ func TestToolRequestJSON(t *testing.T) {
 	req := ToolRequest{
 		Model:     "claude-sonnet-4-6",
 		MaxTokens: 2048,
-		System:    "You are an SRE.",
+		System:    []SystemBlock{{Type: "text", Text: "You are an SRE."}},
 		Tools: []Tool{{
 			Name:        "execute_command",
 			Description: "Run a command via SSH",
@@ -152,5 +153,55 @@ func TestToolResponseParse_ToolUse(t *testing.T) {
 	toolBlock := resp.Content[1]
 	if toolBlock.Name != "execute_command" || toolBlock.ID != "toolu_abc" {
 		t.Error("unexpected tool_use block")
+	}
+}
+
+func TestSystemBlock_JSON(t *testing.T) {
+	b := SystemBlock{
+		Type:         "text",
+		Text:         "hello",
+		CacheControl: &CacheControl{Type: "ephemeral"},
+	}
+	out, err := json.Marshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"type":"text","text":"hello","cache_control":{"type":"ephemeral"}}`
+	if string(out) != want {
+		t.Errorf("got %s, want %s", out, want)
+	}
+}
+
+func TestSystemBlock_JSON_OmitsCacheControlWhenNil(t *testing.T) {
+	b := SystemBlock{Type: "text", Text: "hello"}
+	out, _ := json.Marshal(b)
+	if !strings.Contains(string(out), `"text":"hello"`) || strings.Contains(string(out), "cache_control") {
+		t.Errorf("unexpected JSON: %s", out)
+	}
+}
+
+func TestToolRequest_SystemIsBlocks(t *testing.T) {
+	req := ToolRequest{
+		Model:     "x",
+		MaxTokens: 1,
+		System:    []SystemBlock{{Type: "text", Text: "p"}},
+	}
+	out, _ := json.Marshal(req)
+	if !strings.Contains(string(out), `"system":[{"type":"text","text":"p"}]`) {
+		t.Errorf("system not serialized as blocks: %s", out)
+	}
+}
+
+func TestToolResponse_UsageHasCacheFields(t *testing.T) {
+	body := []byte(`{"usage":{"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":3,"cache_read_input_tokens":4}}`)
+	var resp ToolResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Usage.CacheCreationInputTokens != 3 {
+		t.Errorf("CacheCreation: got %d", resp.Usage.CacheCreationInputTokens)
+	}
+	if resp.Usage.CacheReadInputTokens != 4 {
+		t.Errorf("CacheRead: got %d", resp.Usage.CacheReadInputTokens)
 	}
 }

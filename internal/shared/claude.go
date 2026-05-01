@@ -172,7 +172,7 @@ func (c *ClaudeClient) Analyze(ctx context.Context, systemPrompt, userPrompt str
 	reqBody := ToolRequest{
 		Model:     c.Model,
 		MaxTokens: 2048,
-		System:    systemPrompt,
+		System:    []SystemBlock{{Type: "text", Text: systemPrompt}},
 		Messages:  []ToolMessage{{Role: "user", Content: userPrompt}},
 	}
 
@@ -239,7 +239,7 @@ func (c *ClaudeClient) RunToolLoop(
 		reqBody := ToolRequest{
 			Model:     c.Model,
 			MaxTokens: 4096,
-			System:    systemPrompt,
+			System:    []SystemBlock{{Type: "text", Text: systemPrompt}},
 			Tools:     tools,
 			Messages:  messages,
 		}
@@ -333,7 +333,7 @@ func (c *ClaudeClient) RunToolLoop(
 	reqBody := ToolRequest{
 		Model:      c.Model,
 		MaxTokens:  4096,
-		System:     systemPrompt,
+		System:     []SystemBlock{{Type: "text", Text: systemPrompt}},
 		Tools:      tools,
 		ToolChoice: &ToolChoice{Type: "none"}, // prevent tool calls in the forced-summary turn
 		Messages:   messages,
