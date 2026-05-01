@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 )
 
 // Argv-shape limits — identical to the values used in
@@ -201,6 +203,74 @@ func validateKubectlFlags(argv []string) error {
 		}
 	}
 	return nil
+}
+
+// kubectlTool is the Claude tool definition for argv-based kubectl execution.
+// The schema mirrors checkmk's execute_command tool — one argv array, no shell.
+var kubectlTool = shared.Tool{
+	Name:        "kubectl_exec",
+	Description: "Run a read-only kubectl command. The command is passed as an argv array (no shell). Examples: [\"get\",\"pods\",\"-n\",\"monitoring\",\"-o\",\"wide\"], [\"describe\",\"pod\",\"prom-0\",\"-n\",\"monitoring\"], [\"logs\",\"pod-x\",\"-n\",\"db\",\"--tail=100\"], [\"top\",\"nodes\"]. Allowed verbs: get, describe, logs, top, events, explain, version, api-resources, api-versions, cluster-info, auth can-i, rollout history.",
+	InputSchema: shared.InputSchema{
+		Type: "object",
+		Properties: map[string]shared.Property{
+			"command": {
+				Type:        "array",
+				Description: "kubectl arguments as argv array, without the leading 'kubectl'",
+				Items:       &shared.Items{Type: "string"},
+			},
+		},
+		Required: []string{"command"},
+	},
+}
+
+// promqlTool is the Claude tool definition for arbitrary PromQL queries
+// against the configured Prometheus instance.
+var promqlTool = shared.Tool{
+	Name:        "promql_query",
+	Description: "Run a PromQL query against Prometheus. Returns time-series results. Example: 'rate(http_requests_total[5m])'.",
+	InputSchema: shared.InputSchema{
+		Type: "object",
+		Properties: map[string]shared.Property{
+			"query": {
+				Type:        "string",
+				Description: "PromQL expression",
+			},
+		},
+		Required: []string{"query"},
+	},
+}
+
+// agentSystemPromptTemplate is the system prompt for the k8s agentic loop.
+// %d is replaced with the actual maxRounds value at call time so Claude's
+// self-reported round budget always matches the real limit, exactly as in
+// checkmk's agentSystemPromptForRounds.
+const agentSystemPromptTemplate = `You are a Kubernetes SRE analyst investigating a monitoring alert.
+
+Your task:
+1. Use kubectl_exec to run read-only kubectl commands and promql_query for Prometheus queries.
+2. Investigate the alert across pods, deployments, events, logs, and metrics.
+3. When you have enough information, stop calling tools and write your analysis.
+
+Guidelines:
+- Read-only commands only. Allowed kubectl verbs: get, describe, logs, top, events, explain, version, api-resources, api-versions, cluster-info, ` + "`auth can-i`, `rollout history`" + `.
+- NEVER use: delete, apply, create, edit, patch, replace, scale, the rest of rollout (status, restart, pause, resume, undo), cordon/drain/uncordon, exec, cp, port-forward, proxy, debug, attach.
+- NEVER pass: --kubeconfig, --server, --token, --as, --user, --cluster, --context, --certificate-authority, --client-*, --insecure-skip-tls-verify, or any other flag that overrides cluster identity or auth — they are rejected by the runtime.
+- The ServiceAccount's RBAC permissions decide what is actually allowed; if a command fails with "Forbidden", do NOT retry — pick a different angle.
+- You have a maximum of %d tool rounds.
+- Static context (Prometheus metrics, recent events, pod status, pod logs) is already in the user message — start by reading it before issuing your first tool call.
+- Begin broad (cluster-wide events, namespace overview) then narrow down based on findings.
+
+Output your final analysis in markdown (headings, bold, lists, code blocks — no tables):
+1. Root cause
+2. Severity and blast radius
+3. Remediation steps (concrete kubectl commands the operator should run)
+4. Correlations between alerts/services if applicable
+
+Reference actual values from command outputs and metric results. Keep response under 500 words.
+Start directly with the analysis — no preamble, meta-commentary, or introductory sentences.`
+
+func agentSystemPromptForRounds(maxRounds int) string {
+	return fmt.Sprintf(agentSystemPromptTemplate, maxRounds)
 }
 
 // parsePromQLInput validates a promql_query tool call. The 4096-byte cap is

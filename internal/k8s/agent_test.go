@@ -253,6 +253,37 @@ func TestParseKubectlInput_GlobalFlagDenylist(t *testing.T) {
 	})
 }
 
+func TestAgentSystemPromptForRounds(t *testing.T) {
+	got := agentSystemPromptForRounds(7)
+	if !strings.Contains(got, "maximum of 7 tool rounds") {
+		t.Errorf("expected '7 tool rounds' in output, got:\n%s", got)
+	}
+	if !strings.Contains(got, "kubectl_exec") {
+		t.Errorf("expected kubectl_exec mention in prompt")
+	}
+	if !strings.Contains(got, "promql_query") {
+		t.Errorf("expected promql_query mention in prompt")
+	}
+}
+
+func TestKubectlTool_Definition(t *testing.T) {
+	if kubectlTool.Name != "kubectl_exec" {
+		t.Errorf("kubectlTool.Name = %q, want kubectl_exec", kubectlTool.Name)
+	}
+	if _, ok := kubectlTool.InputSchema.Properties["command"]; !ok {
+		t.Error("kubectlTool.InputSchema missing 'command' property")
+	}
+}
+
+func TestPromqlTool_Definition(t *testing.T) {
+	if promqlTool.Name != "promql_query" {
+		t.Errorf("promqlTool.Name = %q, want promql_query", promqlTool.Name)
+	}
+	if _, ok := promqlTool.InputSchema.Properties["query"]; !ok {
+		t.Error("promqlTool.InputSchema missing 'query' property")
+	}
+}
+
 func TestParsePromQLInput(t *testing.T) {
 	cases := []struct {
 		name    string
