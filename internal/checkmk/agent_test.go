@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -59,7 +60,7 @@ func TestRunAgenticDiagnostics_DialFailure(t *testing.T) {
 	dialer := &fixedDialer{err: fmt.Errorf("connection refused")}
 	runner := &capturingToolRunner{result: "should not reach"}
 
-	_, err := RunAgenticDiagnostics(context.Background(), Config{}, runner, dialer, "host1", "10.0.0.1", "ctx", 3)
+	_, err := RunAgenticDiagnostics(context.Background(), Config{}, runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3)
 	if err == nil {
 		t.Fatal("expected error when dial fails")
 	}
@@ -83,7 +84,7 @@ func TestRunAgenticDiagnostics_DeniedCommandBlocked(t *testing.T) {
 
 	analysis, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -120,7 +121,7 @@ func TestRunAgenticDiagnostics_AllowedCommandExecuted(t *testing.T) {
 
 	analysis, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -161,7 +162,7 @@ func TestRunAgenticDiagnostics_SpaceArgShellQuoted(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -193,7 +194,7 @@ func TestRunAgenticDiagnostics_UnknownToolReturnsError(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected top-level error: %v", err)
@@ -224,7 +225,7 @@ func TestRunAgenticDiagnostics_OutputRedacted(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -267,7 +268,7 @@ func TestRunAgenticDiagnostics_OutputControlCharsStripped(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -313,7 +314,7 @@ func TestRunAgenticDiagnostics_NonZeroExitControlCharsStripped(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -356,7 +357,7 @@ func TestRunAgenticDiagnostics_NonZeroExitIncludesOutput(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -399,7 +400,7 @@ func TestRunAgenticDiagnostics_NonZeroExitNoOutput(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected top-level error: %v", err)
@@ -436,7 +437,7 @@ func TestRunAgenticDiagnostics_InvalidCommandInputReturnsError(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected top-level error: %v", err)
@@ -1655,7 +1656,7 @@ func TestRunAgenticDiagnostics_SystemPromptContainsMaxRounds(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, "host1", "10.0.0.1", "ctx", customRounds,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", customRounds,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1669,6 +1670,42 @@ func TestRunAgenticDiagnostics_SystemPromptContainsMaxRounds(t *testing.T) {
 	if runner.capturedMaxRounds != customRounds {
 		t.Errorf("RunToolLoop received maxRounds=%d, want %d",
 			runner.capturedMaxRounds, customRounds)
+	}
+}
+
+// TestRunAgenticDiagnostics_RecordsMetrics verifies that agent_tool_calls_total
+// and agent_rounds_used metrics are emitted with source="checkmk" after a
+// successful agentic loop. This ensures symmetry with the k8s analyzer metrics.
+func TestRunAgenticDiagnostics_RecordsMetrics(t *testing.T) {
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		_, _ = io.WriteString(ch, "Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1 50G 20G 30G 40% /\n")
+		sendExitStatus(ch, 0)
+	})
+	dialer := &fixedDialer{client: client}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+
+	runner := &capturingToolRunner{
+		calls:  []agentToolCall{{name: "execute_command", input: `{"command": ["df", "-h"]}`}},
+		result: "disk analysis",
+	}
+
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, dialer, metrics, "host1", "10.0.0.1", "ctx", 10,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	metrics.MetricsHandler()(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `agent_tool_calls_total{outcome="ok",source="checkmk",tool="execute_command"}`) {
+		t.Errorf("missing agent_tool_calls_total ok counter for checkmk; body:\n%s", body)
+	}
+	if !strings.Contains(body, `agent_rounds_used_count{source="checkmk"} 1`) {
+		t.Errorf("missing agent_rounds_used metric for checkmk; body:\n%s", body)
 	}
 }
 
