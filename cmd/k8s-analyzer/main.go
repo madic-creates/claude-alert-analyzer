@@ -96,15 +96,21 @@ func main() {
 		),
 	}
 
+	// Temporary inline AnalysisPolicy construction. Task 15 will replace this
+	// with shared.LoadPolicy(cfg.BaseConfig()) so per-severity overrides via
+	// CLAUDE_MODEL_* / MAX_AGENT_ROUNDS_* environment variables take effect.
 	deps := k8s.PipelineDeps{
-		ToolRunner:     claudeClient,
-		KubectlRunner:  k8s.NewKubectlSubprocess(""),
-		Prom:           promClient,
-		Publishers:     publishers,
-		Cooldown:       cooldownMgr,
-		Metrics:        metrics,
-		MaxAgentRounds: cfg.MaxAgentRounds,
-		ClaudeModel:    cfg.ClaudeModel,
+		Analyzer:      claudeClient,
+		ToolRunner:    claudeClient,
+		KubectlRunner: k8s.NewKubectlSubprocess(""),
+		Prom:          promClient,
+		Publishers:    publishers,
+		Cooldown:      cooldownMgr,
+		Metrics:       metrics,
+		Policy: &shared.AnalysisPolicy{
+			DefaultModel:     cfg.ClaudeModel,
+			DefaultMaxRounds: cfg.MaxAgentRounds,
+		},
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return k8s.GatherContext(ctx, promClient, clientset, k8s.AlertPayloadToAlert(alert), cfg)
 		},

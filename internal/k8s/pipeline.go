@@ -11,16 +11,19 @@ import (
 
 // PipelineDeps holds all dependencies for alert processing.
 type PipelineDeps struct {
-	ToolRunner     shared.ToolLoopRunner
-	KubectlRunner  KubectlRunner
-	Prom           PromQLQuerier
-	Publishers     []shared.Publisher
-	Cooldown       *shared.CooldownManager
-	Metrics        *shared.AlertMetrics
-	MaxAgentRounds int
-	// ClaudeModel is the model name passed to RunToolLoop calls.
-	// Temporary field — will be replaced by policy-derived model in a later task.
-	ClaudeModel   string
+	// Analyzer is used for the static-only path (rounds==0): no kubectl/promql
+	// tools, just the gathered context. In production both Analyzer and
+	// ToolRunner point at the same *shared.ClaudeClient.
+	Analyzer      shared.Analyzer
+	ToolRunner    shared.ToolLoopRunner
+	KubectlRunner KubectlRunner
+	Prom          PromQLQuerier
+	Publishers    []shared.Publisher
+	Cooldown      *shared.CooldownManager
+	Metrics       *shared.AlertMetrics
+	// Policy decides per-alert model and tool-loop budget keyed on
+	// alert.SeverityLevel. A round budget of 0 routes to Analyzer.Analyze.
+	Policy        *shared.AnalysisPolicy
 	GatherContext func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext
 }
 
@@ -60,7 +63,18 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 		shared.SanitizeAlertField(alert.Fields["startsAt"]),
 		actx.FormatForPrompt())
 
-	analysis, err := RunAgenticDiagnostics(ctx, deps.ToolRunner, deps.KubectlRunner, deps.Prom, deps.Metrics, userPrompt, deps.MaxAgentRounds, deps.ClaudeModel)
+	model := deps.Policy.ModelFor(alert.SeverityLevel)
+	rounds := deps.Policy.MaxRoundsFor(alert.SeverityLevel)
+
+	var (
+		analysis string
+		err      error
+	)
+	if rounds == 0 {
+		analysis, err = deps.Analyzer.Analyze(ctx, model, StaticAnalysisSystemPrompt, userPrompt)
+	} else {
+		analysis, err = RunAgenticDiagnostics(ctx, deps.ToolRunner, deps.KubectlRunner, deps.Prom, deps.Metrics, userPrompt, rounds, model)
+	}
 	if err != nil {
 		slog.Error("analysis failed", "alertname", alertname, "error", err)
 		deps.Metrics.RecordClaudeAPIError(alert.Source)

@@ -38,6 +38,106 @@ func (m *mockPublisher) published() []string {
 	return out
 }
 
+// mockToolRunnerAnalyzer satisfies BOTH shared.Analyzer and shared.ToolLoopRunner
+// so a single mock can verify the policy-driven branch (Analyze for rounds==0,
+// RunToolLoop otherwise). It records which method was called, with what model
+// and rounds, so each test can assert on routing.
+type mockToolRunnerAnalyzer struct {
+	wantText  string
+	wantErr   error
+	gotModel  string
+	gotRounds int
+	calls     struct{ analyze, runToolLoop int }
+}
+
+func (m *mockToolRunnerAnalyzer) Reset() {
+	m.gotModel = ""
+	m.gotRounds = 0
+	m.calls.analyze = 0
+	m.calls.runToolLoop = 0
+}
+
+func (m *mockToolRunnerAnalyzer) Analyze(_ context.Context, model, _, _ string) (string, error) {
+	m.gotModel = model
+	m.gotRounds = 0
+	m.calls.analyze++
+	return m.wantText, m.wantErr
+}
+
+func (m *mockToolRunnerAnalyzer) RunToolLoop(
+	_ context.Context, model, _, _ string,
+	_ []shared.Tool, rounds int,
+	_ func(string, json.RawMessage) (string, error),
+) (string, int, bool, error) {
+	m.gotModel = model
+	m.gotRounds = rounds
+	m.calls.runToolLoop++
+	return m.wantText, rounds, false, m.wantErr
+}
+
+// TestProcessAlert_UsesPolicyForModelAndRounds verifies that ProcessAlert reads
+// model and round budget from the AnalysisPolicy (keyed on alert.SeverityLevel)
+// instead of static PipelineDeps fields. When the policy yields rounds==0, it
+// must take the static-only path (Analyze) instead of RunAgenticDiagnostics.
+func TestProcessAlert_UsesPolicyForModelAndRounds(t *testing.T) {
+	mock := &mockToolRunnerAnalyzer{wantText: "ok"}
+	policy := &shared.AnalysisPolicy{
+		DefaultModel:     "default-m",
+		ModelOverrides:   map[shared.Severity]string{shared.SeverityCritical: "opus"},
+		DefaultMaxRounds: 5,
+		RoundsOverrides:  map[shared.Severity]int{shared.SeverityWarning: 0},
+	}
+
+	deps := PipelineDeps{
+		ToolRunner:    mock,
+		Analyzer:      mock,
+		KubectlRunner: &fakeKubectlRunner{},
+		Prom:          &fakePromQLQuerier{},
+		Cooldown:      shared.NewCooldownManager(),
+		Metrics:       new(shared.AlertMetrics),
+		Policy:        policy,
+		GatherContext: func(context.Context, shared.AlertPayload) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		Publishers: []shared.Publisher{&mockPublisher{}},
+	}
+
+	t.Run("critical_uses_opus_with_default_rounds", func(t *testing.T) {
+		mock.Reset()
+		ProcessAlert(context.Background(), deps, shared.AlertPayload{
+			Fingerprint:   "fp1",
+			SeverityLevel: shared.SeverityCritical,
+			Source:        "k8s",
+			Fields:        map[string]string{},
+		})
+		if mock.gotModel != "opus" {
+			t.Errorf("model: got %q, want opus", mock.gotModel)
+		}
+		if mock.gotRounds != 5 {
+			t.Errorf("rounds: got %d, want 5", mock.gotRounds)
+		}
+		if mock.calls.runToolLoop != 1 || mock.calls.analyze != 0 {
+			t.Errorf("expected 1 RunToolLoop call, got %+v", mock.calls)
+		}
+	})
+
+	t.Run("warning_with_zero_rounds_uses_Analyze", func(t *testing.T) {
+		mock.Reset()
+		ProcessAlert(context.Background(), deps, shared.AlertPayload{
+			Fingerprint:   "fp2",
+			SeverityLevel: shared.SeverityWarning,
+			Source:        "k8s",
+			Fields:        map[string]string{},
+		})
+		if mock.gotModel != "default-m" {
+			t.Errorf("model: got %q, want default-m", mock.gotModel)
+		}
+		if mock.calls.analyze != 1 || mock.calls.runToolLoop != 0 {
+			t.Errorf("expected 1 Analyze call, got %+v", mock.calls)
+		}
+	})
+}
+
 func TestProcessAlert_Success(t *testing.T) {
 	pub := &mockPublisher{}
 	metrics := new(shared.AlertMetrics)
@@ -48,12 +148,12 @@ func TestProcessAlert_Success(t *testing.T) {
 				return "root cause: OOM", nil
 			},
 		},
-		KubectlRunner:  &fakeKubectlRunner{},
-		Prom:           &fakePromQLQuerier{},
-		Publishers:     []shared.Publisher{pub},
-		Cooldown:       shared.NewCooldownManager(),
-		Metrics:        metrics,
-		MaxAgentRounds: 10,
+		KubectlRunner: &fakeKubectlRunner{},
+		Prom:          &fakePromQLQuerier{},
+		Publishers:    []shared.Publisher{pub},
+		Cooldown:      shared.NewCooldownManager(),
+		Metrics:       metrics,
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{
 				Sections: []shared.ContextSection{{Name: "Test", Content: "data"}},
@@ -94,12 +194,12 @@ func TestProcessAlert_AnalysisFails(t *testing.T) {
 				return "", context.DeadlineExceeded
 			},
 		},
-		KubectlRunner:  &fakeKubectlRunner{},
-		Prom:           &fakePromQLQuerier{},
-		Publishers:     []shared.Publisher{pub},
-		Cooldown:       cooldown,
-		Metrics:        metrics,
-		MaxAgentRounds: 10,
+		KubectlRunner: &fakeKubectlRunner{},
+		Prom:          &fakePromQLQuerier{},
+		Publishers:    []shared.Publisher{pub},
+		Cooldown:      cooldown,
+		Metrics:       metrics,
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -131,12 +231,12 @@ func TestProcessAlert_PublishFails(t *testing.T) {
 				return "some analysis", nil
 			},
 		},
-		KubectlRunner:  &fakeKubectlRunner{},
-		Prom:           &fakePromQLQuerier{},
-		Publishers:     []shared.Publisher{pub},
-		Cooldown:       cooldown,
-		Metrics:        metrics,
-		MaxAgentRounds: 10,
+		KubectlRunner: &fakeKubectlRunner{},
+		Prom:          &fakePromQLQuerier{},
+		Publishers:    []shared.Publisher{pub},
+		Cooldown:      cooldown,
+		Metrics:       metrics,
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -172,12 +272,12 @@ func TestProcessAlert_PublishFails_RecordsPrometheusCounter(t *testing.T) {
 				return "some analysis", nil
 			},
 		},
-		KubectlRunner:  &fakeKubectlRunner{},
-		Prom:           &fakePromQLQuerier{},
-		Publishers:     []shared.Publisher{pub},
-		Cooldown:       shared.NewCooldownManager(),
-		Metrics:        metrics,
-		MaxAgentRounds: 10,
+		KubectlRunner: &fakeKubectlRunner{},
+		Prom:          &fakePromQLQuerier{},
+		Publishers:    []shared.Publisher{pub},
+		Cooldown:      shared.NewCooldownManager(),
+		Metrics:       metrics,
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -213,12 +313,12 @@ func TestProcessAlert_AnalysisFails_RecordsClaudeAPIErrorCounter(t *testing.T) {
 				return "", context.DeadlineExceeded
 			},
 		},
-		KubectlRunner:  &fakeKubectlRunner{},
-		Prom:           &fakePromQLQuerier{},
-		Publishers:     []shared.Publisher{pub},
-		Cooldown:       shared.NewCooldownManager(),
-		Metrics:        metrics,
-		MaxAgentRounds: 10,
+		KubectlRunner: &fakeKubectlRunner{},
+		Prom:          &fakePromQLQuerier{},
+		Publishers:    []shared.Publisher{pub},
+		Cooldown:      shared.NewCooldownManager(),
+		Metrics:       metrics,
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -254,12 +354,12 @@ func TestProcessAlert_EmptyAnalysis(t *testing.T) {
 				return "", nil
 			},
 		},
-		KubectlRunner:  &fakeKubectlRunner{},
-		Prom:           &fakePromQLQuerier{},
-		Publishers:     []shared.Publisher{pub},
-		Cooldown:       cooldown,
-		Metrics:        metrics,
-		MaxAgentRounds: 10,
+		KubectlRunner: &fakeKubectlRunner{},
+		Prom:          &fakePromQLQuerier{},
+		Publishers:    []shared.Publisher{pub},
+		Cooldown:      cooldown,
+		Metrics:       metrics,
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -301,12 +401,12 @@ func TestProcessAlert_PanicClearsCooldown(t *testing.T) {
 				panic("simulated analysis panic")
 			},
 		},
-		KubectlRunner:  &fakeKubectlRunner{},
-		Prom:           &fakePromQLQuerier{},
-		Publishers:     []shared.Publisher{pub},
-		Cooldown:       cooldown,
-		Metrics:        metrics,
-		MaxAgentRounds: 10,
+		KubectlRunner: &fakeKubectlRunner{},
+		Prom:          &fakePromQLQuerier{},
+		Publishers:    []shared.Publisher{pub},
+		Cooldown:      cooldown,
+		Metrics:       metrics,
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -356,12 +456,12 @@ func TestProcessAlert_PriorityMapping(t *testing.T) {
 						return "analysis", nil
 					},
 				},
-				KubectlRunner:  &fakeKubectlRunner{},
-				Prom:           &fakePromQLQuerier{},
-				Publishers:     []shared.Publisher{pub},
-				Cooldown:       shared.NewCooldownManager(),
-				Metrics:        metrics,
-				MaxAgentRounds: 10,
+				KubectlRunner: &fakeKubectlRunner{},
+				Prom:          &fakePromQLQuerier{},
+				Publishers:    []shared.Publisher{pub},
+				Cooldown:      shared.NewCooldownManager(),
+				Metrics:       metrics,
+				Policy:        &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 				GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 					return shared.AnalysisContext{}
 				},
@@ -399,13 +499,13 @@ func TestProcessAlert_StartsAtInPrompt(t *testing.T) {
 	metrics := new(shared.AlertMetrics)
 
 	deps := PipelineDeps{
-		ToolRunner:     runner,
-		KubectlRunner:  &fakeKubectlRunner{},
-		Prom:           &fakePromQLQuerier{},
-		Publishers:     []shared.Publisher{pub},
-		Cooldown:       shared.NewCooldownManager(),
-		Metrics:        metrics,
-		MaxAgentRounds: 10,
+		ToolRunner:    runner,
+		KubectlRunner: &fakeKubectlRunner{},
+		Prom:          &fakePromQLQuerier{},
+		Publishers:    []shared.Publisher{pub},
+		Cooldown:      shared.NewCooldownManager(),
+		Metrics:       metrics,
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -452,12 +552,12 @@ func TestProcessAlert_FailureBodySanitizesTitle(t *testing.T) {
 				return "", fmt.Errorf("api error")
 			},
 		},
-		KubectlRunner:  &fakeKubectlRunner{},
-		Prom:           &fakePromQLQuerier{},
-		Publishers:     []shared.Publisher{pub},
-		Cooldown:       shared.NewCooldownManager(),
-		Metrics:        metrics,
-		MaxAgentRounds: 10,
+		KubectlRunner: &fakeKubectlRunner{},
+		Prom:          &fakePromQLQuerier{},
+		Publishers:    []shared.Publisher{pub},
+		Cooldown:      shared.NewCooldownManager(),
+		Metrics:       metrics,
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -497,13 +597,13 @@ func TestProcessAlert_PromptSanitizesNamespace(t *testing.T) {
 	metrics := new(shared.AlertMetrics)
 
 	deps := PipelineDeps{
-		ToolRunner:     runner,
-		KubectlRunner:  &fakeKubectlRunner{},
-		Prom:           &fakePromQLQuerier{},
-		Publishers:     []shared.Publisher{pub},
-		Cooldown:       shared.NewCooldownManager(),
-		Metrics:        metrics,
-		MaxAgentRounds: 10,
+		ToolRunner:    runner,
+		KubectlRunner: &fakeKubectlRunner{},
+		Prom:          &fakePromQLQuerier{},
+		Publishers:    []shared.Publisher{pub},
+		Cooldown:      shared.NewCooldownManager(),
+		Metrics:       metrics,
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -560,12 +660,12 @@ func TestProcessAlert_TitleFormatting(t *testing.T) {
 						return "analysis", nil
 					},
 				},
-				KubectlRunner:  &fakeKubectlRunner{},
-				Prom:           &fakePromQLQuerier{},
-				Publishers:     []shared.Publisher{pub},
-				Cooldown:       shared.NewCooldownManager(),
-				Metrics:        metrics,
-				MaxAgentRounds: 10,
+				KubectlRunner: &fakeKubectlRunner{},
+				Prom:          &fakePromQLQuerier{},
+				Publishers:    []shared.Publisher{pub},
+				Cooldown:      shared.NewCooldownManager(),
+				Metrics:       metrics,
+				Policy:        &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 				GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 					return shared.AnalysisContext{}
 				},
