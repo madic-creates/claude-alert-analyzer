@@ -32,7 +32,7 @@ repos:
     hooks:
       - id: golangci-lint
         name: golangci-lint
-        entry: bash -c 'GOMODCACHE=/tmp/gomodcache golangci-lint run'
+        entry: bash -c 'BIN=$(command -v golangci-lint || echo /go/bin/golangci-lint); GOMODCACHE=/tmp/gomodcache "$BIN" run'
         language: system
         types: [go]
         pass_filenames: false
