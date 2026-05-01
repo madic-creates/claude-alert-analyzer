@@ -869,6 +869,51 @@ func TestFingerprint_NullByteInPartNoCollision(t *testing.T) {
 	}
 }
 
+func TestHandler_PopulatesSeverityLevel_ServiceCritical(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cd := shared.NewCooldownManager()
+	var received shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		received = ap
+		return true
+	}, nil)
+
+	notif := makeNotification("host1", "SVC", "CRITICAL", "PROBLEM")
+	rr := postCheckmkWebhook(t, handler, "test-secret", notif)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if received.SeverityLevel != shared.SeverityCritical {
+		t.Errorf("expected SeverityLevel %v, got %v", shared.SeverityCritical, received.SeverityLevel)
+	}
+}
+
+func TestHandler_PopulatesSeverityLevel_HostDown(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cd := shared.NewCooldownManager()
+	var received shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		received = ap
+		return true
+	}, nil)
+
+	notif := CheckMKNotification{
+		Hostname:         "myhost",
+		HostAddress:      "10.0.0.2",
+		HostState:        "DOWN",
+		ServiceState:     "",
+		NotificationType: "PROBLEM",
+		Timestamp:        "2024-01-15T12:00:00Z",
+	}
+	rr := postCheckmkWebhook(t, handler, "test-secret", notif)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if received.SeverityLevel != shared.SeverityCritical {
+		t.Errorf("expected SeverityLevel %v, got %v", shared.SeverityCritical, received.SeverityLevel)
+	}
+}
+
 func TestFingerprint_NullByteSeparatorPreventsPrefixCollisions(t *testing.T) {
 	cases := [][2][4]string{
 		// hostname boundary shift: "host1"+"" vs "host"+"1"
