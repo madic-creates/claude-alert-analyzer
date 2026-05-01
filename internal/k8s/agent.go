@@ -207,6 +207,22 @@ func validateKubectlFlags(argv []string) error {
 				}
 			}
 		}
+		// Single-dash short flag with attached value (POSIX form), e.g. "-shttps://attacker"
+		// kubectl accepts -s<value> as equivalent to --server=<value>; check by iterating
+		// the denylist for any single-dash entry that is a strict prefix of `a`.
+		if len(a) > 1 && a[0] == '-' && a[1] != '-' {
+			for flag := range deniedKubectlGlobalFlags {
+				if len(flag) >= 2 && flag[0] == '-' && flag[1] != '-' &&
+					len(a) > len(flag) && strings.HasPrefix(a, flag) {
+					// Reject if next char is not '=' (already handled above) and not the start
+					// of a longer flag name.
+					next := a[len(flag)]
+					if next != '=' {
+						return fmt.Errorf("command denied: %s (attached form of %s) is not permitted; the in-cluster ServiceAccount is the only allowed identity", a, flag)
+					}
+				}
+			}
+		}
 	}
 	return nil
 }

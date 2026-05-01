@@ -260,6 +260,12 @@ func TestParseKubectlInput_GlobalFlagDenylist(t *testing.T) {
 			t.Errorf("expected rejection naming -s, got %v", err)
 		}
 	})
+	t.Run("short -s attached form", func(t *testing.T) {
+		_, err := parseKubectlInput(json.RawMessage(`{"command":["get","pods","-shttps://attacker.com"]}`))
+		if err == nil || !strings.Contains(err.Error(), "-s") {
+			t.Errorf("expected rejection naming -s, got %v", err)
+		}
+	})
 }
 
 func TestAgentSystemPromptForRounds(t *testing.T) {
