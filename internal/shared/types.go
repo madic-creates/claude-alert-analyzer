@@ -37,11 +37,12 @@ type Publisher interface {
 
 // AlertPayload is the common alert representation.
 type AlertPayload struct {
-	Fingerprint string
-	Title       string
-	Severity    string
-	Source      string            // "k8s" or "checkmk"
-	Fields      map[string]string // source-specific key-value pairs
+	Fingerprint   string
+	Title         string
+	Severity      string            // free-form, used for ntfy display (preserved)
+	SeverityLevel Severity          // normalized, used for AnalysisPolicy routing
+	Source        string            // "k8s" or "checkmk"
+	Fields        map[string]string // source-specific key-value pairs
 }
 
 // BaseConfig holds configuration shared by all analyzers.

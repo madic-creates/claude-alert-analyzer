@@ -123,6 +123,13 @@ func TestFormatForPrompt_Empty(t *testing.T) {
 	}
 }
 
+func TestAlertPayload_HasSeverityField(t *testing.T) {
+	p := AlertPayload{SeverityLevel: SeverityCritical}
+	if p.SeverityLevel != SeverityCritical {
+		t.Errorf("expected SeverityCritical, got %v", p.SeverityLevel)
+	}
+}
+
 func TestToolResponseParse_ToolUse(t *testing.T) {
 	raw := `{
 		"content": [
