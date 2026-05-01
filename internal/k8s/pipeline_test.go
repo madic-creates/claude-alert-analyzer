@@ -382,11 +382,17 @@ func TestProcessAlert_StartsAtInPrompt(t *testing.T) {
 	}
 	ProcessAlert(context.Background(), deps, alert)
 
-	if !strings.Contains(capturedPrompt, "2024-01-15T03:00:00Z") {
-		t.Errorf("expected startsAt timestamp in user prompt, got:\n%s", capturedPrompt)
-	}
-	if !strings.Contains(capturedPrompt, "StartsAt") {
-		t.Errorf("expected 'StartsAt' label in user prompt, got:\n%s", capturedPrompt)
+	// Lock down the full alert-header prefix verbatim. Any future refactor
+	// that drops alertname/status/severity/namespace/StartsAt or reorders
+	// them will now fail this test.
+	wantPrefix := "## Alert: HighCPU\n" +
+		"- Status: firing\n" +
+		"- Severity: warning\n" +
+		"- Namespace: production\n" +
+		"- StartsAt: 2024-01-15T03:00:00Z\n" +
+		"\n"
+	if !strings.HasPrefix(capturedPrompt, wantPrefix) {
+		t.Errorf("user prompt header mismatch.\nwant prefix:\n%q\ngot:\n%q", wantPrefix, capturedPrompt)
 	}
 }
 
@@ -470,11 +476,20 @@ func TestProcessAlert_PromptSanitizesNamespace(t *testing.T) {
 	}
 	ProcessAlert(context.Background(), deps, alert)
 
-	if strings.Contains(capturedPrompt, "\n## Injected Section") {
-		t.Errorf("control character from namespace leaked into user prompt: %q", capturedPrompt)
-	}
-	if !strings.Contains(capturedPrompt, "production") {
-		t.Errorf("sanitized namespace should still appear in prompt, got:\n%s", capturedPrompt)
+	// Lock down the full alert-header prefix verbatim. Any future refactor
+	// that drops alertname/status/severity/namespace/StartsAt or reorders
+	// them will now fail this test. The namespace fixture is
+	// "production\n## Injected Section"; SanitizeAlertField strips only the
+	// leading \n control character, yielding "production## Injected Section".
+	// status and startsAt are absent from the fixture, so they are empty strings.
+	wantPrefix := "## Alert: HighCPU\n" +
+		"- Status: \n" +
+		"- Severity: warning\n" +
+		"- Namespace: production## Injected Section\n" +
+		"- StartsAt: \n" +
+		"\n"
+	if !strings.HasPrefix(capturedPrompt, wantPrefix) {
+		t.Errorf("user prompt header mismatch.\nwant prefix:\n%q\ngot:\n%q", wantPrefix, capturedPrompt)
 	}
 }
 
