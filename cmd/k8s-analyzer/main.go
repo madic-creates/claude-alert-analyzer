@@ -36,15 +36,6 @@ func loadConfig() k8s.Config {
 		os.Exit(1)
 	}
 
-	allowedNS := shared.EnvOrDefault("ALLOWED_NAMESPACES", "monitoring,databases,media")
-	var nsList []string
-	for _, ns := range strings.Split(allowedNS, ",") {
-		ns = strings.TrimSpace(ns)
-		if ns != "" {
-			nsList = append(nsList, ns)
-		}
-	}
-
 	webhookSecret, err := shared.RequireEnv("WEBHOOK_SECRET")
 	if err != nil {
 		slog.Error("config error", "error", err)
@@ -57,17 +48,16 @@ func loadConfig() k8s.Config {
 	}
 
 	return k8s.Config{
-		PrometheusURL:     shared.EnvOrDefault("PROMETHEUS_URL", "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"),
-		ClaudeModel:       shared.EnvOrDefault("CLAUDE_MODEL", "claude-sonnet-4-6"),
-		CooldownSeconds:   cooldown,
-		SkipResolved:      shared.EnvOrDefault("SKIP_RESOLVED", "true") != "false",
-		Port:              shared.EnvOrDefault("PORT", "8080"),
-		MetricsPort:       shared.EnvOrDefault("METRICS_PORT", "9101"),
-		WebhookSecret:     webhookSecret,
-		AllowedNamespaces: nsList,
-		MaxLogBytes:       maxLogBytes,
-		APIBaseURL:        shared.EnvOrDefault("API_BASE_URL", "https://api.anthropic.com/v1/messages"),
-		APIKey:            apiKey,
+		PrometheusURL:   shared.EnvOrDefault("PROMETHEUS_URL", "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"),
+		ClaudeModel:     shared.EnvOrDefault("CLAUDE_MODEL", "claude-sonnet-4-6"),
+		CooldownSeconds: cooldown,
+		SkipResolved:    shared.EnvOrDefault("SKIP_RESOLVED", "true") != "false",
+		Port:            shared.EnvOrDefault("PORT", "8080"),
+		MetricsPort:     shared.EnvOrDefault("METRICS_PORT", "9101"),
+		WebhookSecret:   webhookSecret,
+		MaxLogBytes:     maxLogBytes,
+		APIBaseURL:      shared.EnvOrDefault("API_BASE_URL", "https://api.anthropic.com/v1/messages"),
+		APIKey:          apiKey,
 	}
 }
 
@@ -135,8 +125,7 @@ func main() {
 
 	slog.Info("K8s Alert Analyzer started",
 		"port", cfg.Port, "metricsPort", cfg.MetricsPort, "model", cfg.ClaudeModel,
-		"apiBaseURL", cfg.APIBaseURL,
-		"allowedNamespaces", cfg.AllowedNamespaces)
+		"apiBaseURL", cfg.APIBaseURL)
 
 	handler := k8s.HandleWebhook(cfg, cooldownMgr, srv.Enqueue, metrics)
 	srv.Run(handler)
