@@ -1087,6 +1087,39 @@ func TestRunToolLoop_FallbackWhenNoToolRoundsOccurred(t *testing.T) {
 	}
 }
 
+func TestRunToolLoop_LastToolHasCacheControl(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		w.Write([]byte(`{"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}`))
+	}))
+	defer srv.Close()
+
+	c := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "x", Model: "m"}
+	c.retryDelays = []time.Duration{}
+
+	tools := []Tool{
+		{Name: "a", Description: "first", InputSchema: InputSchema{Type: "object"}},
+		{Name: "b", Description: "second", InputSchema: InputSchema{Type: "object"}},
+	}
+	_, _, _, err := c.RunToolLoop(context.Background(), "m", "sys", "user", tools, 1, func(string, json.RawMessage) (string, error) { return "", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	toolsArr := captured["tools"].([]any)
+	first := toolsArr[0].(map[string]any)
+	last := toolsArr[len(toolsArr)-1].(map[string]any)
+	if _, has := first["cache_control"]; has {
+		t.Error("first tool must not carry cache_control")
+	}
+	cc, ok := last["cache_control"].(map[string]any)
+	if !ok || cc["type"] != "ephemeral" {
+		t.Errorf("last tool cache_control: got %v", last["cache_control"])
+	}
+}
+
 func TestAnalyze_UsesProvidedModel(t *testing.T) {
 	var capturedBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

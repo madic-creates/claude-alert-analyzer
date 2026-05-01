@@ -26,6 +26,19 @@ const MaxResponseBytes = 2 * 1024 * 1024 // 2 MiB
 // well under the 120 s HTTP client timeout.
 var defaultRetryDelays = []time.Duration{2 * time.Second, 4 * time.Second}
 
+// withCachedTail returns a copy of tools with cache_control attached to the
+// last element. Tools is a small slice (currently 1-2 elements), so the copy
+// cost is negligible compared to building a flag at every callsite.
+func withCachedTail(tools []Tool) []Tool {
+	if len(tools) == 0 {
+		return tools
+	}
+	out := make([]Tool, len(tools))
+	copy(out, tools)
+	out[len(out)-1].CacheControl = &CacheControl{Type: "ephemeral"}
+	return out
+}
+
 // systemBlocks builds the system field with a single text block carrying
 // a cache_control breakpoint at its tail. This is breakpoint #1 of the
 // 4-breakpoint Anthropic budget; #2 is on the tools array, #3 on the
@@ -255,7 +268,7 @@ func (c *ClaudeClient) RunToolLoop(
 			Model:     model,
 			MaxTokens: 4096,
 			System:    systemBlocks(systemPrompt),
-			Tools:     tools,
+			Tools:     withCachedTail(tools),
 			Messages:  messages,
 		}
 
@@ -349,7 +362,7 @@ func (c *ClaudeClient) RunToolLoop(
 		Model:      model,
 		MaxTokens:  4096,
 		System:     systemBlocks(systemPrompt),
-		Tools:      tools,
+		Tools:      withCachedTail(tools),
 		ToolChoice: &ToolChoice{Type: "none"}, // prevent tool calls in the forced-summary turn
 		Messages:   messages,
 	}
