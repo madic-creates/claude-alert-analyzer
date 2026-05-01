@@ -323,8 +323,10 @@ func NewKubectlSubprocess(path string) *kubectlSubprocess {
 	if path == "" {
 		path = defaultKubectlPath
 	}
-	if _, err := os.Stat(path); err != nil {
+	if info, err := os.Stat(path); err != nil {
 		slog.Warn("kubectl binary not found at startup", "path", path, "error", err)
+	} else if info.Mode().Perm()&0o111 == 0 {
+		slog.Warn("kubectl binary not executable at startup", "path", path, "mode", info.Mode().Perm())
 	}
 	env := []string{
 		"HOME=" + os.Getenv("HOME"),

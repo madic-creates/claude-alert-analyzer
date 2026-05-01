@@ -846,3 +846,21 @@ func TestSummarizeKubectlArgv(t *testing.T) {
 		})
 	}
 }
+
+func TestNewKubectlSubprocess_NonExecutableBinary(t *testing.T) {
+	// Create a non-executable temp file and verify that NewKubectlSubprocess
+	// does not panic or exit — it only logs a warning.
+	dir := t.TempDir()
+	path := dir + "/kubectl"
+	if err := os.WriteFile(path, []byte("#!/bin/sh\necho ok\n"), 0o644); err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	// Should not panic — just logs a warning about non-executable binary.
+	runner := NewKubectlSubprocess(path)
+	if runner == nil {
+		t.Fatal("expected non-nil runner")
+	}
+	if runner.Path != path {
+		t.Errorf("runner.Path = %q, want %q", runner.Path, path)
+	}
+}
