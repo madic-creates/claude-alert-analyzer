@@ -199,88 +199,42 @@ func TestAnalyze_HTTPError(t *testing.T) {
 	}
 }
 
-func TestAnalyze_AnthropicAuthHeader(t *testing.T) {
-	var capturedAPIKey, capturedVersion, capturedAuthHeader string
-	srvAnthropic := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedAPIKey = r.Header.Get("x-api-key")
-		capturedVersion = r.Header.Get("anthropic-version")
-		capturedAuthHeader = r.Header.Get("Authorization")
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"content": [{"type": "text", "text": "ok"}], "usage": {}}`)
-	}))
-	defer srvAnthropic.Close()
+// TestSendRequest_AlwaysUsesXAPIKey verifies that x-api-key and anthropic-version
+// are always sent regardless of the configured BaseURL. The URL-conditional
+// Bearer-auth branch was removed as a breaking change; operators using OpenRouter
+// must front-end with an auth-translating proxy.
+func TestSendRequest_AlwaysUsesXAPIKey(t *testing.T) {
+	for _, baseURL := range []string{
+		"https://api.anthropic.com/v1/messages",
+		"https://openrouter.ai/api/v1/messages",
+		"https://example.com/proxy",
+	} {
+		t.Run(baseURL, func(t *testing.T) {
+			var gotKey, gotAuth, gotVersion string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotKey = r.Header.Get("x-api-key")
+				gotAuth = r.Header.Get("Authorization")
+				gotVersion = r.Header.Get("anthropic-version")
+				w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`))
+			}))
+			defer srv.Close()
 
-	// Use a custom transport that redirects to the test server while keeping
-	// the Anthropic URL for header detection.
-	client := &ClaudeClient{
-		HTTP:    &http.Client{Transport: rewriteHostTransport{target: srvAnthropic.URL}, Timeout: 5 * time.Second},
-		BaseURL: "https://api.anthropic.com/v1/messages",
-		APIKey:  "anthropic-secret",
-		Model:   "claude-3",
-	}
-	_, err := client.Analyze(context.Background(), "test-model", "sys", "user")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if capturedAPIKey != "anthropic-secret" {
-		t.Errorf("expected x-api-key header, got %q", capturedAPIKey)
-	}
-	if capturedVersion != anthropicVersion {
-		t.Errorf("expected anthropic-version header %q, got %q", anthropicVersion, capturedVersion)
-	}
-	if capturedAuthHeader != "" {
-		t.Errorf("Authorization header should not be set for Anthropic, got %q", capturedAuthHeader)
-	}
-}
-
-func TestAnalyze_OpenRouterAuthHeader(t *testing.T) {
-	var capturedAuth, capturedAPIKey string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedAuth = r.Header.Get("Authorization")
-		capturedAPIKey = r.Header.Get("x-api-key")
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"content": [{"type": "text", "text": "ok"}], "usage": {}}`)
-	}))
-	defer srv.Close()
-
-	// srv.URL does not contain "anthropic.com" so OpenRouter branch fires.
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "openrouter-key", Model: "claude-3"}
-	_, err := client.Analyze(context.Background(), "test-model", "sys", "user")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if capturedAuth != "Bearer openrouter-key" {
-		t.Errorf("expected Bearer auth, got %q", capturedAuth)
-	}
-	if capturedAPIKey != "" {
-		t.Errorf("x-api-key should not be set for OpenRouter, got %q", capturedAPIKey)
-	}
-}
-
-// TestIsAnthropicURL verifies that the helper correctly distinguishes genuine
-// Anthropic API URLs from URLs that merely contain "anthropic.com" as a
-// substring (which the old strings.Contains check would have misidentified).
-func TestIsAnthropicURL(t *testing.T) {
-	cases := []struct {
-		rawURL string
-		want   bool
-	}{
-		{"https://api.anthropic.com/v1/messages", true},
-		{"https://anthropic.com/v1/messages", true},
-		{"https://ANTHROPIC.COM/v1/messages", true},         // case-insensitive
-		{"https://api.anthropic.com:443/v1/messages", true}, // explicit port
-		{"https://anthropic.com.proxy.example.com", false},  // subdomain-prefix false positive
-		{"https://notanthropic.com/v1/messages", false},
-		{"http://localhost:8080", false},
-		{"https://openrouter.ai/api/v1/chat/completions", false},
-		{"not-a-url", false},              // no host → false (url.Parse succeeds but host is empty)
-		{"http://example.com\x00", false}, // url.Parse fails on control characters → false
-	}
-	for _, tc := range cases {
-		got := isAnthropicURL(tc.rawURL)
-		if got != tc.want {
-			t.Errorf("isAnthropicURL(%q) = %v, want %v", tc.rawURL, got, tc.want)
-		}
+			c := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "tok", Model: "m"}
+			c.retryDelays = []time.Duration{}
+			_, err := c.Analyze(context.Background(), "m", "s", "u")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if gotKey != "tok" {
+				t.Errorf("x-api-key: got %q, want tok", gotKey)
+			}
+			if gotAuth != "" {
+				t.Errorf("Authorization should be empty, got %q", gotAuth)
+			}
+			if gotVersion != "2023-06-01" {
+				t.Errorf("anthropic-version: got %q, want 2023-06-01", gotVersion)
+			}
+		})
 	}
 }
 
@@ -299,24 +253,6 @@ func TestAnalyze_ContextCancellation(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for cancelled context")
 	}
-}
-
-// rewriteHostTransport redirects all requests to a fixed target URL, allowing
-// test servers to intercept requests nominally sent to external URLs
-// (e.g., api.anthropic.com).
-type rewriteHostTransport struct {
-	target string // e.g. "http://127.0.0.1:PORT"
-}
-
-func (t rewriteHostTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	targetURL := t.target + req.URL.Path
-	if req.URL.RawQuery != "" {
-		targetURL += "?" + req.URL.RawQuery
-	}
-	newReq := req.Clone(req.Context())
-	newReq.URL, _ = req.URL.Parse(targetURL)
-	newReq.Host = newReq.URL.Host
-	return http.DefaultTransport.RoundTrip(newReq)
 }
 
 func TestRunToolLoop_EndTurnImmediately(t *testing.T) {

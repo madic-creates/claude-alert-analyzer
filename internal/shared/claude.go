@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -111,12 +110,8 @@ func (c *ClaudeClient) sendRequest(ctx context.Context, body any) ([]byte, error
 			return nil, fmt.Errorf("create request: %w", reqErr)
 		}
 		req.Header.Set("Content-Type", "application/json")
-		if isAnthropicURL(c.BaseURL) {
-			req.Header.Set("x-api-key", c.APIKey)
-			req.Header.Set("anthropic-version", anthropicVersion)
-		} else {
-			req.Header.Set("Authorization", "Bearer "+c.APIKey)
-		}
+		req.Header.Set("x-api-key", c.APIKey)
+		req.Header.Set("anthropic-version", anthropicVersion)
 
 		start := time.Now()
 		resp, doErr := c.HTTP.Do(req)
@@ -377,19 +372,6 @@ func (c *ClaudeClient) RunToolLoop(
 	}
 
 	return analysis, maxRounds, true, nil
-}
-
-// isAnthropicURL returns true when rawURL targets the Anthropic API directly
-// (host is exactly "anthropic.com" or a subdomain like "api.anthropic.com").
-// Using net/url host parsing avoids false positives from substring matches
-// on URLs like "https://anthropic.com.proxy.example.com".
-func isAnthropicURL(rawURL string) bool {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	host := strings.ToLower(u.Hostname()) // strips any :port suffix
-	return host == "anthropic.com" || strings.HasSuffix(host, ".anthropic.com")
 }
 
 func extractText(blocks []ContentBlock) string {
