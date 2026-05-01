@@ -3,6 +3,7 @@ package k8s
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -59,5 +60,84 @@ func parseKubectlInput(input json.RawMessage) ([]string, error) {
 	if totalBytes > maxTotalArgBytes {
 		return nil, fmt.Errorf("command total size %d bytes exceeds maximum of %d bytes", totalBytes, maxTotalArgBytes)
 	}
+	if err := validateKubectlVerb(parsed.Command); err != nil {
+		return nil, err
+	}
 	return parsed.Command, nil
+}
+
+// allowedKubectlVerbs is the read-only built-in subcommand set. The agent
+// system prompt promises read-only behavior; this allowlist enforces it
+// for the subcommands the API server cannot see (config, kustomize,
+// plugin) plus the obvious write verbs (delete, apply, …). RBAC is the
+// final word for everything that does reach the API server.
+var allowedKubectlVerbs = map[string]bool{
+	"get": true, "describe": true, "logs": true, "top": true, "events": true,
+	"explain": true, "version": true, "api-resources": true, "api-versions": true,
+	"cluster-info": true, "auth": true, "rollout": true,
+}
+
+// allowedKubectlSubVerbs constrains verbs that have read-only sub-verbs.
+// Any other sub-verb (or none) is rejected.
+var allowedKubectlSubVerbs = map[string]map[string]bool{
+	"auth":    {"can-i": true},
+	"rollout": {"history": true},
+}
+
+// validateKubectlVerb runs after parseKubectlInput's byte-level checks. It
+// finds the first non-flag token (the verb) and the second non-flag token
+// (the sub-verb, when applicable) and rejects anything outside the allowlist.
+func validateKubectlVerb(argv []string) error {
+	verb, subVerb := extractVerbs(argv)
+	if verb == "" {
+		return fmt.Errorf("kubectl command has no verb; allowed verbs: %s", listAllowedVerbs())
+	}
+	if !allowedKubectlVerbs[verb] {
+		return fmt.Errorf("command denied: kubectl %s is not permitted; allowed verbs: %s", verb, listAllowedVerbs())
+	}
+	if subs, hasSubs := allowedKubectlSubVerbs[verb]; hasSubs {
+		if subVerb == "" || !subs[subVerb] {
+			label := verb
+			if subVerb != "" {
+				label = verb + " " + subVerb
+			}
+			return fmt.Errorf("command denied: kubectl %s is not permitted; only %s %s is allowed",
+				label, verb, allowedSubVerbList(verb))
+		}
+	}
+	return nil
+}
+
+func extractVerbs(argv []string) (verb, subVerb string) {
+	for _, a := range argv {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		if verb == "" {
+			verb = a
+			continue
+		}
+		subVerb = a
+		return
+	}
+	return
+}
+
+func listAllowedVerbs() string {
+	keys := make([]string, 0, len(allowedKubectlVerbs))
+	for k := range allowedKubectlVerbs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
+}
+
+func allowedSubVerbList(verb string) string {
+	subs := allowedKubectlSubVerbs[verb]
+	keys := make([]string, 0, len(subs))
+	for k := range subs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
 }

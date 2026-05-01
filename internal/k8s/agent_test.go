@@ -118,3 +118,77 @@ func mustMarshalCommand(argv []string) []byte {
 	}
 	return b
 }
+
+func TestParseKubectlInput_VerbAllowlist(t *testing.T) {
+	allowed := []string{
+		`["get","pods"]`,
+		`["describe","pod","prom-0"]`,
+		`["logs","prom-0","--tail=20"]`,
+		`["top","nodes"]`,
+		`["events","-n","monitoring"]`,
+		`["explain","pods.spec.containers"]`,
+		`["version","--short"]`,
+		`["api-resources"]`,
+		`["api-versions"]`,
+		`["cluster-info"]`,
+		`["auth","can-i","get","pods"]`,
+		`["rollout","history","deployment/foo"]`,
+		// flags before verb are tolerated as long as the FIRST non-flag is a verb
+		`["-v=4","get","pods"]`,
+	}
+	for _, c := range allowed {
+		t.Run("allowed:"+c, func(t *testing.T) {
+			_, err := parseKubectlInput(json.RawMessage(`{"command":` + c + `}`))
+			if err != nil {
+				t.Errorf("expected no error for %s, got %v", c, err)
+			}
+		})
+	}
+
+	rejected := []struct {
+		argv    string
+		wantErr string
+	}{
+		{`["delete","pod","prom-0"]`, "delete"},
+		{`["apply","-f","x.yaml"]`, "apply"},
+		{`["create","ns","x"]`, "create"},
+		{`["edit","pod","prom-0"]`, "edit"},
+		{`["patch","pod","prom-0","-p","{}"]`, "patch"},
+		{`["replace","-f","x.yaml"]`, "replace"},
+		{`["scale","--replicas=0","deployment/foo"]`, "scale"},
+		{`["cordon","node-1"]`, "cordon"},
+		{`["drain","node-1"]`, "drain"},
+		{`["uncordon","node-1"]`, "uncordon"},
+		{`["exec","prom-0","--","sh"]`, "exec"},
+		{`["cp","prom-0:/tmp/x","./x"]`, "cp"},
+		{`["port-forward","prom-0","9090"]`, "port-forward"},
+		{`["proxy"]`, "proxy"},
+		{`["debug","prom-0"]`, "debug"},
+		{`["attach","prom-0"]`, "attach"},
+		{`["wait","--for=condition=Ready","pod/prom-0"]`, "wait"},
+		{`["config","view"]`, "config"},
+		{`["kustomize","./manifests"]`, "kustomize"},
+		{`["plugin","list"]`, "plugin"},
+		{`["completion","bash"]`, "completion"},
+		{`["alpha","debug","node-1"]`, "alpha"},
+		{`["kubectl-foo","args"]`, "kubectl-foo"},
+		// auth sub-verb rules
+		{`["auth","whoami"]`, "auth whoami"},
+		{`["auth","reconcile"]`, "auth reconcile"},
+		// rollout sub-verb rules
+		{`["rollout","status","deployment/foo"]`, "rollout status"},
+		{`["rollout","restart","deployment/foo"]`, "rollout restart"},
+		{`["rollout","undo","deployment/foo"]`, "rollout undo"},
+	}
+	for _, c := range rejected {
+		t.Run("rejected:"+c.argv, func(t *testing.T) {
+			_, err := parseKubectlInput(json.RawMessage(`{"command":` + c.argv + `}`))
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", c.wantErr)
+			}
+			if !strings.Contains(err.Error(), c.wantErr) {
+				t.Errorf("expected error containing %q, got %q", c.wantErr, err.Error())
+			}
+		})
+	}
+}
