@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -94,6 +95,21 @@ func (m *AlertMetrics) RecordAgentToolCall(source, tool, outcome string, duratio
 	}
 	m.Prom.AgentToolCalls.WithLabelValues(source, tool, outcome).Inc()
 	m.Prom.AgentToolDuration.WithLabelValues(source, tool).Observe(duration.Seconds())
+}
+
+// RecordClaudeUsage increments all four Claude token counters with consistent
+// {source, severity, model} labels. Phase 1 callers pass severity="all" because
+// per-call severity is not yet threaded into ClaudeClient; this can be refined
+// in a future iteration. No-op when Prom is nil.
+func (m *AlertMetrics) RecordClaudeUsage(source, severity, model string, in, out, cacheCreation, cacheRead int) {
+	if m == nil || m.Prom == nil {
+		return
+	}
+	labels := prometheus.Labels{"source": source, "severity": severity, "model": model}
+	m.Prom.ClaudeInputTokens.With(labels).Add(float64(in))
+	m.Prom.ClaudeOutputTokens.With(labels).Add(float64(out))
+	m.Prom.ClaudeCacheCreationTokens.With(labels).Add(float64(cacheCreation))
+	m.Prom.ClaudeCacheReadTokens.With(labels).Add(float64(cacheRead))
 }
 
 // RecordAgentRounds observes agent_rounds_used and conditionally increments

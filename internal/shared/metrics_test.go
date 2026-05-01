@@ -363,6 +363,43 @@ func TestRecordAgentRounds(t *testing.T) {
 	}
 }
 
+func TestRecordClaudeUsage_IncrementsAllCounters(t *testing.T) {
+	prom := NewPrometheusMetrics()
+	m := &AlertMetrics{Prom: prom}
+
+	m.RecordClaudeUsage("k8s", "warning", "claude-haiku-4-5", 100, 50, 200, 300)
+
+	gather := func(name string) float64 {
+		mfs, _ := prom.Registry().Gather()
+		for _, mf := range mfs {
+			if mf.GetName() == name {
+				for _, m := range mf.GetMetric() {
+					return m.GetCounter().GetValue()
+				}
+			}
+		}
+		return -1
+	}
+	if v := gather("claude_input_tokens_total"); v != 100 {
+		t.Errorf("input_tokens: got %v, want 100", v)
+	}
+	if v := gather("claude_output_tokens_total"); v != 50 {
+		t.Errorf("output_tokens: got %v", v)
+	}
+	if v := gather("claude_cache_creation_tokens_total"); v != 200 {
+		t.Errorf("cache_creation: got %v", v)
+	}
+	if v := gather("claude_cache_read_tokens_total"); v != 300 {
+		t.Errorf("cache_read: got %v", v)
+	}
+}
+
+func TestRecordClaudeUsage_NoOpWithNilProm(t *testing.T) {
+	m := &AlertMetrics{}
+	// Must not panic
+	m.RecordClaudeUsage("k8s", "warning", "model", 1, 2, 3, 4)
+}
+
 func TestAlertMetrics_ConcurrentIncrements(t *testing.T) {
 	var m AlertMetrics
 	const n = 100

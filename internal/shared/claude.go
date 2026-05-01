@@ -75,6 +75,11 @@ type ClaudeClient struct {
 
 	// durationHistogram records Claude API call latency. May be nil.
 	durationHistogram prometheus.Observer
+
+	// metrics and source are set by WithPrometheusMetrics to enable
+	// per-call token usage recording via RecordClaudeUsage.
+	metrics *AlertMetrics
+	source  string
 }
 
 // NewClaudeClient creates a ClaudeClient from a BaseConfig with a
@@ -89,8 +94,10 @@ func NewClaudeClient(cfg BaseConfig) *ClaudeClient {
 }
 
 // WithPrometheusMetrics attaches Prometheus observers to the client so that
-// each API call is timed. Call this after NewClaudeClient.
+// each API call is timed and token usage is recorded. Call this after NewClaudeClient.
 func (c *ClaudeClient) WithPrometheusMetrics(m *AlertMetrics, source string) *ClaudeClient {
+	c.metrics = m
+	c.source = source
 	if m != nil && m.Prom != nil {
 		c.durationHistogram = m.Prom.ClaudeAPIDuration.WithLabelValues(source)
 	}
@@ -219,6 +226,10 @@ func (c *ClaudeClient) Analyze(ctx context.Context, model, systemPrompt, userPro
 		"inputTokens", result.Usage.InputTokens,
 		"outputTokens", result.Usage.OutputTokens)
 
+	c.metrics.RecordClaudeUsage(c.source, "all", model,
+		result.Usage.InputTokens, result.Usage.OutputTokens,
+		result.Usage.CacheCreationInputTokens, result.Usage.CacheReadInputTokens)
+
 	// Warn when the API signals that the response was cut off before a natural
 	// stopping point. "end_turn" is the normal stop reason; anything else
 	// (typically "max_tokens") means the output was truncated by the token
@@ -259,7 +270,7 @@ func (c *ClaudeClient) RunToolLoop(
 	}
 	messages := []ToolMessage{{Role: "user", Content: userPrompt}}
 
-	var totalInput, totalOutput int
+	var totalInput, totalOutput, totalCacheCreation, totalCacheRead int
 
 	for round := range maxRounds {
 		slog.Info("tool loop round", "round", round+1, "maxRounds", maxRounds)
@@ -288,6 +299,8 @@ func (c *ClaudeClient) RunToolLoop(
 
 		totalInput += resp.Usage.InputTokens
 		totalOutput += resp.Usage.OutputTokens
+		totalCacheCreation += resp.Usage.CacheCreationInputTokens
+		totalCacheRead += resp.Usage.CacheReadInputTokens
 
 		// Append assistant response to conversation
 		messages = append(messages, ToolMessage{Role: "assistant", Content: resp.Content})
@@ -297,6 +310,7 @@ func (c *ClaudeClient) RunToolLoop(
 				"rounds", round+1,
 				"totalInputTokens", totalInput,
 				"totalOutputTokens", totalOutput)
+			c.metrics.RecordClaudeUsage(c.source, "all", model, totalInput, totalOutput, totalCacheCreation, totalCacheRead)
 			return extractText(resp.Content), round + 1, false, nil
 		}
 
@@ -330,6 +344,7 @@ func (c *ClaudeClient) RunToolLoop(
 		if len(toolResults) == 0 {
 			slog.Warn("tool loop: no tool_use blocks found, returning text as final answer",
 				"stop_reason", resp.StopReason, "round", round+1)
+			c.metrics.RecordClaudeUsage(c.source, "all", model, totalInput, totalOutput, totalCacheCreation, totalCacheRead)
 			return extractText(resp.Content), round + 1, false, nil
 		}
 
@@ -390,6 +405,8 @@ func (c *ClaudeClient) RunToolLoop(
 
 	totalInput += resp.Usage.InputTokens
 	totalOutput += resp.Usage.OutputTokens
+	totalCacheCreation += resp.Usage.CacheCreationInputTokens
+	totalCacheRead += resp.Usage.CacheReadInputTokens
 
 	analysis := extractText(resp.Content)
 
@@ -403,6 +420,7 @@ func (c *ClaudeClient) RunToolLoop(
 		slog.Warn("forced summary produced empty analysis", "contentBlocks", len(resp.Content))
 	}
 
+	c.metrics.RecordClaudeUsage(c.source, "all", model, totalInput, totalOutput, totalCacheCreation, totalCacheRead)
 	return analysis, maxRounds, true, nil
 }
 
