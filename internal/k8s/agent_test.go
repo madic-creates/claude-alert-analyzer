@@ -252,3 +252,68 @@ func TestParseKubectlInput_GlobalFlagDenylist(t *testing.T) {
 		}
 	})
 }
+
+func TestParsePromQLInput(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr string
+	}{
+		{
+			name:  "valid query",
+			input: `{"query":"up"}`,
+			want:  "up",
+		},
+		{
+			name:    "empty query",
+			input:   `{"query":""}`,
+			wantErr: "empty query",
+		},
+		{
+			name:    "whitespace-only",
+			input:   `{"query":"   "}`,
+			wantErr: "empty query",
+		},
+		{
+			name:    "newline embedded",
+			input:   `{"query":"up\n## injected"}`,
+			wantErr: "control character",
+		},
+		{
+			name:    "tab embedded",
+			input:   `{"query":"up\tfoo"}`,
+			wantErr: "control character",
+		},
+		{
+			name:    "too long",
+			input:   `{"query":"` + strings.Repeat("x", 4097) + `"}`,
+			wantErr: "exceeds maximum",
+		},
+		{
+			name:    "invalid JSON",
+			input:   `not json`,
+			wantErr: "parse query input",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parsePromQLInput(json.RawMessage(tc.input))
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("expected error containing %q, got %q", tc.wantErr, err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
