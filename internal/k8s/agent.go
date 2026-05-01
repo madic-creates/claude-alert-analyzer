@@ -189,6 +189,16 @@ func validateKubectlFlags(argv []string) error {
 				}
 			}
 		}
+		// Single-dash short flag with =, e.g. "-s=https://attacker.com"
+		// kubectl accepts this form for short flags, so it must be denied
+		// to close the -s bypass equivalent to --server=value.
+		if len(a) > 1 && a[0] == '-' && a[1] != '-' {
+			if eq := strings.IndexByte(a, '='); eq != -1 {
+				if deniedKubectlGlobalFlags[a[:eq]] {
+					return fmt.Errorf("command denied: %s is not permitted; the in-cluster ServiceAccount is the only allowed identity", a[:eq])
+				}
+			}
+		}
 	}
 	return nil
 }

