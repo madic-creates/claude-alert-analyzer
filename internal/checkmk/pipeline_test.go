@@ -26,10 +26,10 @@ func (m *mockAnalyzer) Analyze(ctx context.Context, systemPrompt, userPrompt str
 }
 
 func (m *mockAnalyzer) RunToolLoop(ctx context.Context, systemPrompt, userPrompt string,
-	tools []shared.Tool, maxRounds int, handleTool func(string, json.RawMessage) (string, error)) (string, error) {
+	tools []shared.Tool, maxRounds int, handleTool func(string, json.RawMessage) (string, error)) (string, int, bool, error) {
 	m.capturedPrompt = systemPrompt
 	m.capturedUserPrompt = userPrompt
-	return m.result, m.err
+	return m.result, 1, false, m.err
 }
 
 type panicAnalyzer struct{}
@@ -43,7 +43,7 @@ func (p *panicAnalyzer) Analyze(_ context.Context, _, _ string) (string, error) 
 type panicToolRunner struct{}
 
 func (p *panicToolRunner) RunToolLoop(_ context.Context, _, _ string,
-	_ []shared.Tool, _ int, _ func(string, json.RawMessage) (string, error)) (string, error) {
+	_ []shared.Tool, _ int, _ func(string, json.RawMessage) (string, error)) (string, int, bool, error) {
 	panic("simulated tool-loop panic")
 }
 

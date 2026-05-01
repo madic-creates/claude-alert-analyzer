@@ -904,9 +904,7 @@ func RunAgenticDiagnostics(
 		return fmt.Sprintf("$ %s\n```\n%s\n```", logCmd, output), nil
 	}
 
-	toolCallCount := 0
 	wrappedHandleTool := func(name string, input json.RawMessage) (string, error) {
-		toolCallCount++
 		start := time.Now()
 		out, err := handleTool(name, input)
 		outcome := "ok"
@@ -915,7 +913,7 @@ func RunAgenticDiagnostics(
 			outcome = "exec_error"
 		case strings.HasPrefix(out, "Command denied"), strings.HasPrefix(out, "command denied"):
 			outcome = "rejected_verb"
-		case strings.HasPrefix(out, "Command failed:"):
+		case strings.HasPrefix(out, "Command failed:"), strings.Contains(out, "[exited: "):
 			outcome = "nonzero_exit"
 		}
 		if metrics != nil {
@@ -924,18 +922,17 @@ func RunAgenticDiagnostics(
 		return out, err
 	}
 
-	analysis, err := client.RunToolLoop(
+	analysis, rounds, exhausted, err := client.RunToolLoop(
 		ctx, agentSystemPromptForRounds(maxRounds), alertContext,
 		[]shared.Tool{sshTool}, maxRounds, wrappedHandleTool,
 	)
-	exhausted := toolCallCount >= maxRounds
 	if metrics != nil {
-		metrics.RecordAgentRounds("checkmk", toolCallCount, exhausted)
+		metrics.RecordAgentRounds("checkmk", rounds, exhausted)
 	}
 	if err != nil {
 		return "", fmt.Errorf("agentic loop failed: %w", err)
 	}
 	slog.Info("agentic diagnostics complete", "hostname", hostname,
-		"tool_calls", toolCallCount, "exhausted", exhausted)
+		"rounds", rounds, "exhausted", exhausted)
 	return analysis, nil
 }

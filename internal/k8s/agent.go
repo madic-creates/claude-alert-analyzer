@@ -410,14 +410,7 @@ func RunAgenticDiagnostics(
 ) (string, error) {
 	slog.Info("starting agentic k8s diagnostics", "maxRounds", maxRounds)
 
-	// toolCallCount approximates rounds-used: in practice each Claude turn
-	// produces exactly one tool_use block in this code path, so tool calls
-	// and rounds are 1:1. Even if Claude emits multi-tool rounds in a future
-	// API revision, the metric remains a useful "Claude work done" counter.
-	toolCallCount := 0
-
 	handleTool := func(name string, input json.RawMessage) (string, error) {
-		toolCallCount++
 		start := time.Now()
 		switch name {
 		case "kubectl_exec":
@@ -445,7 +438,7 @@ func RunAgenticDiagnostics(
 		return handleTool(name, input)
 	}
 
-	analysis, err := runner.RunToolLoop(
+	analysis, rounds, exhausted, err := runner.RunToolLoop(
 		ctx,
 		agentSystemPromptForRounds(maxRounds),
 		userPrompt,
@@ -453,12 +446,11 @@ func RunAgenticDiagnostics(
 		maxRounds,
 		safeHandleTool,
 	)
-	exhausted := toolCallCount >= maxRounds
 	if metrics != nil {
-		metrics.RecordAgentRounds("k8s", toolCallCount, exhausted)
+		metrics.RecordAgentRounds("k8s", rounds, exhausted)
 	}
 	slog.Info("agentic k8s diagnostics complete",
-		"tool_calls", toolCallCount, "exhausted", exhausted)
+		"rounds", rounds, "exhausted", exhausted)
 	if err != nil {
 		return "", fmt.Errorf("agentic loop failed: %w", err)
 	}

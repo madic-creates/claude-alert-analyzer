@@ -498,9 +498,12 @@ func (f *fakeToolLoopRunner) RunToolLoop(
 	ctx context.Context, system, user string,
 	tools []shared.Tool, maxRounds int,
 	handleTool func(name string, input json.RawMessage) (string, error),
-) (string, error) {
+) (string, int, bool, error) {
 	f.captured = user
-	return f.driver(handleTool)
+	out, err := f.driver(handleTool)
+	// Test fakes: return placeholder rounds=1, exhausted=false. Tests asserting
+	// on these values can use a different fake.
+	return out, 1, false, err
 }
 
 type fakeKubectlRunner struct {

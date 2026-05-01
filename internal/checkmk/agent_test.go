@@ -35,7 +35,7 @@ func (r *capturingToolRunner) RunToolLoop(
 	_ context.Context, systemPrompt, _ string,
 	_ []shared.Tool, maxRounds int,
 	handleTool func(string, json.RawMessage) (string, error),
-) (string, error) {
+) (string, int, bool, error) {
 	r.capturedSystemPrompt = systemPrompt
 	r.capturedMaxRounds = maxRounds
 	for _, call := range r.calls {
@@ -43,7 +43,8 @@ func (r *capturingToolRunner) RunToolLoop(
 		r.toolOutputs = append(r.toolOutputs, out)
 		r.toolErrors = append(r.toolErrors, err)
 	}
-	return r.result, r.err
+	// Test fakes: return placeholder rounds=1, exhausted=false.
+	return r.result, 1, false, r.err
 }
 
 // fixedDialer always returns the same pre-connected SSH client (or error).
