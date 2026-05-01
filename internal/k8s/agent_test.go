@@ -714,3 +714,76 @@ func TestRunAgenticDiagnostics_PanicRecovery(t *testing.T) {
 		t.Errorf("missing exec_error metric for panicked call; body:\n%s", body)
 	}
 }
+
+// fakeToolLoopRunnerExhausted is a variant that returns rounds=maxRounds, exhausted=true.
+type fakeToolLoopRunnerExhausted struct {
+	maxRounds int
+}
+
+func (f *fakeToolLoopRunnerExhausted) RunToolLoop(
+	ctx context.Context, system, user string,
+	tools []shared.Tool, maxRounds int,
+	handleTool func(name string, input json.RawMessage) (string, error),
+) (string, int, bool, error) {
+	return "forced summary text", f.maxRounds, true, nil
+}
+
+func TestRunAgenticDiagnostics_ForcedSummary(t *testing.T) {
+	kc := &fakeKubectlRunner{}
+	pq := &fakePromQLQuerier{}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	runner := &fakeToolLoopRunnerExhausted{maxRounds: 10}
+
+	out, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != "forced summary text" {
+		t.Errorf("expected forced summary text, got %q", out)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	metrics.MetricsHandler()(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `agent_rounds_exhausted_total{source="k8s"} 1`) {
+		t.Errorf("expected exhausted counter to fire; body:\n%s", body)
+	}
+}
+
+func TestRunAgenticDiagnostics_RBACForbidden(t *testing.T) {
+	// Simulate kubectl returning a Forbidden error from the API server.
+	kc := &fakeKubectlRunner{
+		response: `Error from server (Forbidden): pods is forbidden: User "system:serviceaccount:default:k8s-analyzer" cannot list resource "pods" in API group "" in the namespace "kube-system"`,
+		err:      fmt.Errorf("exit status 1"),
+	}
+	pq := &fakePromQLQuerier{}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+
+	runner := &fakeToolLoopRunner{
+		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
+			result, err := handleTool("kubectl_exec", json.RawMessage(`{"command":["get","pods","-n","kube-system"]}`))
+			if err != nil {
+				t.Errorf("RBAC error should not propagate as Go error to RunToolLoop, got: %v", err)
+			}
+			if !strings.Contains(result, "Forbidden") {
+				t.Errorf("RBAC error message should be visible in tool result, got: %q", result)
+			}
+			if !strings.Contains(result, "[exited:") {
+				t.Errorf("expected exit-code annotation, got: %q", result)
+			}
+			return "ok", nil
+		},
+	}
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	metrics.MetricsHandler()(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `agent_tool_calls_total{outcome="nonzero_exit",source="k8s",tool="kubectl_exec"} 1`) {
+		t.Errorf("expected nonzero_exit metric for RBAC denial; body:\n%s", body)
+	}
+}
