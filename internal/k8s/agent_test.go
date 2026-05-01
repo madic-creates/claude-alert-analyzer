@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 )
 
 func TestParseKubectlInput_BasicValidation(t *testing.T) {
@@ -471,5 +474,183 @@ func TestParsePromQLInput(t *testing.T) {
 				t.Errorf("got %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// fakeToolLoopRunner is a controllable mock of shared.ToolLoopRunner. The
+// caller provides a function that drives the conversation: it receives the
+// handleTool callback and can call it any number of times, returning a
+// final analysis string + nil error (or an error to simulate API failure).
+// It records the userPrompt that was passed in.
+type fakeToolLoopRunner struct {
+	captured string
+	driver   func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error)
+}
+
+func (f *fakeToolLoopRunner) RunToolLoop(
+	ctx context.Context, system, user string,
+	tools []shared.Tool, maxRounds int,
+	handleTool func(name string, input json.RawMessage) (string, error),
+) (string, error) {
+	f.captured = user
+	return f.driver(handleTool)
+}
+
+type fakeKubectlRunner struct {
+	calls    [][]string
+	response string
+	err      error
+}
+
+func (f *fakeKubectlRunner) Exec(ctx context.Context, argv []string, timeout time.Duration) (string, error) {
+	f.calls = append(f.calls, append([]string(nil), argv...))
+	return f.response, f.err
+}
+
+type fakePromQLQuerier struct {
+	calls    []string
+	response string
+}
+
+func (f *fakePromQLQuerier) Query(ctx context.Context, q string) string {
+	f.calls = append(f.calls, q)
+	return f.response
+}
+
+func TestRunAgenticDiagnostics_HappyPath(t *testing.T) {
+	kc := &fakeKubectlRunner{response: "pod-x   Running\n"}
+	pq := &fakePromQLQuerier{response: "up: 1"}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+
+	runner := &fakeToolLoopRunner{
+		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
+			out, err := handleTool("kubectl_exec", json.RawMessage(`{"command":["get","pods"]}`))
+			if err != nil {
+				t.Fatalf("handleTool unexpected error: %v", err)
+			}
+			if !strings.Contains(out, "pod-x") {
+				t.Errorf("expected kubectl output, got %q", out)
+			}
+			return "## Root cause\nfinal analysis", nil
+		},
+	}
+
+	got, err := RunAgenticDiagnostics(
+		context.Background(), runner, kc, pq, metrics,
+		"## Alert: Foo\nbody", 10,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(got, "Root cause") {
+		t.Errorf("unexpected analysis: %q", got)
+	}
+	if runner.captured != "## Alert: Foo\nbody" {
+		t.Errorf("user prompt not preserved verbatim: %q", runner.captured)
+	}
+	if len(kc.calls) != 1 || kc.calls[0][0] != "get" {
+		t.Errorf("unexpected kubectl calls: %v", kc.calls)
+	}
+}
+
+func TestRunAgenticDiagnostics_PromQLDispatch(t *testing.T) {
+	kc := &fakeKubectlRunner{}
+	pq := &fakePromQLQuerier{response: "up: 1"}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+
+	runner := &fakeToolLoopRunner{
+		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
+			out, err := handleTool("promql_query", json.RawMessage(`{"query":"up"}`))
+			if err != nil {
+				t.Fatalf("handleTool: %v", err)
+			}
+			if !strings.Contains(out, "up: 1") {
+				t.Errorf("expected promql result, got %q", out)
+			}
+			return "ok", nil
+		},
+	}
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pq.calls) != 1 || pq.calls[0] != "up" {
+		t.Errorf("unexpected promql calls: %v", pq.calls)
+	}
+}
+
+func TestRunAgenticDiagnostics_ValidationRejected(t *testing.T) {
+	kc := &fakeKubectlRunner{}
+	pq := &fakePromQLQuerier{}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+
+	runner := &fakeToolLoopRunner{
+		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
+			out, err := handleTool("kubectl_exec", json.RawMessage(`{"command":["delete","pod","x"]}`))
+			if err != nil {
+				t.Fatalf("validation rejection should not return Go error, got: %v", err)
+			}
+			if !strings.Contains(out, "command denied") {
+				t.Errorf("expected denial string, got: %q", out)
+			}
+			if len(kc.calls) != 0 {
+				t.Errorf("kubectl runner should not have been called for denied verb")
+			}
+			return "stopped early", nil
+		},
+	}
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunAgenticDiagnostics_UnknownTool(t *testing.T) {
+	kc := &fakeKubectlRunner{}
+	pq := &fakePromQLQuerier{}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+
+	runner := &fakeToolLoopRunner{
+		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
+			_, err := handleTool("not_a_tool", json.RawMessage(`{}`))
+			if err == nil {
+				t.Fatalf("expected error for unknown tool, got nil")
+			}
+			return "ok", nil
+		},
+	}
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunAgenticDiagnostics_RecordsMetrics(t *testing.T) {
+	kc := &fakeKubectlRunner{response: "ok\n"}
+	pq := &fakePromQLQuerier{response: "v"}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+
+	runner := &fakeToolLoopRunner{
+		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
+			_, _ = handleTool("kubectl_exec", json.RawMessage(`{"command":["get","pods"]}`))
+			_, _ = handleTool("kubectl_exec", json.RawMessage(`{"command":["delete","pod","x"]}`))
+			_, _ = handleTool("promql_query", json.RawMessage(`{"query":"up"}`))
+			return "done", nil
+		},
+	}
+	_, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	metrics.MetricsHandler()(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `agent_tool_calls_total{outcome="ok",source="k8s",tool="kubectl_exec"} 1`) {
+		t.Errorf("missing kubectl ok counter; body:\n%s", body)
+	}
+	if !strings.Contains(body, `agent_tool_calls_total{outcome="rejected_verb",source="k8s",tool="kubectl_exec"} 1`) {
+		t.Errorf("missing kubectl rejected_verb counter; body:\n%s", body)
+	}
+	if !strings.Contains(body, `agent_tool_calls_total{outcome="ok",source="k8s",tool="promql_query"} 1`) {
+		t.Errorf("missing promql ok counter; body:\n%s", body)
 	}
 }

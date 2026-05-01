@@ -353,3 +353,179 @@ func parsePromQLInput(input json.RawMessage) (string, error) {
 	}
 	return parsed.Query, nil
 }
+
+// PromQLQuerier is the interface the agent loop uses to issue arbitrary
+// PromQL queries. *PrometheusClient satisfies it via its public Query method.
+type PromQLQuerier interface {
+	Query(ctx context.Context, query string) string
+}
+
+// per-tool wall-clock timeout. Mirrors checkmk's runSSHCommand.
+const agentToolTimeout = 10 * time.Second
+
+// outcome label values for agent_tool_calls_total.
+const (
+	outcomeOK            = "ok"
+	outcomeRejectedValid = "rejected_validation"
+	outcomeRejectedVerb  = "rejected_verb"
+	outcomeExecError     = "exec_error"
+	outcomeNonzeroExit   = "nonzero_exit"
+	outcomeTimeout       = "timeout"
+)
+
+// RunAgenticDiagnostics drives a multi-turn Claude tool-use conversation
+// for the k8s alert. It dispatches tool calls to the kubectl runner or the
+// PromQL querier, applies output sanitisation/redaction/truncation in the
+// same way as checkmk's RunAgenticDiagnostics, and emits per-tool
+// observability via metrics.
+//
+// userPrompt is the FULL user message — caller is responsible for
+// prepending the alert-header preamble to AnalysisContext.FormatForPrompt().
+func RunAgenticDiagnostics(
+	ctx context.Context,
+	runner shared.ToolLoopRunner,
+	kc KubectlRunner,
+	prom PromQLQuerier,
+	metrics *shared.AlertMetrics,
+	userPrompt string,
+	maxRounds int,
+) (string, error) {
+	slog.Info("starting agentic k8s diagnostics", "maxRounds", maxRounds)
+
+	// toolCallCount approximates rounds-used: in practice each Claude turn
+	// produces exactly one tool_use block in this code path, so tool calls
+	// and rounds are 1:1. Even if Claude emits multi-tool rounds in a future
+	// API revision, the metric remains a useful "Claude work done" counter.
+	toolCallCount := 0
+
+	handleTool := func(name string, input json.RawMessage) (string, error) {
+		toolCallCount++
+		start := time.Now()
+		switch name {
+		case "kubectl_exec":
+			return handleKubectlTool(ctx, kc, metrics, input, start)
+		case "promql_query":
+			return handlePromQLTool(ctx, prom, metrics, input, start)
+		default:
+			return "", fmt.Errorf("unknown tool: %s", name)
+		}
+	}
+
+	// Wrap handleTool with panic recovery so a buggy handler cannot kill the
+	// loop. The synthetic tool result lets Claude move on instead of aborting.
+	safeHandleTool := func(name string, input json.RawMessage) (result string, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("agent tool handler panicked", "tool", name, "recover", r)
+				if metrics != nil {
+					metrics.RecordAgentToolCall("k8s", name, outcomeExecError, 0)
+				}
+				result = fmt.Sprintf("Tool %s panicked: %v — continue with a different command", name, r)
+				err = nil
+			}
+		}()
+		return handleTool(name, input)
+	}
+
+	analysis, err := runner.RunToolLoop(
+		ctx,
+		agentSystemPromptForRounds(maxRounds),
+		userPrompt,
+		[]shared.Tool{kubectlTool, promqlTool},
+		maxRounds,
+		safeHandleTool,
+	)
+	exhausted := toolCallCount >= maxRounds
+	if metrics != nil {
+		metrics.RecordAgentRounds("k8s", toolCallCount, exhausted)
+	}
+	slog.Info("agentic k8s diagnostics complete",
+		"tool_calls", toolCallCount, "exhausted", exhausted)
+	if err != nil {
+		return "", fmt.Errorf("agentic loop failed: %w", err)
+	}
+	return analysis, nil
+}
+
+func handleKubectlTool(ctx context.Context, kc KubectlRunner, metrics *shared.AlertMetrics, input json.RawMessage, start time.Time) (string, error) {
+	argv, err := parseKubectlInput(input)
+	if err != nil {
+		// Distinguish verb/flag rejection from byte-level validation so
+		// metrics can show which class of bad input Claude is hitting.
+		outcome := outcomeRejectedValid
+		if strings.Contains(err.Error(), "command denied") {
+			outcome = outcomeRejectedVerb
+		}
+		recordToolCall(metrics, "kubectl_exec", outcome, time.Since(start), nil)
+		// Validation errors return the message as the tool result (not a Go
+		// error) so Claude can self-correct.
+		return err.Error(), nil
+	}
+
+	out, err := kc.Exec(ctx, argv, agentToolTimeout)
+	out = shared.SanitizeOutput(out)
+	out = shared.RedactSecrets(out)
+	out = shared.Truncate(out, 4096)
+
+	cmdLine := "kubectl " + strings.Join(argv, " ")
+	if err != nil {
+		outcome := outcomeNonzeroExit
+		if ctxErr := ctx.Err(); ctxErr != nil || isTimeoutErr(err) {
+			outcome = outcomeTimeout
+		} else if isExecError(err) {
+			outcome = outcomeExecError
+		}
+		recordToolCall(metrics, "kubectl_exec", outcome, time.Since(start), argv)
+		if out != "" {
+			return fmt.Sprintf("$ %s\n%s\n[exited: %v]", cmdLine, out, err), nil
+		}
+		return fmt.Sprintf("Command failed: %v", err), nil
+	}
+	recordToolCall(metrics, "kubectl_exec", outcomeOK, time.Since(start), argv)
+	return fmt.Sprintf("$ %s\n%s", cmdLine, out), nil
+}
+
+func handlePromQLTool(ctx context.Context, prom PromQLQuerier, metrics *shared.AlertMetrics, input json.RawMessage, start time.Time) (string, error) {
+	q, err := parsePromQLInput(input)
+	if err != nil {
+		recordToolCall(metrics, "promql_query", outcomeRejectedValid, time.Since(start), nil)
+		return err.Error(), nil
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, agentToolTimeout)
+	defer cancel()
+	out := prom.Query(queryCtx, q)
+	out = shared.SanitizeOutput(out)
+	out = shared.RedactSecrets(out)
+	out = shared.Truncate(out, 4096)
+	recordToolCall(metrics, "promql_query", outcomeOK, time.Since(start), nil)
+	return fmt.Sprintf("# PromQL: %s\n%s", q, out), nil
+}
+
+func recordToolCall(metrics *shared.AlertMetrics, tool, outcome string, dur time.Duration, argv []string) {
+	if argv != nil {
+		slog.Info("agent tool call",
+			"tool", tool, "argv", argv, "duration_ms", dur.Milliseconds(), "outcome", outcome)
+	} else {
+		slog.Info("agent tool call",
+			"tool", tool, "duration_ms", dur.Milliseconds(), "outcome", outcome)
+	}
+	if metrics != nil {
+		metrics.RecordAgentToolCall("k8s", tool, outcome, dur)
+	}
+}
+
+func isTimeoutErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "context deadline exceeded") ||
+		strings.Contains(err.Error(), "signal: killed")
+}
+
+func isExecError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "no such file or directory") ||
+		strings.Contains(err.Error(), "executable file not found")
+}
