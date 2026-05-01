@@ -3203,3 +3203,40 @@ func TestDenyReason_EbtablesArptablesVariants(t *testing.T) {
 		}
 	}
 }
+
+// TestRunAgenticDiagnostics_NonZeroExitMetricClassification verifies that when
+// a command exits with a non-zero status and produces output (the "[exited: ...]"
+// format), wrappedHandleTool correctly classifies the metric outcome as
+// "nonzero_exit" rather than "ok". Before the fix, strings.HasPrefix(out, "Command
+// failed:") missed this case because the output starts with "$ <cmd>", not
+// "Command failed:".
+func TestRunAgenticDiagnostics_NonZeroExitMetricClassification(t *testing.T) {
+	const cmdOutput = "Active: failed (Result: exit-code)\n"
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		_, _ = io.WriteString(ch, cmdOutput)
+		sendExitStatus(ch, 3) // systemctl status exits 3 for stopped/failed units
+	})
+
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	runner := &capturingToolRunner{
+		calls:  []agentToolCall{{name: "execute_command", input: `{"command": ["systemctl", "status", "nginx"]}`}},
+		result: "analysis",
+	}
+	dialer := &fixedDialer{client: client}
+
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, dialer, metrics, "host1", "10.0.0.1", "ctx", 3,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	metrics.MetricsHandler()(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `agent_tool_calls_total{outcome="nonzero_exit",source="checkmk",tool="execute_command"} 1`) {
+		t.Errorf("expected nonzero_exit metric for non-zero exit with output; body:\n%s", body)
+	}
+}
