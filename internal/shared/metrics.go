@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -82,6 +83,29 @@ func (m *AlertMetrics) RecordClaudeAPIError(source string) {
 func (m *AlertMetrics) RecordNtfyPublishError(source string) {
 	if m.Prom != nil {
 		m.Prom.NtfyPublishErrors.WithLabelValues(source).Inc()
+	}
+}
+
+// RecordAgentToolCall increments agent_tool_calls_total and observes
+// agent_tool_duration_seconds for a single tool invocation. No-op when Prom is nil.
+func (m *AlertMetrics) RecordAgentToolCall(source, tool, outcome string, duration time.Duration) {
+	if m.Prom == nil {
+		return
+	}
+	m.Prom.AgentToolCalls.WithLabelValues(source, tool, outcome).Inc()
+	m.Prom.AgentToolDuration.WithLabelValues(source, tool).Observe(duration.Seconds())
+}
+
+// RecordAgentRounds observes agent_rounds_used and conditionally increments
+// agent_rounds_exhausted_total when the loop hit the maxRounds cap.
+// No-op when Prom is nil.
+func (m *AlertMetrics) RecordAgentRounds(source string, rounds int, exhausted bool) {
+	if m.Prom == nil {
+		return
+	}
+	m.Prom.AgentRoundsUsed.WithLabelValues(source).Observe(float64(rounds))
+	if exhausted {
+		m.Prom.AgentRoundsExhausted.WithLabelValues(source).Inc()
 	}
 }
 
