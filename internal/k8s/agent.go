@@ -175,6 +175,7 @@ var deniedKubectlGlobalFlags = map[string]bool{
 	"--password":                 true,
 	"--username":                 true,
 	"--tls-server-name":          true,
+	"--cache-dir":                true,
 }
 
 // validateKubectlFlags rejects any argv element that names a denied global flag,

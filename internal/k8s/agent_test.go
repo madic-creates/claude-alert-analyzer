@@ -211,6 +211,7 @@ func TestParseKubectlInput_GlobalFlagDenylist(t *testing.T) {
 		"--insecure-skip-tls-verify",
 		"--password", "--username",
 		"--tls-server-name",
+		"--cache-dir",
 	}
 	for _, f := range deniedFlags {
 		// --flag value form
@@ -652,5 +653,55 @@ func TestRunAgenticDiagnostics_RecordsMetrics(t *testing.T) {
 	}
 	if !strings.Contains(body, `agent_tool_calls_total{outcome="ok",source="k8s",tool="promql_query"} 1`) {
 		t.Errorf("missing promql ok counter; body:\n%s", body)
+	}
+}
+
+type panickyKubectlRunner struct{}
+
+func (panickyKubectlRunner) Exec(ctx context.Context, argv []string, timeout time.Duration) (string, error) {
+	panic("synthetic panic for test")
+}
+
+func TestRunAgenticDiagnostics_PanicRecovery(t *testing.T) {
+	pq := &fakePromQLQuerier{}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+
+	loopReturned := false
+	runner := &fakeToolLoopRunner{
+		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
+			result, err := handleTool("kubectl_exec", json.RawMessage(`{"command":["get","pods"]}`))
+			if err != nil {
+				t.Errorf("safeHandleTool should swallow panic to nil error, got: %v", err)
+			}
+			if !strings.Contains(result, "panicked") {
+				t.Errorf("expected panic-recovery message in result, got: %q", result)
+			}
+			// Loop continues after panic and reaches return
+			loopReturned = true
+			return "analysis after panic", nil
+		},
+	}
+
+	out, err := RunAgenticDiagnostics(
+		context.Background(), runner, panickyKubectlRunner{}, pq, metrics,
+		"ctx", 10,
+	)
+	if err != nil {
+		t.Fatalf("loop should not return error after recovered panic: %v", err)
+	}
+	if out != "analysis after panic" {
+		t.Errorf("loop did not complete after panic: out=%q", out)
+	}
+	if !loopReturned {
+		t.Error("loop driver did not reach return after panic")
+	}
+
+	// Metric assertion: panic recorded as exec_error outcome
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	metrics.MetricsHandler()(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `agent_tool_calls_total{outcome="exec_error",source="k8s",tool="kubectl_exec"} 1`) {
+		t.Errorf("missing exec_error metric for panicked call; body:\n%s", body)
 	}
 }
