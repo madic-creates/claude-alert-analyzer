@@ -25,7 +25,7 @@ Two independent analyzers share a common library but run as separate binaries:
 
 | Analyzer | Alert Source | Diagnostics Gathered |
 |----------|-------------|---------------------|
-| **k8s-analyzer** | Alertmanager webhook | Prometheus metrics, K8s events, pod status, pod logs |
+| **k8s-analyzer** | Alertmanager webhook | Prometheus metrics, K8s events, pod status, pod logs + agentic `kubectl_exec` / `promql_query` loop |
 | **checkmk-analyzer** | CheckMK notification script | CheckMK REST API (host/service state), agentic SSH diagnostics |
 
 Both deduplicate repeat alerts (configurable cooldown) and process work concurrently (5 workers, queue depth 20). All diagnostic output is passed through a secret-redaction filter before leaving the analyzer.
@@ -67,7 +67,7 @@ Minimum required environment variables:
 - `API_KEY` — Anthropic or OpenRouter API key
 - `PROMETHEUS_URL` — only if your Prometheus isn't at the default address
 
-The analyzer needs read access to cluster resources (events, pods, pod logs) — bind it to a ServiceAccount with `get`/`list`/`watch` on `events`, `pods`, and `pods/log` in the namespaces listed in `ALLOWED_NAMESPACES`.
+The analyzer needs read access to cluster resources (events, pods, pod logs) — bind it to a ServiceAccount with a read-only ClusterRole. The agent enforces a verb allowlist (read-only built-ins only) and rejects identity-overriding flags before invoking `kubectl`, but RBAC is the authoritative gate — exclude `secrets` from the role to keep credentials out of reach.
 
 Example manifests (Deployment, ServiceAccount + RBAC, Service, Secret template, Kustomization) live in [`deploy/k8s-analyzer/`](deploy/k8s-analyzer/). To deploy:
 
@@ -81,7 +81,7 @@ $EDITOR deploy/k8s-analyzer/secret.yaml
 kubectl apply -k deploy/k8s-analyzer/
 ```
 
-The manifests target namespace `monitoring` and apply the same hardening as the Docker image (non-root UID 65534, read-only root FS, all capabilities dropped, `RuntimeDefault` seccomp). Review them before applying — in particular `ALLOWED_NAMESPACES`, `PROMETHEUS_URL`, and resource limits.
+The manifests target namespace `monitoring` and apply the same hardening as the Docker image (non-root UID 65534, read-only root FS, all capabilities dropped, `RuntimeDefault` seccomp). Review them before applying — in particular `PROMETHEUS_URL`, `MAX_AGENT_ROUNDS`, and resource limits.
 
 ### 2. Configure Alertmanager
 
@@ -238,13 +238,13 @@ When set, the attribute appears as a "Host Context (operator-provided)" section 
 | `NTFY_PUBLISH_TOPIC` | *(varies per analyzer)* | ntfy topic name |
 | `NTFY_PUBLISH_TOKEN` | *(empty)* | ntfy auth token (optional) |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| `MAX_AGENT_ROUNDS` | `10` | Max tool-loop rounds per agentic analysis (1–50); applies to both analyzers |
 
 ### K8s analyzer
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PROMETHEUS_URL` | `http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090` | Prometheus endpoint |
-| `ALLOWED_NAMESPACES` | `monitoring,databases,media` | Namespaces from which pod logs may be collected |
 | `MAX_LOG_BYTES` | `2048` | Per-pod log truncation limit |
 | `SKIP_RESOLVED` | `true` | Ignore resolved alerts |
 | `NTFY_PUBLISH_TOPIC` | `kubernetes-analysis` | Default ntfy topic |
@@ -261,7 +261,6 @@ When set, the attribute appears as a "Host Context (operator-provided)" section 
 | `SSH_KEY_PATH` | `/ssh/id_ed25519` | Path to SSH private key |
 | `SSH_KNOWN_HOSTS_PATH` | `/ssh/known_hosts` | Path to known_hosts file |
 | `SSH_DENIED_COMMANDS` | *(built-in default)* | Comma-separated denylist. Empty = no guardrails. See [`DefaultDeniedCommands`](internal/checkmk/agent.go) for the current default list |
-| `MAX_AGENT_ROUNDS` | `10` | Max SSH command rounds per agentic analysis |
 | `NTFY_PUBLISH_TOPIC` | `checkmk-analysis` | Default ntfy topic |
 
 The default denylist is defined in [`internal/checkmk/agent.go`](internal/checkmk/agent.go) as `DefaultDeniedCommands` — consult the source for the authoritative, always-current list. It covers destructive filesystem commands, privilege escalation, process/user management, networking and mount tools, shells and interpreters, and similar classes.
@@ -354,9 +353,9 @@ Structured JSON logs to stdout via Go's `slog`. Verbosity is controlled by `LOG_
 - **No shell**: commands run via SSH `exec` (argv), not through an interpreter
 - **No privilege escalation**: SSH user is unprivileged; no `sudo`, `su`, `dmesg`, or `pkexec`
 
-### Operational diagnostics (checkmk SSH)
+### Operational diagnostics (agentic loops)
 
-Claude autonomously decides which commands to run on the alerted host via SSH, capped at `MAX_AGENT_ROUNDS` (default 10) rounds per analysis.
+Both analyzers drive an agentic Claude tool-loop capped at `MAX_AGENT_ROUNDS` (default 10) rounds per analysis. The checkmk-analyzer uses SSH; the k8s-analyzer uses `kubectl_exec` and `promql_query`.
 
 **Allowed** — any read-only diagnostic command (`df`, `free`, `top`, `ps`, `journalctl`, `cat`/`tail`/`head` on logs, `ss`, `ip`, `du`, `lsblk`, `lsof`, `find`, `systemctl status/show`, …)
 
@@ -418,7 +417,7 @@ go test -race -count=1 ./...
 ## Project Layout
 
 - `internal/shared/` — common types (`AlertPayload`, `BaseConfig`, `AnalysisContext`), Claude API client, ntfy publisher, cooldown manager, secret redaction, HTTP server scaffolding, metrics
-- `internal/k8s/` — Alertmanager webhook handler, Prometheus queries, Kubernetes context gathering (events, pod status, logs with namespace allowlist)
+- `internal/k8s/` — Alertmanager webhook handler, Prometheus queries, Kubernetes context gathering (events, pod status, logs), agentic tool-loop runner (`RunAgenticDiagnostics` in `agent.go`)
 - `internal/checkmk/` — CheckMK webhook handler, CheckMK REST API client, agentic SSH runner with alert-category detection (CPU/disk/memory/service)
 - `cmd/k8s-analyzer/` and `cmd/checkmk-analyzer/` — entrypoints: config loading, worker pool, HTTP server, graceful shutdown
 
@@ -426,6 +425,7 @@ go test -race -count=1 ./...
 
 - **Alert normalization** — both sources convert into `shared.AlertPayload` with a `Fields map[string]string` for source-specific data. k8s uses `label:` and `annotation:` prefixed keys.
 - **Context gathering** — each analyzer exposes `GatherContext(...)` returning `shared.AnalysisContext` (a list of named sections rendered into the prompt). Data collection runs concurrently: k8s fans out Prometheus + kube context; checkmk fans out host services + SSH.
+- **Agentic loops** — after static context gathering, both analyzers run `RunAgenticDiagnostics` which drives a multi-turn Claude tool-use loop. k8s exposes `kubectl_exec` and `promql_query`; checkmk exposes SSH command execution. Round budget is capped by `MAX_AGENT_ROUNDS`.
 - **Cooldown dedup** — `CooldownManager` prevents re-analyzing the same alert within the configured TTL. The cooldown is cleared on analysis failure so retries work.
 - **Provider flexibility** — the Claude client auto-detects Anthropic vs OpenRouter based on `API_BASE_URL`.
 
