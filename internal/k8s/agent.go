@@ -1,10 +1,15 @@
 package k8s
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"os"
+	"os/exec"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 )
@@ -271,6 +276,57 @@ Start directly with the analysis — no preamble, meta-commentary, or introducto
 
 func agentSystemPromptForRounds(maxRounds int) string {
 	return fmt.Sprintf(agentSystemPromptTemplate, maxRounds)
+}
+
+// KubectlRunner is the seam between the agent loop and the actual kubectl
+// subprocess. The default implementation (kubectlSubprocess) shells out;
+// tests substitute their own implementation.
+type KubectlRunner interface {
+	Exec(ctx context.Context, argv []string, timeout time.Duration) (string, error)
+}
+
+// kubectlSubprocess invokes a fixed kubectl binary path with a scrubbed
+// environment. The constructor performs a single os.Stat at startup and
+// logs a warning if the binary is missing — but does not fail startup,
+// because the static prefetch (which uses client-go) keeps working.
+type kubectlSubprocess struct {
+	Path string
+	Env  []string
+}
+
+const defaultKubectlPath = "/usr/local/bin/kubectl"
+
+// NewKubectlSubprocess constructs a runner that invokes the kubectl binary
+// at path (default: /usr/local/bin/kubectl). The env slice contains only
+// HOME and USER taken from the runtime environment; everything else
+// (KUBECONFIG, PATH, proxy vars, LD_PRELOAD) is dropped so that no
+// inherited variable can redirect kubectl's auth or behavior.
+func NewKubectlSubprocess(path string) *kubectlSubprocess {
+	if path == "" {
+		path = defaultKubectlPath
+	}
+	if _, err := os.Stat(path); err != nil {
+		slog.Warn("kubectl binary not found at startup", "path", path, "error", err)
+	}
+	env := []string{
+		"HOME=" + os.Getenv("HOME"),
+		"USER=" + os.Getenv("USER"),
+	}
+	return &kubectlSubprocess{Path: path, Env: env}
+}
+
+func (k *kubectlSubprocess) Exec(ctx context.Context, argv []string, timeout time.Duration) (string, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, k.Path, argv...)
+	cmd.Env = k.Env
+	if home := os.Getenv("HOME"); home != "" {
+		cmd.Dir = home
+	}
+
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }
 
 // parsePromQLInput validates a promql_query tool call. The 4096-byte cap is

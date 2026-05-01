@@ -1,9 +1,14 @@
 package k8s
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"os"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseKubectlInput_BasicValidation(t *testing.T) {
@@ -281,6 +286,126 @@ func TestPromqlTool_Definition(t *testing.T) {
 	}
 	if _, ok := promqlTool.InputSchema.Properties["query"]; !ok {
 		t.Error("promqlTool.InputSchema missing 'query' property")
+	}
+}
+
+// TestHelperProcess plays the role of the kubectl child process when the
+// test binary is invoked with GO_KUBECTL_HELPER=1. It reflects argv and
+// selected env back to stdout/stderr so the parent test can assert on them.
+func TestHelperProcess(t *testing.T) {
+	if os.Getenv("GO_KUBECTL_HELPER") != "1" {
+		return
+	}
+	// argv: print everything after "--" so we can include go-test's own args
+	args := os.Args
+	for i, a := range args {
+		if a == "--" {
+			args = args[i+1:]
+			break
+		}
+	}
+	fmt.Printf("ARGV: %v\n", args)
+
+	// env: print sorted, but skip Go test machinery and PWD so the assertion
+	// can match the user-visible env exactly
+	env := os.Environ()
+	sort.Strings(env)
+	for _, e := range env {
+		if strings.HasPrefix(e, "GO_") || strings.HasPrefix(e, "PWD=") {
+			continue
+		}
+		fmt.Printf("ENV: %s\n", e)
+	}
+
+	switch os.Getenv("HELPER_MODE") {
+	case "fail":
+		fmt.Fprintln(os.Stderr, "stderr line")
+		os.Exit(2)
+	case "sleep":
+		time.Sleep(2 * time.Second)
+	}
+	os.Exit(0)
+}
+
+func helperPath(t *testing.T) string {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	return exe
+}
+
+func TestKubectlSubprocess_ArgvAndEnv(t *testing.T) {
+	t.Setenv("HOME", "/tmp")
+	t.Setenv("USER", "tester")
+	t.Setenv("KUBECONFIG", "/should/not/leak")
+
+	runner := &kubectlSubprocess{
+		Path: helperPath(t),
+		Env:  []string{"HOME=/tmp", "USER=tester", "GO_KUBECTL_HELPER=1"},
+	}
+	out, err := runner.Exec(context.Background(),
+		[]string{"-test.run=TestHelperProcess", "--", "get", "pods"},
+		5*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, "ARGV: [get pods]") {
+		t.Errorf("argv pass-through failed; output:\n%s", out)
+	}
+	if strings.Contains(out, "KUBECONFIG=") {
+		t.Errorf("KUBECONFIG should not have leaked; output:\n%s", out)
+	}
+	if !strings.Contains(out, "ENV: HOME=/tmp") {
+		t.Errorf("HOME not present; output:\n%s", out)
+	}
+	if !strings.Contains(out, "ENV: USER=tester") {
+		t.Errorf("USER not present; output:\n%s", out)
+	}
+}
+
+func TestKubectlSubprocess_NonZeroExitWithOutput(t *testing.T) {
+	runner := &kubectlSubprocess{
+		Path: helperPath(t),
+		Env:  []string{"HOME=/tmp", "USER=tester", "GO_KUBECTL_HELPER=1", "HELPER_MODE=fail"},
+	}
+	out, err := runner.Exec(context.Background(),
+		[]string{"-test.run=TestHelperProcess", "--", "get", "pods"},
+		5*time.Second)
+	if err == nil {
+		t.Fatalf("expected non-zero exit error, got nil; output:\n%s", out)
+	}
+	if !strings.Contains(out, "stderr line") {
+		t.Errorf("expected combined stdout+stderr capture; output:\n%s", out)
+	}
+}
+
+func TestKubectlSubprocess_Timeout(t *testing.T) {
+	runner := &kubectlSubprocess{
+		Path: helperPath(t),
+		Env:  []string{"HOME=/tmp", "USER=tester", "GO_KUBECTL_HELPER=1", "HELPER_MODE=sleep"},
+	}
+	start := time.Now()
+	_, err := runner.Exec(context.Background(),
+		[]string{"-test.run=TestHelperProcess", "--", "get", "pods"},
+		200*time.Millisecond)
+	if err == nil {
+		t.Fatalf("expected timeout error, got nil")
+	}
+	if time.Since(start) > 1500*time.Millisecond {
+		t.Errorf("timeout did not fire promptly: %v", time.Since(start))
+	}
+}
+
+func TestKubectlSubprocess_MissingBinary(t *testing.T) {
+	runner := &kubectlSubprocess{
+		Path: "/nonexistent/kubectl",
+		Env:  []string{"HOME=/tmp", "USER=tester"},
+	}
+	_, err := runner.Exec(context.Background(), []string{"get", "pods"}, 5*time.Second)
+	if err == nil {
+		t.Fatalf("expected ENOENT error, got nil")
 	}
 }
 
