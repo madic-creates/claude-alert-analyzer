@@ -512,16 +512,61 @@ func handlePromQLTool(ctx context.Context, prom PromQLQuerier, metrics *shared.A
 }
 
 func recordToolCall(metrics *shared.AlertMetrics, tool, outcome string, dur time.Duration, argv []string) {
-	if argv != nil {
-		slog.Info("agent tool call",
-			"tool", tool, "argv", argv, "duration_ms", dur.Milliseconds(), "outcome", outcome)
-	} else {
-		slog.Info("agent tool call",
-			"tool", tool, "duration_ms", dur.Milliseconds(), "outcome", outcome)
+	attrs := []any{
+		"tool", tool,
+		"duration_ms", dur.Milliseconds(),
+		"outcome", outcome,
 	}
+	if argv != nil {
+		verb, resource, namespace := summarizeKubectlArgv(argv)
+		attrs = append(attrs, "verb", verb)
+		if resource != "" {
+			attrs = append(attrs, "resource", resource)
+		}
+		if namespace != "" {
+			attrs = append(attrs, "namespace", namespace)
+		}
+	}
+	slog.Info("agent tool call", attrs...)
 	if metrics != nil {
 		metrics.RecordAgentToolCall("k8s", tool, outcome, dur)
 	}
+}
+
+// summarizeKubectlArgv extracts verb (first non-flag), resource (second non-flag),
+// and namespace (-n / --namespace value) from a kubectl argv. Empty strings on
+// missing parts. Used for low-cardinality structured logging.
+func summarizeKubectlArgv(argv []string) (verb, resource, namespace string) {
+	nonFlags := []string{}
+	for i := 0; i < len(argv); i++ {
+		a := argv[i]
+		if a == "-n" || a == "--namespace" {
+			if i+1 < len(argv) {
+				namespace = argv[i+1]
+				i++
+			}
+			continue
+		}
+		if strings.HasPrefix(a, "--namespace=") {
+			namespace = strings.TrimPrefix(a, "--namespace=")
+			continue
+		}
+		if strings.HasPrefix(a, "-n=") {
+			namespace = strings.TrimPrefix(a, "-n=")
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		nonFlags = append(nonFlags, a)
+	}
+	if len(nonFlags) > 0 {
+		verb = nonFlags[0]
+	}
+	if len(nonFlags) > 1 {
+		resource = nonFlags[1]
+	}
+	return
 }
 
 func isTimeoutErr(err error) bool {

@@ -787,3 +787,62 @@ func TestRunAgenticDiagnostics_RBACForbidden(t *testing.T) {
 		t.Errorf("expected nonzero_exit metric for RBAC denial; body:\n%s", body)
 	}
 }
+
+func TestSummarizeKubectlArgv(t *testing.T) {
+	cases := []struct {
+		name     string
+		argv     []string
+		wantVerb string
+		wantRes  string
+		wantNS   string
+	}{
+		{
+			name:     "get pods",
+			argv:     []string{"get", "pods"},
+			wantVerb: "get", wantRes: "pods",
+		},
+		{
+			name:     "get pods -n monitoring",
+			argv:     []string{"get", "pods", "-n", "monitoring"},
+			wantVerb: "get", wantRes: "pods", wantNS: "monitoring",
+		},
+		{
+			name:     "logs with --namespace=",
+			argv:     []string{"logs", "pod-x", "--namespace=default"},
+			wantVerb: "logs", wantRes: "pod-x", wantNS: "default",
+		},
+		{
+			name:     "-n= short form",
+			argv:     []string{"describe", "node", "-n=kube-system"},
+			wantVerb: "describe", wantRes: "node", wantNS: "kube-system",
+		},
+		{
+			name:     "flags before verb",
+			argv:     []string{"-v=4", "get", "events"},
+			wantVerb: "get", wantRes: "events",
+		},
+		{
+			name:     "verb only",
+			argv:     []string{"cluster-info"},
+			wantVerb: "cluster-info",
+		},
+		{
+			name: "empty argv",
+			argv: []string{},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			verb, resource, namespace := summarizeKubectlArgv(tc.argv)
+			if verb != tc.wantVerb {
+				t.Errorf("verb: got %q, want %q", verb, tc.wantVerb)
+			}
+			if resource != tc.wantRes {
+				t.Errorf("resource: got %q, want %q", resource, tc.wantRes)
+			}
+			if namespace != tc.wantNS {
+				t.Errorf("namespace: got %q, want %q", namespace, tc.wantNS)
+			}
+		})
+	}
+}
