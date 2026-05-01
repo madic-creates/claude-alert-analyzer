@@ -17,9 +17,11 @@ type mockAnalyzer struct {
 	err                error
 	capturedPrompt     string
 	capturedUserPrompt string
+	gotModel           string
 }
 
 func (m *mockAnalyzer) Analyze(ctx context.Context, model, systemPrompt, userPrompt string) (string, error) {
+	m.gotModel = model
 	m.capturedPrompt = systemPrompt
 	m.capturedUserPrompt = userPrompt
 	return m.result, m.err
@@ -27,6 +29,7 @@ func (m *mockAnalyzer) Analyze(ctx context.Context, model, systemPrompt, userPro
 
 func (m *mockAnalyzer) RunToolLoop(ctx context.Context, model, systemPrompt, userPrompt string,
 	tools []shared.Tool, maxRounds int, handleTool func(string, json.RawMessage) (string, error)) (string, int, bool, error) {
+	m.gotModel = model
 	m.capturedPrompt = systemPrompt
 	m.capturedUserPrompt = userPrompt
 	return m.result, 1, false, m.err

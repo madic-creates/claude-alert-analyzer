@@ -1169,3 +1169,38 @@ func TestAnalyze_UsesProvidedModel(t *testing.T) {
 		t.Errorf("expected override-model in request, got: %s", capturedBody)
 	}
 }
+
+func TestRunToolLoop_UsesProvidedModel(t *testing.T) {
+	var bodies [][]byte
+	round := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, body)
+		round++
+		// First call returns a tool_use, second call returns end_turn forced summary.
+		if round == 1 {
+			w.Write([]byte(`{"content":[{"type":"tool_use","id":"t1","name":"a","input":{}}],"stop_reason":"tool_use"}`))
+		} else {
+			w.Write([]byte(`{"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}`))
+		}
+	}))
+	defer srv.Close()
+
+	c := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "x", Model: "default-model"}
+	c.retryDelays = []time.Duration{}
+
+	tools := []Tool{{Name: "a", Description: "x", InputSchema: InputSchema{Type: "object"}}}
+	_, _, _, err := c.RunToolLoop(context.Background(), "override-model", "sys", "usr", tools, 1,
+		func(string, json.RawMessage) (string, error) { return "out", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) < 2 {
+		t.Fatalf("expected at least 2 request bodies (loop + forced summary), got %d", len(bodies))
+	}
+	for i, b := range bodies {
+		if !strings.Contains(string(b), `"model":"override-model"`) {
+			t.Errorf("request %d missing override-model: %s", i, b)
+		}
+	}
+}
