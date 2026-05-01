@@ -26,6 +26,18 @@ const MaxResponseBytes = 2 * 1024 * 1024 // 2 MiB
 // well under the 120 s HTTP client timeout.
 var defaultRetryDelays = []time.Duration{2 * time.Second, 4 * time.Second}
 
+// systemBlocks builds the system field with a single text block carrying
+// a cache_control breakpoint at its tail. This is breakpoint #1 of the
+// 4-breakpoint Anthropic budget; #2 is on the tools array, #3 on the
+// last tool_result of the running conversation.
+func systemBlocks(prompt string) []SystemBlock {
+	return []SystemBlock{{
+		Type:         "text",
+		Text:         prompt,
+		CacheControl: &CacheControl{Type: "ephemeral"},
+	}}
+}
+
 // isTransientStatus reports whether an HTTP status code indicates a transient
 // server-side condition worth retrying. 429 Too Many Requests and 5xx server
 // errors are retried. 4xx client errors (except 429) are permanent — retrying
@@ -171,7 +183,7 @@ func (c *ClaudeClient) Analyze(ctx context.Context, model, systemPrompt, userPro
 	reqBody := ToolRequest{
 		Model:     model,
 		MaxTokens: 2048,
-		System:    []SystemBlock{{Type: "text", Text: systemPrompt}},
+		System:    systemBlocks(systemPrompt),
 		Messages:  []ToolMessage{{Role: "user", Content: userPrompt}},
 	}
 
@@ -242,7 +254,7 @@ func (c *ClaudeClient) RunToolLoop(
 		reqBody := ToolRequest{
 			Model:     model,
 			MaxTokens: 4096,
-			System:    []SystemBlock{{Type: "text", Text: systemPrompt}},
+			System:    systemBlocks(systemPrompt),
 			Tools:     tools,
 			Messages:  messages,
 		}
@@ -336,7 +348,7 @@ func (c *ClaudeClient) RunToolLoop(
 	reqBody := ToolRequest{
 		Model:      model,
 		MaxTokens:  4096,
-		System:     []SystemBlock{{Type: "text", Text: systemPrompt}},
+		System:     systemBlocks(systemPrompt),
 		Tools:      tools,
 		ToolChoice: &ToolChoice{Type: "none"}, // prevent tool calls in the forced-summary turn
 		Messages:   messages,

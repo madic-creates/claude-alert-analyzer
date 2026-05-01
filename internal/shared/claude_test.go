@@ -1106,6 +1106,35 @@ func TestAnalyze_UsesProvidedModel(t *testing.T) {
 	}
 }
 
+func TestAnalyze_SystemPromptHasCacheControl(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`))
+	}))
+	defer srv.Close()
+
+	c := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "x", Model: "m"}
+	c.retryDelays = []time.Duration{}
+	if _, err := c.Analyze(context.Background(), "m", "system", "user"); err != nil {
+		t.Fatal(err)
+	}
+
+	system, ok := captured["system"].([]any)
+	if !ok || len(system) == 0 {
+		t.Fatalf("system field is not an array: %v", captured["system"])
+	}
+	last := system[len(system)-1].(map[string]any)
+	cc, ok := last["cache_control"].(map[string]any)
+	if !ok {
+		t.Fatalf("last system block has no cache_control: %v", last)
+	}
+	if cc["type"] != "ephemeral" {
+		t.Errorf("cache_control type: got %v, want ephemeral", cc["type"])
+	}
+}
+
 func TestRunToolLoop_UsesProvidedModel(t *testing.T) {
 	var bodies [][]byte
 	round := 0
