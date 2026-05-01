@@ -1168,6 +1168,47 @@ func TestAnalyze_SystemPromptHasCacheControl(t *testing.T) {
 	}
 }
 
+func TestRunToolLoop_LastToolResultHasCacheControl(t *testing.T) {
+	round := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		round++
+		body, _ := io.ReadAll(r.Body)
+		// On round 2, the inbound request must contain a user message whose
+		// LAST content block (= the previous tool_result) has cache_control.
+		if round == 2 {
+			var req map[string]any
+			_ = json.Unmarshal(body, &req)
+			messages := req["messages"].([]any)
+			lastUserMsg := messages[len(messages)-1].(map[string]any)
+			content := lastUserMsg["content"].([]any)
+			lastBlock := content[len(content)-1].(map[string]any)
+			if _, has := lastBlock["cache_control"]; !has {
+				t.Errorf("round 2: last tool_result block missing cache_control: %v", lastBlock)
+			}
+		}
+		// Round 1 returns tool_use, round 2 returns end_turn.
+		if round == 1 {
+			w.Write([]byte(`{"content":[{"type":"tool_use","id":"t1","name":"a","input":{}}],"stop_reason":"tool_use"}`))
+		} else {
+			w.Write([]byte(`{"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}`))
+		}
+	}))
+	defer srv.Close()
+
+	c := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "x", Model: "m"}
+	c.retryDelays = []time.Duration{}
+
+	tools := []Tool{{Name: "a", Description: "x", InputSchema: InputSchema{Type: "object"}}}
+	_, rounds, _, err := c.RunToolLoop(context.Background(), "m", "sys", "user", tools, 5,
+		func(string, json.RawMessage) (string, error) { return "tool-output-data", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rounds != 2 {
+		t.Fatalf("expected 2 rounds, got %d", rounds)
+	}
+}
+
 func TestRunToolLoop_UsesProvidedModel(t *testing.T) {
 	var bodies [][]byte
 	round := 0

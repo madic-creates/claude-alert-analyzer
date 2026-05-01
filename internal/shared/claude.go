@@ -333,6 +333,13 @@ func (c *ClaudeClient) RunToolLoop(
 			return extractText(resp.Content), round + 1, false, nil
 		}
 
+		// Mark the last tool_result block with a cache_control breakpoint so the
+		// conversation prefix gets cached for the next round. Anthropic's 4-breakpoint
+		// budget ages out older markers automatically, so overwriting only the latest
+		// tail each round gives us a sliding cache that always pays off where it
+		// matters most (the growing tool_result history).
+		toolResults[len(toolResults)-1].CacheControl = &CacheControl{Type: "ephemeral"}
+
 		messages = append(messages, ToolMessage{Role: "user", Content: toolResults})
 	}
 
