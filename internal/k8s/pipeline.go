@@ -11,12 +11,14 @@ import (
 
 // PipelineDeps holds all dependencies for alert processing.
 type PipelineDeps struct {
-	Analyzer      shared.Analyzer
-	Publishers    []shared.Publisher
-	Cooldown      *shared.CooldownManager
-	Metrics       *shared.AlertMetrics
-	SystemPrompt  string
-	GatherContext func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext
+	ToolRunner     shared.ToolLoopRunner
+	KubectlRunner  KubectlRunner
+	Prom           PromQLQuerier
+	Publishers     []shared.Publisher
+	Cooldown       *shared.CooldownManager
+	Metrics        *shared.AlertMetrics
+	MaxAgentRounds int
+	GatherContext  func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext
 }
 
 // ProcessAlert gathers context, analyzes via Claude, and publishes results.
@@ -55,7 +57,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 		shared.SanitizeAlertField(alert.Fields["startsAt"]),
 		actx.FormatForPrompt())
 
-	analysis, err := deps.Analyzer.Analyze(ctx, deps.SystemPrompt, userPrompt)
+	analysis, err := RunAgenticDiagnostics(ctx, deps.ToolRunner, deps.KubectlRunner, deps.Prom, deps.Metrics, userPrompt, deps.MaxAgentRounds)
 	if err != nil {
 		slog.Error("analysis failed", "alertname", alertname, "error", err)
 		deps.Metrics.RecordClaudeAPIError(alert.Source)

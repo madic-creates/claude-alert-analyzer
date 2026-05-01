@@ -13,17 +13,6 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-const systemPrompt = `You are a Kubernetes SRE analyst for a k3s home cluster with Prometheus, Grafana, Longhorn storage, Traefik ingress, and Cilium CNI.
-
-Analyze the provided alert with its cluster context and produce a concise root-cause analysis:
-1. Identify the most likely root cause
-2. Assess severity and blast radius
-3. Suggest concrete remediation steps (kubectl commands, config changes)
-4. Note correlations with other active alerts
-
-Keep response under 500 words. Use markdown for formatting (headings, bold, lists, code blocks) but never use markdown tables. Use bullet lists instead of tables. Reference actual metric values and pod names.
-Start directly with the analysis — no preamble, meta-commentary, or introductory sentences like "I have enough data" or "Let me analyze this".`
-
 func loadConfig() k8s.Config {
 	cooldown, err := shared.ParseIntEnv("COOLDOWN_SECONDS", "300", 0, 86400)
 	if err != nil {
@@ -102,11 +91,13 @@ func main() {
 	}
 
 	deps := k8s.PipelineDeps{
-		Analyzer:     claudeClient,
-		Publishers:   publishers,
-		Cooldown:     cooldownMgr,
-		Metrics:      metrics,
-		SystemPrompt: systemPrompt,
+		ToolRunner:     claudeClient,
+		KubectlRunner:  k8s.NewKubectlSubprocess(""),
+		Prom:           promClient,
+		Publishers:     publishers,
+		Cooldown:       cooldownMgr,
+		Metrics:        metrics,
+		MaxAgentRounds: cfg.MaxAgentRounds,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return k8s.GatherContext(ctx, promClient, clientset, k8s.AlertPayloadToAlert(alert), cfg)
 		},
