@@ -56,13 +56,14 @@ Webhook → Auth check → Cooldown dedup → Work queue (buffered chan, 5 worke
 - **Security**: All gathered output passes through `RedactSecrets()`. SSH commands use strict known_hosts and input validation. kubectl is invoked via argv at a fixed path with a scrubbed environment; RBAC is the authoritative enforcement layer.
 - **API flexibility**: Claude API client always uses Anthropic Messages API format with `x-api-key` auth. Compatible alternative providers must accept `x-api-key` (e.g. via an auth-translating proxy).
 - **Metrics**: Counters/gauges/histogram (`alerts_analyzed_total`, `alerts_cooldown_total`, `queue_depth`, `claude_api_duration_seconds`, `claude_api_errors_total`, `ntfy_publish_errors_total`, `claude_input_tokens_total`, `claude_output_tokens_total`, `claude_cache_creation_tokens_total`, `claude_cache_read_tokens_total`) live in a private Prometheus registry and are served on `METRICS_PORT` (separate from the webhook port).
+- **Claude SDK integration**: The Claude API client wraps `github.com/anthropics/anthropic-sdk-go` with a `LimitedTransport` for body capping and latency observation. Auth is configured via `ANTHROPIC_API_KEY` (sets `x-api-key`) or `ANTHROPIC_AUTH_TOKEN` (sets `Authorization: Bearer`); exactly one of the two must be set. Setting both at startup is a fatal error.
 
 ## Environment Variables
 
-Both analyzers require: `WEBHOOK_SECRET`, `API_KEY`
+Both analyzers require: `WEBHOOK_SECRET`, `ANTHROPIC_API_KEY`
 CheckMK additionally requires: `CHECKMK_API_USER`, `CHECKMK_API_SECRET`
 
-Common optional: `PORT` (default `8080`), `METRICS_PORT` (default `9101`), `NTFY_PUBLISH_URL`, `NTFY_PUBLISH_TOPIC`, `NTFY_PUBLISH_TOKEN`, `CLAUDE_MODEL`, `API_BASE_URL`, `COOLDOWN_SECONDS`, `LOG_LEVEL`, `MAX_AGENT_ROUNDS` (default `10`, tool-loop budget).
+Common optional: `PORT` (default `8080`), `METRICS_PORT` (default `9101`), `NTFY_PUBLISH_URL`, `NTFY_PUBLISH_TOPIC`, `NTFY_PUBLISH_TOKEN`, `CLAUDE_MODEL`, `ANTHROPIC_BASE_URL`, `COOLDOWN_SECONDS`, `LOG_LEVEL`, `MAX_AGENT_ROUNDS` (default `10`, tool-loop budget).
 k8s optional: `MAX_LOG_BYTES`, `PROMETHEUS_URL`, `SKIP_RESOLVED`.
 
 Severity-based overrides (`CLAUDE_MODEL_<SEVERITY>`, `MAX_AGENT_ROUNDS_<SEVERITY>`) are operator-facing and documented in [`docs/cost-and-storm-protection.md`](docs/cost-and-storm-protection.md).
@@ -78,7 +79,6 @@ Phase 1 ships three operator-facing features: prompt caching (always on), severi
 - `internal/shared/claude.go` — Cache breakpoints set at three levels: `systemBlocks()` helper, `withCachedTail()` helper for tools, and an inline assignment on the last `tool_result` of each `RunToolLoop` round.
 - Pipelines (`internal/k8s/pipeline.go`, `internal/checkmk/pipeline.go`) branch on `policy.MaxRoundsFor(...) == 0` to call `Analyzer.Analyze` (static-only) instead of `RunAgenticDiagnostics`.
 
-⚠️ **Breaking change**: `Authorization: Bearer` removed; `API_BASE_URL` must accept `x-api-key`. OpenRouter compatibility is deferred to a planned follow-up that migrates the client to `anthropic-sdk-go` (which honors `ANTHROPIC_AUTH_TOKEN` natively). Migration notes in `docs/cost-and-storm-protection.md`.
 
 Phase 2 (storm-mode, circuit-breaker, group-cooldown) is designed but not yet implemented — see `docs/superpowers/specs/2026-05-01-storm-cost-protection-design.md` for the full design.
 

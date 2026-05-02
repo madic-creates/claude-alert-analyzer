@@ -64,7 +64,7 @@ Deploy `ghcr.io/madic-creates/claude-alert-kubernetes-analyzer:latest` into your
 Minimum required environment variables:
 
 - `WEBHOOK_SECRET` — bearer token that Alertmanager must present
-- `API_KEY` — Anthropic or OpenRouter API key
+- `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` — Anthropic API key or compatible provider token
 - `PROMETHEUS_URL` — only if your Prometheus isn't at the default address
 
 The analyzer needs read access to cluster resources (events, pods, pod logs) — bind it to a ServiceAccount with a read-only ClusterRole. The agent enforces a verb allowlist (read-only built-ins only) and rejects identity-overriding flags before invoking `kubectl`, but RBAC is the authoritative gate — exclude `secrets` from the role to keep credentials out of reach.
@@ -112,7 +112,7 @@ receivers:
 
 Deploy `ghcr.io/madic-creates/claude-alert-checkmk-analyzer:latest`:
 
-- Required env vars: `WEBHOOK_SECRET`, `API_KEY`, `CHECKMK_API_USER`, `CHECKMK_API_SECRET`
+- Required env vars: `WEBHOOK_SECRET`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, `CHECKMK_API_USER`, `CHECKMK_API_SECRET`
 - SSH private key mounted at `/ssh/id_ed25519`
 - SSH `known_hosts` file mounted at `/ssh/known_hosts` (strict host checking — no TOFU)
 
@@ -137,7 +137,7 @@ docker run -d \
   -p 127.0.0.1:9101:9101 \
   -v "$(pwd)/ssh:/ssh:ro" \
   -e WEBHOOK_SECRET="change-me" \
-  -e API_KEY="sk-ant-..." \
+  -e ANTHROPIC_API_KEY="sk-ant-..." \
   -e CHECKMK_API_URL="https://checkmk.example.com/mysite/check_mk/api/1.0/" \
   -e CHECKMK_API_USER="automation" \
   -e CHECKMK_API_SECRET="..." \
@@ -169,7 +169,7 @@ services:
       - ./ssh:/ssh:ro
     environment:
       WEBHOOK_SECRET: "change-me"
-      API_KEY: "sk-ant-..."
+      ANTHROPIC_API_KEY: "sk-ant-..."
       CHECKMK_API_URL: "https://checkmk.example.com/mysite/check_mk/api/1.0/"
       CHECKMK_API_USER: "automation"
       CHECKMK_API_SECRET: "..."
@@ -228,8 +228,9 @@ When set, the attribute appears as a "Host Context (operator-provided)" section 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `WEBHOOK_SECRET` | **(required)** | Bearer token for webhook authentication |
-| `API_KEY` | **(required)** | Anthropic or OpenRouter API key |
-| `API_BASE_URL` | `https://api.anthropic.com/v1/messages` | LLM API endpoint |
+| `ANTHROPIC_API_KEY` | **(required)** | Anthropic API key (sets `x-api-key` header) |
+| `ANTHROPIC_AUTH_TOKEN` | — | OpenRouter or compatible API token (sets `Authorization: Bearer` header). Exactly one of `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` must be set |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1` | LLM API endpoint |
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Model ID for analysis |
 | `PORT` | `8080` | HTTP listen port for `/health` and `/webhook` |
 | `METRICS_PORT` | `9101` | Port for the Prometheus `/metrics` endpoint |
@@ -269,7 +270,13 @@ The default denylist is defined in [`internal/checkmk/agent.go`](internal/checkm
 
 ### LLM provider
 
-The client always uses the Anthropic Messages API format with `x-api-key` + `anthropic-version: 2023-06-01` headers. `API_BASE_URL` must point at an endpoint that accepts these headers — Anthropic directly, or an Anthropic-API-compatible relay. Providers that require `Authorization: Bearer` (e.g. OpenRouter standard endpoints) are not supported in this release; OpenRouter compatibility will return in a planned follow-up that migrates the client to [`anthropic-sdk-go`](https://github.com/anthropics/anthropic-sdk-go) (which honors `ANTHROPIC_AUTH_TOKEN` natively). Response tokens are capped at 2048 (`Analyze`) / 4096 (tool-loop rounds).
+The analyzer talks to the Anthropic Messages API via the official `anthropic-sdk-go` client. Configure auth via env vars:
+
+- `ANTHROPIC_API_KEY` — sets `x-api-key` header (Anthropic's native scheme)
+- `ANTHROPIC_AUTH_TOKEN` — sets `Authorization: Bearer` header (required for OpenRouter)
+- `ANTHROPIC_BASE_URL` — optional; default is the Anthropic API. Set to `https://openrouter.ai/api` for OpenRouter.
+
+Exactly one of `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` must be set at startup. Response tokens are capped at 2048 (`Analyze`) / 4096 (tool-loop rounds).
 
 ### Cost & storm protection
 
