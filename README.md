@@ -238,7 +238,7 @@ When set, the attribute appears as a "Host Context (operator-provided)" section 
 | `NTFY_PUBLISH_TOPIC` | *(varies per analyzer)* | ntfy topic name |
 | `NTFY_PUBLISH_TOKEN` | *(empty)* | ntfy auth token (optional) |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
-| `MAX_AGENT_ROUNDS` | `10` | Max tool-loop rounds per agentic analysis (1–50); applies to both analyzers |
+| `MAX_AGENT_ROUNDS` | `10` | Max tool-loop rounds per agentic analysis (1–50). Per-severity overrides (`MAX_AGENT_ROUNDS_<SEVERITY>`) accept `0` for static-only mode — see [docs/cost-and-storm-protection.md](docs/cost-and-storm-protection.md) |
 
 ### K8s analyzer
 
