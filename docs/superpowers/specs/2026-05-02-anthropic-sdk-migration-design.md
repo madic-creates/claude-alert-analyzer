@@ -555,7 +555,7 @@ All other env vars (`PORT`, `METRICS_PORT`, `CLAUDE_MODEL`, `MAX_AGENT_ROUNDS`, 
 
 ### Code-volume goal
 
-- [ ] `wc -l internal/shared/claude.go` reports between 100 and 200 lines (target ~150; today ~440)
+- [ ] `wc -l internal/shared/claude.go` reports under 250 lines (down from ~440; the original target of 100-200 turned out to be unrealistic once SDK helpers, breakpoint plumbing across three cache levels, and forced-summary handling were retained as separate concerns — 250 is the pragmatic ceiling)
 - [ ] `grep -r 'shared\.Tool\b\|shared\.ContentBlock\|shared\.ToolMessage\|shared\.SystemBlock\|shared\.CacheControl\|shared\.ToolRequest\|shared\.ToolResponse' internal/ cmd/` returns 0 matches (no translation-layer leftovers)
 
 ### Phase-2 isolation

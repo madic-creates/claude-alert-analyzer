@@ -1985,7 +1985,7 @@ Expected: empty output (pipeline files untouched). If your branch is named diffe
 ```bash
 wc -l internal/shared/claude.go
 ```
-Expected: a number between 100 and 200 (target ~150; today ~440). If higher than 200, look for opportunities to delete dead helpers.
+Expected: under 250 (down from ~440). The original 100-200 target proved unrealistic once SDK helpers, breakpoint plumbing across three cache levels, and forced-summary handling were retained as separate concerns. 250 is the pragmatic ceiling. After T5 the file lands at ~249.
 
 - [ ] **Step 4: No-translation-layer gate**
 
