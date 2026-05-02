@@ -34,7 +34,7 @@ Both deduplicate repeat alerts (configurable cooldown) and process work concurre
 
 ## Prerequisites
 
-- An [Anthropic API key](https://console.anthropic.com/), or another Anthropic-Messages-API-compatible provider that accepts `x-api-key` auth
+- An [Anthropic API key](https://console.anthropic.com/) (`ANTHROPIC_API_KEY` → `x-api-key` header), **or** an OpenRouter / compatible-provider token (`ANTHROPIC_AUTH_TOKEN` → `Authorization: Bearer` header) — exactly one of the two
 - An [ntfy](https://ntfy.sh) server for receiving analysis results
 - **k8s-analyzer**: Kubernetes cluster with Alertmanager
 - **checkmk-analyzer**: CheckMK instance with an automation user, and SSH access to monitored hosts
@@ -228,9 +228,9 @@ When set, the attribute appears as a "Host Context (operator-provided)" section 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `WEBHOOK_SECRET` | **(required)** | Bearer token for webhook authentication |
-| `ANTHROPIC_API_KEY` | **(required)** | Anthropic API key (sets `x-api-key` header) |
-| `ANTHROPIC_AUTH_TOKEN` | — | OpenRouter or compatible API token (sets `Authorization: Bearer` header). Exactly one of `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` must be set |
-| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1` | LLM API endpoint |
+| `ANTHROPIC_API_KEY` | **(one of)** | Anthropic API key (sets `x-api-key` header). Exactly one of this or `ANTHROPIC_AUTH_TOKEN` must be set; both-set is a fatal error at startup |
+| `ANTHROPIC_AUTH_TOKEN` | **(one of)** | OpenRouter or compatible API token (sets `Authorization: Bearer` header) |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/` | LLM API endpoint base. The SDK appends `/v1/messages` itself, so do not include the path here |
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Model ID for analysis |
 | `PORT` | `8080` | HTTP listen port for `/health` and `/webhook` |
 | `METRICS_PORT` | `9101` | Port for the Prometheus `/metrics` endpoint |
@@ -437,7 +437,7 @@ go test -race -count=1 ./...
 - **Context gathering** — each analyzer exposes `GatherContext(...)` returning `shared.AnalysisContext` (a list of named sections rendered into the prompt). Data collection runs concurrently: k8s fans out Prometheus + kube context; checkmk fans out host services + SSH.
 - **Agentic loops** — after static context gathering, both analyzers run `RunAgenticDiagnostics` which drives a multi-turn Claude tool-use loop. k8s exposes `kubectl_exec` and `promql_query`; checkmk exposes SSH command execution. Round budget is capped by `MAX_AGENT_ROUNDS`.
 - **Cooldown dedup** — `CooldownManager` prevents re-analyzing the same alert within the configured TTL. The cooldown is cleared on analysis failure so retries work.
-- **Provider flexibility** — the Claude client always uses Anthropic's `x-api-key` auth. Compatible alternative providers must accept the same header.
+- **Provider flexibility** — the Claude client routes through `anthropic-sdk-go`. Either Anthropic's native `x-api-key` (`ANTHROPIC_API_KEY`) or OpenRouter-style `Authorization: Bearer` (`ANTHROPIC_AUTH_TOKEN`) is supported; the SDK selects the right header based on which env var is set.
 - **Cost routing** — `internal/shared/policy.go` (`AnalysisPolicy`) maps `Severity` → model + tool-loop rounds. Pipelines branch on `MaxRoundsFor() == 0` to call `Analyze` instead of `RunToolLoop`. Prompt caching is set at three breakpoints in `internal/shared/claude.go` (system, last tool, last `tool_result` per round).
 
 ## Pre-commit

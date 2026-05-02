@@ -1018,6 +1018,77 @@ func TestClaudeClient_NoRetryOnClientError(t *testing.T) {
 	}
 }
 
+// TestRunToolLoop_CacheTokensSummedAcrossRounds verifies that
+// cache_creation_input_tokens and cache_read_input_tokens reported by the SDK
+// across multiple tool-loop rounds are summed and recorded once per analysis
+// in the Prometheus counters. Guards the spec acceptance criterion that the
+// per-round accumulator pattern correctly aggregates cache-aware token usage.
+func TestRunToolLoop_CacheTokensSummedAcrossRounds(t *testing.T) {
+	var callCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		call := callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		switch call {
+		case 1:
+			// Round 1: tool_use, with cache_creation=200, cache_read=100.
+			fmt.Fprint(w, `{
+				"content":[{"type":"tool_use","id":"toolu_1","name":"execute_command","input":{"command":["uptime"]}}],
+				"stop_reason":"tool_use",
+				"usage":{"input_tokens":50,"output_tokens":10,"cache_creation_input_tokens":200,"cache_read_input_tokens":100}
+			}`)
+		case 2:
+			// Round 2: end_turn, with cache_creation=0, cache_read=300 (cache hit grew).
+			fmt.Fprint(w, `{
+				"content":[{"type":"text","text":"done"}],
+				"stop_reason":"end_turn",
+				"usage":{"input_tokens":80,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":300}
+			}`)
+		default:
+			t.Errorf("unexpected call %d", call)
+		}
+	}))
+	defer srv.Close()
+
+	prom := NewPrometheusMetrics()
+	metrics := &AlertMetrics{Prom: prom}
+	c := newTestClient(t, srv, "test-model", "test-key", 0).WithPrometheusMetrics(metrics, "k8s")
+
+	tools := []anthropic.ToolUnionParam{{
+		OfTool: &anthropic.ToolParam{
+			Name: "execute_command", Description: anthropic.String("test"),
+			InputSchema: anthropic.ToolInputSchemaParam{Properties: map[string]any{}},
+		},
+	}}
+	if _, _, _, err := c.RunToolLoop(context.Background(), "test-model", "system", "user", tools, 5,
+		func(_ string, _ json.RawMessage) (string, error) { return "load: 0.1", nil }); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gather := func(name string) float64 {
+		mfs, _ := prom.Registry().Gather()
+		for _, mf := range mfs {
+			if mf.GetName() == name {
+				for _, m := range mf.GetMetric() {
+					return m.GetCounter().GetValue()
+				}
+			}
+		}
+		return -1
+	}
+	if v := gather("claude_input_tokens_total"); v != 130 {
+		t.Errorf("input_tokens summed across 2 rounds: got %v, want 130 (50+80)", v)
+	}
+	if v := gather("claude_output_tokens_total"); v != 30 {
+		t.Errorf("output_tokens summed: got %v, want 30 (10+20)", v)
+	}
+	if v := gather("claude_cache_creation_tokens_total"); v != 200 {
+		t.Errorf("cache_creation summed: got %v, want 200 (200+0)", v)
+	}
+	if v := gather("claude_cache_read_tokens_total"); v != 400 {
+		t.Errorf("cache_read summed: got %v, want 400 (100+300)", v)
+	}
+}
+
 // ---- Auth header tests ----
 
 // TestNewClaudeClient_APIKeyHeader verifies that when BaseConfig.APIKey is set,

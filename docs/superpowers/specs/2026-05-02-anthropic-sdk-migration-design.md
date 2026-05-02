@@ -139,11 +139,23 @@ func NewClaudeClient(cfg BaseConfig, transport http.RoundTripper) *ClaudeClient 
         option.WithHTTPClient(httpClient),
         option.WithMaxRetries(2),
     }
-    // Always pass both options, possibly with empty strings, so the SDK
-    // never falls back to its own ANTHROPIC_*_KEY/TOKEN env-var lookups.
-    // main.go has already validated exactly one of these is non-empty.
-    opts = append(opts, option.WithAPIKey(cfg.APIKey))
-    opts = append(opts, option.WithAuthToken(cfg.AuthToken))
+    // Pass each auth option only when the corresponding field is non-empty.
+    // option.WithAuthToken("") would set "Authorization: Bearer " (literal,
+    // empty value) — RFC-7235-malformed and rejected by strict reverse proxies.
+    // option.WithAPIKey("") would set an empty x-api-key header. Both cases
+    // are real footguns.
+    //
+    // Hermetic config: main.go reads the three ANTHROPIC_* env vars, validates
+    // exactly one of API_KEY/AUTH_TOKEN is set, and then os.Unsetenv()s all
+    // three so the SDK has no env-var fallback path. The os.Unsetenv is the
+    // load-bearing safeguard; the conditional appends below are belt-and-
+    // suspenders against future plan-local edits to main.go.
+    if cfg.APIKey != "" {
+        opts = append(opts, option.WithAPIKey(cfg.APIKey))
+    }
+    if cfg.AuthToken != "" {
+        opts = append(opts, option.WithAuthToken(cfg.AuthToken))
+    }
     if cfg.APIBaseURL != "" {
         opts = append(opts, option.WithBaseURL(cfg.APIBaseURL))
     }
