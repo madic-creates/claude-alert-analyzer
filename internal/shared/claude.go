@@ -16,9 +16,7 @@ import (
 
 const anthropicVersion = "2023-06-01"
 
-// MaxResponseBytes bounds the amount of data read from an API response body
-// to prevent a malicious or buggy upstream from exhausting memory.
-const MaxResponseBytes = 2 * 1024 * 1024 // 2 MiB
+// MaxResponseBytes is defined in transport.go.
 
 // defaultRetryDelays are the wait durations before each retry attempt for
 // transient API errors (429, 5xx). Two retries with 2 s and 4 s backoff give
