@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+
+	// Blank import keeps the SDK as a direct dependency until Task 5 introduces
+	// real imports. The whole file is deleted in Task 5; this line goes with it.
+	_ "github.com/anthropics/anthropic-sdk-go"
 )
 
 // AnalysisContext holds named text sections injected into the Claude user prompt.

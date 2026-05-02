@@ -45,7 +45,7 @@
 ## Task 1: Add `anthropic-sdk-go` dependency
 
 **Files:**
-- Modify: `go.mod`, `go.sum`
+- Modify: `go.mod`, `go.sum`, `internal/shared/types.go`
 
 - [ ] **Step 1: Confirm baseline tests pass**
 
@@ -55,6 +55,18 @@ Expected: all tests pass (current baseline).
 - [ ] **Step 2: Add the SDK dependency**
 
 Run: `go get github.com/anthropics/anthropic-sdk-go@latest`
+
+- [ ] **Step 2.5: Add a temporary blank import to keep the SDK as a direct dependency**
+
+Without something importing the SDK, `go mod tidy` strips `github.com/anthropics/anthropic-sdk-go` from `go.mod` entirely. Add a blank import to `internal/shared/types.go` so the dependency survives. This file is deleted entirely in Task 5, so the blank import is removed naturally — no follow-up cleanup needed.
+
+Edit `internal/shared/types.go` to add inside the existing `import (...)` block:
+
+```go
+// Blank import keeps the SDK as a direct dependency until Task 5 introduces
+// real imports. The whole file is deleted in Task 5; this line goes with it.
+_ "github.com/anthropics/anthropic-sdk-go"
+```
 
 - [ ] **Step 3: Tidy modules**
 
@@ -78,7 +90,7 @@ Expected: a line under `require (...)` block (not in `// indirect` section).
 - [ ] **Step 7: Commit**
 
 ```bash
-git add go.mod go.sum
+git add go.mod go.sum internal/shared/types.go
 git commit -m "chore(deps): add anthropic-sdk-go for SDK migration"
 ```
 
