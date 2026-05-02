@@ -242,6 +242,7 @@ func TestProcessAlert_AnalysisFails_PublishFailureNotification(t *testing.T) {
 		Publishers: []shared.Publisher{failPub},
 		Cooldown:   cooldown,
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: false,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{}
@@ -285,6 +286,7 @@ func TestProcessAlert_EmptyAnalysis_PublishFailureNotification(t *testing.T) {
 		Publishers: []shared.Publisher{failPub},
 		Cooldown:   cooldown,
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: false,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{}
@@ -327,6 +329,7 @@ func TestProcessAlert_SSH_AgenticFails_PublishFailureNotification(t *testing.T) 
 		Publishers: []shared.Publisher{failPub},
 		Cooldown:   cooldown,
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: true,
 		SSHDialer:  dialer,
 		SSHConfig:  Config{MaxAgentRounds: 3, SSHDeniedCommands: DefaultDeniedCommands},
@@ -575,6 +578,7 @@ func TestProcessAlert_SSH_AgenticFails_RecordsClaudeAPIErrorCounter(t *testing.T
 		Publishers: []shared.Publisher{&mockPublisher{}},
 		Cooldown:   shared.NewCooldownManager(),
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: true,
 		SSHDialer:  dialer,
 		SSHConfig:  Config{MaxAgentRounds: 3, SSHDeniedCommands: DefaultDeniedCommands},
@@ -618,6 +622,7 @@ func TestProcessAlert_SSH_ValidationFails_FallsBackToStaticAnalysis(t *testing.T
 		Publishers: []shared.Publisher{pub},
 		Cooldown:   cooldown,
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: true,
 		GatherContext: func(_ context.Context, _ shared.AlertPayload, _ *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{}

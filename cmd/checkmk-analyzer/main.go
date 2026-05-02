@@ -118,22 +118,35 @@ func main() {
 		}
 	}
 
+	// Temporary inline AnalysisPolicy construction. Task 16 will replace this
+	// with shared.LoadPolicy(cfg.BaseConfig()) so per-severity overrides via
+	// CLAUDE_MODEL_* / MAX_AGENT_ROUNDS_* environment variables take effect.
 	deps := checkmk.PipelineDeps{
-		Analyzer:    claudeClient,
-		ToolRunner:  claudeClient,
-		Publishers:  publishers,
-		Cooldown:    cooldownMgr,
-		Metrics:     metrics,
-		SSHEnabled:  cfg.SSHEnabled,
-		SSHDialer:   sshDialer,
-		SSHConfig:   cfg,
-		ClaudeModel: cfg.ClaudeModel,
+		Analyzer:   claudeClient,
+		ToolRunner: claudeClient,
+		Publishers: publishers,
+		Cooldown:   cooldownMgr,
+		Metrics:    metrics,
+		SSHEnabled: cfg.SSHEnabled,
+		SSHDialer:  sshDialer,
+		SSHConfig:  cfg,
+		Policy: &shared.AnalysisPolicy{
+			DefaultModel:     cfg.ClaudeModel,
+			DefaultMaxRounds: cfg.MaxAgentRounds,
+		},
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *checkmk.HostInfo) shared.AnalysisContext {
 			return checkmk.GatherContext(ctx, apiClient, alert, hostInfo)
 		},
 		ValidateHost: func(ctx context.Context, hostname, hostAddress string) (*checkmk.HostInfo, error) {
 			return apiClient.ValidateAndDescribeHost(ctx, hostname, hostAddress)
 		},
+	}
+
+	if deps.Analyzer == nil || deps.ToolRunner == nil || deps.Policy == nil ||
+		deps.Cooldown == nil || deps.Metrics == nil || deps.GatherContext == nil ||
+		deps.ValidateHost == nil || (deps.SSHEnabled && deps.SSHDialer == nil) {
+		slog.Error("checkmk pipeline deps incomplete — refusing to start")
+		os.Exit(1)
 	}
 
 	srv := shared.NewServer(shared.ServerConfig{
