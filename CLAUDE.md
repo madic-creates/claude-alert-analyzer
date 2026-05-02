@@ -62,60 +62,25 @@ Webhook → Auth check → Cooldown dedup → Work queue (buffered chan, 5 worke
 Both analyzers require: `WEBHOOK_SECRET`, `API_KEY`
 CheckMK additionally requires: `CHECKMK_API_USER`, `CHECKMK_API_SECRET`
 
-Common optional: `PORT` (default `8080`), `METRICS_PORT` (default `9101`), `NTFY_PUBLISH_URL`, `NTFY_PUBLISH_TOPIC`, `NTFY_PUBLISH_TOKEN`, `CLAUDE_MODEL`, `API_BASE_URL`, `COOLDOWN_SECONDS`, `LOG_LEVEL`, `MAX_AGENT_ROUNDS` (default `10`, tool-loop budget). Severity-specific overrides for model and rounds are documented in the "Cost & Storm Protection" section below.
+Common optional: `PORT` (default `8080`), `METRICS_PORT` (default `9101`), `NTFY_PUBLISH_URL`, `NTFY_PUBLISH_TOPIC`, `NTFY_PUBLISH_TOKEN`, `CLAUDE_MODEL`, `API_BASE_URL`, `COOLDOWN_SECONDS`, `LOG_LEVEL`, `MAX_AGENT_ROUNDS` (default `10`, tool-loop budget).
 k8s optional: `MAX_LOG_BYTES`, `PROMETHEUS_URL`, `SKIP_RESOLVED`.
+
+Severity-based overrides (`CLAUDE_MODEL_<SEVERITY>`, `MAX_AGENT_ROUNDS_<SEVERITY>`) are operator-facing and documented in [`docs/cost-and-storm-protection.md`](docs/cost-and-storm-protection.md).
 
 k8s-analyzer runs in-cluster only (`rest.InClusterConfig()`).
 
-## Cost & Storm Protection (Phase 1)
+## Cost & Storm Protection
 
-The analyzers route Claude API calls based on alert severity to reduce cost. Defaults preserve current behavior — overrides are opt-in.
+Phase 1 ships three operator-facing features: prompt caching (always on), severity-based model and tool-round routing (opt-in via env vars), and four token-cost Prometheus counters. Architectural touchpoints when working in this code:
 
-### Severity-based model routing
+- `internal/shared/severity.go` — `Severity` enum + `SeverityFromAlertmanager` / `SeverityFromCheckMK` normalizers. Set on `AlertPayload.SeverityLevel` in each handler.
+- `internal/shared/policy.go` — `AnalysisPolicy` decision layer. `ModelFor(sev)` and `MaxRoundsFor(sev)` are the two routing entry points called from each pipeline. `LoadPolicy(BaseConfig)` reads the optional env vars.
+- `internal/shared/claude.go` — Cache breakpoints set at three levels: `systemBlocks()` helper, `withCachedTail()` helper for tools, and an inline assignment on the last `tool_result` of each `RunToolLoop` round.
+- Pipelines (`internal/k8s/pipeline.go`, `internal/checkmk/pipeline.go`) branch on `policy.MaxRoundsFor(...) == 0` to call `Analyzer.Analyze` (static-only) instead of `RunAgenticDiagnostics`.
 
-- `CLAUDE_MODEL_CRITICAL` (default: `$CLAUDE_MODEL`)
-- `CLAUDE_MODEL_WARNING` (default: `$CLAUDE_MODEL`)
-- `CLAUDE_MODEL_INFO` (default: `$CLAUDE_MODEL`)
+⚠️ **Breaking change**: `Authorization: Bearer` removed; `API_BASE_URL` must accept `x-api-key`. Operators running against OpenRouter standard endpoints need a translating proxy. See `docs/cost-and-storm-protection.md` for migration details.
 
-Suggested setup: `critical` → Opus, `warning`/`info` → Haiku. Reduces cost ~12× for non-critical alerts.
-
-### Severity-based agent rounds (range 0-50, optional)
-
-- `MAX_AGENT_ROUNDS_CRITICAL` (default: `$MAX_AGENT_ROUNDS`)
-- `MAX_AGENT_ROUNDS_WARNING` (default: `$MAX_AGENT_ROUNDS`)
-- `MAX_AGENT_ROUNDS_INFO` (default: `$MAX_AGENT_ROUNDS`)
-
-Special value `0` skips the tool-loop entirely and runs a static `Analyze` only — best for noisy info alerts. The static path uses pre-fetched context (Prometheus metrics, kube events, pod status, logs for k8s; host services + alert payload for checkmk) without giving Claude tools to call.
-
-### Prompt caching
-
-Enabled automatically. Anthropic prompt caching is applied at three breakpoints per request:
-
-1. System prompt (last block) — cached across all alerts of the same source
-2. Tool definitions (last tool) — cached across rounds within a tool-loop
-3. Tool-loop conversation history (last `tool_result` per round) — sliding cache that pays off in multi-round analyses
-
-Hit-rate is visible via Prometheus metrics:
-
-- `claude_input_tokens_total{source,severity,model}`
-- `claude_output_tokens_total{source,severity,model}`
-- `claude_cache_creation_tokens_total{source,severity,model}`
-- `claude_cache_read_tokens_total{source,severity,model}`
-
-Anthropic only caches blocks larger than ~1024 tokens (Sonnet/Opus, ~2048 for Haiku). For small system prompts, expect cache benefit only on the tool-loop history breakpoint.
-
-A useful Grafana cache-hit-rate query:
-
-```
-sum(rate(claude_cache_read_tokens_total[5m]))
-  / sum(rate(claude_cache_read_tokens_total[5m]) + rate(claude_cache_creation_tokens_total[5m]) + rate(claude_input_tokens_total[5m]))
-```
-
-## ⚠️ Breaking Change in Phase 1: OpenRouter Bearer auth removed
-
-`API_BASE_URL` must accept `x-api-key` authentication. Until this version, the client auto-detected `anthropic.com` URLs and switched to `Authorization: Bearer` for everything else (typically OpenRouter). That URL-conditional code is gone — both headers are no longer set together; only `x-api-key` is sent.
-
-If you run against OpenRouter via `Authorization: Bearer`, you must put a header-translating proxy in front, or migrate to a different Anthropic-API-compatible provider that accepts `x-api-key`.
+Phase 2 (storm-mode, circuit-breaker, group-cooldown) is designed but not yet implemented — see `docs/superpowers/specs/2026-05-01-storm-cost-protection-design.md` for the full design.
 
 ## CI & Deployment
 
