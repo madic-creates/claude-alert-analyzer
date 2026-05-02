@@ -59,6 +59,7 @@ type Config struct {
 	MaxLogBytes     int           // Per-pod log truncation limit
 	APIBaseURL      string        // Claude API endpoint (supports Anthropic and OpenRouter)
 	APIKey          string        // API key for authentication
+	AuthToken       string        // ANTHROPIC_AUTH_TOKEN (sets Authorization: Bearer)
 	KubeAPITimeout  time.Duration // Timeout for Kubernetes API context gathering (0 = default 30s)
 	PromTimeout     time.Duration // Timeout for Prometheus context gathering (0 = default 30s)
 }
@@ -73,5 +74,6 @@ func (c Config) BaseConfig() shared.BaseConfig {
 		WebhookSecret:   c.WebhookSecret,
 		APIBaseURL:      c.APIBaseURL,
 		APIKey:          c.APIKey,
+		AuthToken:       c.AuthToken,
 	}
 }

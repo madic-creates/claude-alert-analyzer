@@ -51,6 +51,7 @@ type BaseConfig struct {
 	Port            string
 	MetricsPort     string
 	WebhookSecret   string
-	APIBaseURL      string
-	APIKey          string
+	APIBaseURL      string // ANTHROPIC_BASE_URL
+	APIKey          string // ANTHROPIC_API_KEY (sets x-api-key)
+	AuthToken       string // ANTHROPIC_AUTH_TOKEN (sets Authorization: Bearer)
 }
