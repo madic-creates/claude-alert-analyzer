@@ -6,39 +6,26 @@ import (
 	"time"
 )
 
-// TestNewClaudeClient verifies that NewClaudeClient initialises all fields from
-// the supplied BaseConfig and attaches an HTTP client with the expected timeout.
+// TestNewClaudeClient_FieldsFromConfig verifies that NewClaudeClient stores
+// the model from BaseConfig. After the SDK migration the auth credentials
+// and base URL are owned by the SDK Client, so we only assert what the
+// wrapper still exposes directly.
 func TestNewClaudeClient_FieldsFromConfig(t *testing.T) {
 	cfg := BaseConfig{
 		APIBaseURL:  "https://api.anthropic.com/v1/messages",
 		APIKey:      "sk-test-key",
 		ClaudeModel: "claude-sonnet-4-5",
 	}
-	c := NewClaudeClient(cfg)
+	c := NewClaudeClient(cfg, nil)
 	if c == nil {
 		t.Fatal("NewClaudeClient returned nil")
 		return
 	}
-	if c.BaseURL != cfg.APIBaseURL {
-		t.Errorf("BaseURL = %q, want %q", c.BaseURL, cfg.APIBaseURL)
-	}
-	if c.APIKey != cfg.APIKey {
-		t.Errorf("APIKey = %q, want %q", c.APIKey, cfg.APIKey)
-	}
 	if c.Model != cfg.ClaudeModel {
 		t.Errorf("Model = %q, want %q", c.Model, cfg.ClaudeModel)
 	}
-	if c.HTTP == nil {
-		t.Fatal("HTTP client must not be nil")
-	}
-}
-
-// TestNewClaudeClient_HTTPTimeout verifies that the default HTTP client carries
-// a 120-second timeout so that slow API responses don't hang forever.
-func TestNewClaudeClient_HTTPTimeout(t *testing.T) {
-	c := NewClaudeClient(BaseConfig{})
-	if c.HTTP.Timeout != 120*time.Second {
-		t.Errorf("HTTP.Timeout = %v, want 120s", c.HTTP.Timeout)
+	if c.sdk == nil {
+		t.Fatal("SDK client must not be nil")
 	}
 }
 

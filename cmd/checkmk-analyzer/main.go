@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -97,7 +98,9 @@ func main() {
 	}
 
 	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
-	claudeClient := shared.NewClaudeClient(cfg.BaseConfig()).WithPrometheusMetrics(metrics, "checkmk")
+	hist := metrics.Prom.ClaudeAPIDuration.WithLabelValues("checkmk")
+	transport := shared.NewLimitedTransport(http.DefaultTransport, hist)
+	claudeClient := shared.NewClaudeClient(cfg.BaseConfig(), transport).WithPrometheusMetrics(metrics, "checkmk")
 	apiClient := checkmk.NewAPIClient(cfg)
 	cooldownMgr := shared.NewCooldownManager()
 	publishers := []shared.Publisher{

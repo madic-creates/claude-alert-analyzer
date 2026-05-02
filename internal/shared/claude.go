@@ -1,263 +1,136 @@
 package shared
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 )
 
-const anthropicVersion = "2023-06-01"
-
-// MaxResponseBytes is defined in transport.go.
-
-// defaultRetryDelays are the wait durations before each retry attempt for
-// transient API errors (429, 5xx). Two retries with 2 s and 4 s backoff give
-// a short grace period for transient blips while keeping total worst-case wait
-// well under the 120 s HTTP client timeout.
-var defaultRetryDelays = []time.Duration{2 * time.Second, 4 * time.Second}
-
-// withCachedTail returns a copy of tools with cache_control attached to the
-// last element. Tools is a small slice (currently 1-2 elements), so the copy
-// cost is negligible compared to building a flag at every callsite.
-func withCachedTail(tools []Tool) []Tool {
-	if len(tools) == 0 {
-		return tools
-	}
-	out := make([]Tool, len(tools))
-	copy(out, tools)
-	out[len(out)-1].CacheControl = &CacheControl{Type: "ephemeral"}
-	return out
-}
-
-// systemBlocks builds the system field with a single text block carrying
-// a cache_control breakpoint at its tail. This is breakpoint #1 of the
-// 4-breakpoint Anthropic budget; #2 is on the tools array, #3 on the
-// last tool_result of the running conversation.
-func systemBlocks(prompt string) []SystemBlock {
-	return []SystemBlock{{
-		Type:         "text",
-		Text:         prompt,
-		CacheControl: &CacheControl{Type: "ephemeral"},
-	}}
-}
-
-// isTransientStatus reports whether an HTTP status code indicates a transient
-// server-side condition worth retrying. 429 Too Many Requests and 5xx server
-// errors are retried. 4xx client errors (except 429) are permanent — retrying
-// them wastes quota and adds latency without any chance of success.
-func isTransientStatus(code int) bool {
-	return code == http.StatusTooManyRequests || (code >= 500 && code < 600)
-}
-
-// ClaudeClient holds the HTTP client and configuration needed
-// to talk to the Claude Messages API. It implements both Analyzer
-// and ToolLoopRunner.
+// ClaudeClient wraps the Anthropic SDK with per-call model selection,
+// 3-breakpoint prompt-cache plumbing, token-usage recording, and a forced
+// summary turn at the end of an exhausted tool loop.
 type ClaudeClient struct {
-	HTTP    *http.Client
-	BaseURL string
-	APIKey  string
+	sdk     *anthropic.Client
 	Model   string
-
-	// retryDelays controls the wait before each retry attempt for transient
-	// API errors (429, 5xx). When nil, defaultRetryDelays is used. Set to
-	// []time.Duration{} to disable retries (useful in tests).
-	retryDelays []time.Duration
-
-	// durationHistogram records Claude API call latency. May be nil.
-	durationHistogram prometheus.Observer
-
-	// metrics and source are set by WithPrometheusMetrics to enable
-	// per-call token usage recording via RecordClaudeUsage.
-	metrics *AlertMetrics
+	metrics *AlertMetrics // nil/empty in tests that do not assert metrics
 	source  string
 }
 
-// NewClaudeClient creates a ClaudeClient from a BaseConfig with a
-// default 120-second timeout HTTP client.
-func NewClaudeClient(cfg BaseConfig) *ClaudeClient {
-	return &ClaudeClient{
-		HTTP:    &http.Client{Timeout: 120 * time.Second},
-		BaseURL: cfg.APIBaseURL,
-		APIKey:  cfg.APIKey,
-		Model:   cfg.ClaudeModel,
+// NewClaudeClient wires the SDK against transport (body-size capping and
+// latency-histogram observation). Auth options are passed only when the
+// corresponding field is non-empty; main.go is the single source of truth
+// (reads exactly one of ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN and, in
+// T6/T7, unsets all ANTHROPIC_* env vars so the SDK has no env-var fallback).
+func NewClaudeClient(cfg BaseConfig, transport http.RoundTripper) *ClaudeClient {
+	httpClient := &http.Client{Timeout: 120 * time.Second, Transport: transport}
+	opts := []option.RequestOption{option.WithHTTPClient(httpClient), option.WithMaxRetries(2)}
+	if cfg.APIKey != "" {
+		opts = append(opts, option.WithAPIKey(cfg.APIKey))
 	}
+	if cfg.AuthToken != "" {
+		opts = append(opts, option.WithAuthToken(cfg.AuthToken))
+	}
+	if cfg.APIBaseURL != "" {
+		opts = append(opts, option.WithBaseURL(cfg.APIBaseURL))
+	}
+	sdk := anthropic.NewClient(opts...)
+	return &ClaudeClient{sdk: &sdk, Model: cfg.ClaudeModel}
 }
 
-// WithPrometheusMetrics attaches Prometheus observers to the client so that
-// each API call is timed and token usage is recorded. Call this after NewClaudeClient.
+// WithPrometheusMetrics attaches the AlertMetrics for token-usage recording.
 func (c *ClaudeClient) WithPrometheusMetrics(m *AlertMetrics, source string) *ClaudeClient {
 	c.metrics = m
 	c.source = source
-	if m != nil && m.Prom != nil {
-		c.durationHistogram = m.Prom.ClaudeAPIDuration.WithLabelValues(source)
-	}
 	return c
 }
 
-// sendRequest sends a JSON body to the Claude API and returns the raw response
-// bytes. Transient errors (429, 5xx, network failures) are retried with
-// exponential backoff using c.retryDelays (defaultRetryDelays when nil).
-// Each HTTP round-trip is timed and recorded in durationHistogram.
-func (c *ClaudeClient) sendRequest(ctx context.Context, body any) ([]byte, error) {
-	bodyBytes, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	delays := c.retryDelays
-	if delays == nil {
-		delays = defaultRetryDelays
-	}
-	maxAttempts := len(delays) + 1
-
-	var lastErr error
-	for attempt := range maxAttempts {
-		if attempt > 0 {
-			delay := delays[attempt-1]
-			slog.Info("retrying Claude API request",
-				"attempt", attempt+1, "maxAttempts", maxAttempts, "delay", delay)
-			if delay > 0 {
-				retryTimer := time.NewTimer(delay)
-				select {
-				case <-ctx.Done():
-					retryTimer.Stop()
-					return nil, fmt.Errorf("context cancelled awaiting retry: %w", ctx.Err())
-				case <-retryTimer.C:
-				}
-			}
-		}
-
-		req, reqErr := http.NewRequestWithContext(ctx, "POST", c.BaseURL, bytes.NewReader(bodyBytes))
-		if reqErr != nil {
-			return nil, fmt.Errorf("create request: %w", reqErr)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("x-api-key", c.APIKey)
-		req.Header.Set("anthropic-version", anthropicVersion)
-
-		start := time.Now()
-		resp, doErr := c.HTTP.Do(req)
-		if doErr != nil {
-			// Network error: potentially transient. Do not retry when the
-			// context is already done — the error is caused by the
-			// cancellation itself, not a server-side failure.
-			lastErr = fmt.Errorf("API request: %w", doErr)
-			if ctx.Err() != nil {
-				return nil, lastErr
-			}
-			continue
-		}
-
-		respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBytes))
-		_ = resp.Body.Close()
-		if readErr != nil {
-			// Body read failed: potentially transient (connection drop mid-response).
-			// Do not retry when the context is already done — the read failure is
-			// caused by the cancellation itself, not a server-side failure. This
-			// mirrors the same ctx.Err() guard applied to doErr above.
-			lastErr = fmt.Errorf("read response: %w", readErr)
-			if ctx.Err() != nil {
-				return nil, lastErr
-			}
-			continue
-		}
-
-		// Record full round-trip latency per attempt (after body read, not just
-		// header receipt). Recording on every attempt — including failed ones —
-		// lets operators see retry latency and correlate error spikes with
-		// latency changes (e.g. a fast 429 vs a slow 500).
-		if c.durationHistogram != nil {
-			c.durationHistogram.Observe(time.Since(start).Seconds())
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("API returned %d: %s", resp.StatusCode, Truncate(RedactSecrets(string(respBody)), 300))
-			if isTransientStatus(resp.StatusCode) {
-				continue
-			}
-			return nil, lastErr
-		}
-
-		return respBody, nil
-	}
-
-	return nil, lastErr
+// systemBlocks builds the system field with a cache_control breakpoint (#1).
+func systemBlocks(prompt string) []anthropic.TextBlockParam {
+	return []anthropic.TextBlockParam{{Text: prompt, CacheControl: anthropic.NewCacheControlEphemeralParam()}}
 }
 
-// Analyze sends a single-turn analysis request to the Claude API.
-// model is the model to use for this request; if empty, c.Model is used as fallback.
+// toolsWithCachedTail copies tools and adds cache_control to the last OfTool (#2).
+func toolsWithCachedTail(tools []anthropic.ToolUnionParam) []anthropic.ToolUnionParam {
+	if len(tools) == 0 {
+		return tools
+	}
+	out := make([]anthropic.ToolUnionParam, len(tools))
+	copy(out, tools)
+	last := &out[len(out)-1]
+	if last.OfTool != nil {
+		toolCopy := *last.OfTool
+		toolCopy.CacheControl = anthropic.NewCacheControlEphemeralParam()
+		last.OfTool = &toolCopy
+	}
+	return out
+}
+
+// extractText concatenates all text blocks in a Claude response message.
+func extractText(msg *anthropic.Message) string {
+	var parts []string
+	for _, b := range msg.Content {
+		if tb, ok := b.AsAny().(anthropic.TextBlock); ok && tb.Text != "" {
+			parts = append(parts, tb.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// Analyze sends a single-turn analysis request. If model is empty, c.Model is used.
 func (c *ClaudeClient) Analyze(ctx context.Context, model, systemPrompt, userPrompt string) (string, error) {
 	if model == "" {
 		model = c.Model
 	}
-	reqBody := ToolRequest{
-		Model:     model,
-		MaxTokens: 2048,
-		System:    systemBlocks(systemPrompt),
-		Messages:  []ToolMessage{{Role: "user", Content: userPrompt}},
-	}
 
-	respBody, err := c.sendRequest(ctx, reqBody)
+	msg, err := c.sdk.Messages.New(ctx, anthropic.MessageNewParams{
+		Model: anthropic.Model(model), MaxTokens: 2048, System: systemBlocks(systemPrompt),
+		Messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(userPrompt))},
+	})
 	if err != nil {
 		return "", err
 	}
 
-	var result ToolResponse
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("parse response: %w", err)
-	}
-
-	if result.Error != nil {
-		return "", fmt.Errorf("API error: %s: %s", result.Error.Type, result.Error.Message)
-	}
-
-	slog.Info("Claude analysis complete",
-		"model", model,
-		"inputTokens", result.Usage.InputTokens,
-		"outputTokens", result.Usage.OutputTokens)
+	slog.Info("Claude analysis complete", "model", model,
+		"inputTokens", msg.Usage.InputTokens, "outputTokens", msg.Usage.OutputTokens)
 
 	c.metrics.RecordClaudeUsage(c.source, "all", model,
-		result.Usage.InputTokens, result.Usage.OutputTokens,
-		result.Usage.CacheCreationInputTokens, result.Usage.CacheReadInputTokens)
-
-	// Warn when the API signals that the response was cut off before a natural
-	// stopping point. "end_turn" is the normal stop reason; anything else
-	// (typically "max_tokens") means the output was truncated by the token
-	// budget and the published analysis may end mid-sentence. This mirrors the
-	// slog.Warn already emitted by RunToolLoop for its non-"end_turn" early
-	// returns and makes truncated single-turn analyses visible in operator logs.
-	if result.StopReason != "" && result.StopReason != "end_turn" {
-		slog.Warn("analysis response may be truncated",
-			"stop_reason", result.StopReason,
-			"model", model,
-			"outputTokens", result.Usage.OutputTokens)
+		int(msg.Usage.InputTokens), int(msg.Usage.OutputTokens),
+		int(msg.Usage.CacheCreationInputTokens), int(msg.Usage.CacheReadInputTokens))
+	if msg.StopReason != "" && msg.StopReason != anthropic.StopReasonEndTurn {
+		slog.Warn("analysis response may be truncated", "stop_reason", string(msg.StopReason),
+			"model", model, "outputTokens", msg.Usage.OutputTokens)
 	}
-
-	return extractText(result.Content), nil
+	return extractText(msg), nil
 }
 
-// RunToolLoop runs a multi-turn Claude conversation with tool use.
-// handleTool is called for each tool_use block. After maxRounds of tool calls,
-// a final request without tools forces Claude to produce a text response.
-// maxRounds must be at least 1; passing 0 or negative returns an error
-// immediately to prevent the forced-summary logic from constructing two
-// consecutive user messages (which the Anthropic API rejects with 400
-// "roles must alternate").
-func (c *ClaudeClient) RunToolLoop(
-	ctx context.Context,
-	model string,
-	systemPrompt string,
-	userPrompt string,
-	tools []Tool,
-	maxRounds int,
+// appendToolResultsAndCacheTail appends a user message of tool_result blocks
+// with cache_control on the last one (sliding breakpoint #3).
+func appendToolResultsAndCacheTail(messages []anthropic.MessageParam, results []anthropic.ContentBlockParamUnion) []anthropic.MessageParam {
+	if len(results) == 0 {
+		return messages
+	}
+	last := &results[len(results)-1]
+	if last.OfToolResult != nil {
+		trCopy := *last.OfToolResult
+		trCopy.CacheControl = anthropic.NewCacheControlEphemeralParam()
+		last.OfToolResult = &trCopy
+	}
+	return append(messages, anthropic.MessageParam{Role: anthropic.MessageParamRoleUser, Content: results})
+}
+
+// RunToolLoop runs a multi-turn Claude conversation with tool use. After
+// maxRounds of tool calls, a final tool-less request forces a text response.
+// maxRounds must be at least 1; 0 or negative returns an error immediately.
+func (c *ClaudeClient) RunToolLoop(ctx context.Context, model, systemPrompt, userPrompt string,
+	tools []anthropic.ToolUnionParam, maxRounds int,
 	handleTool func(name string, input json.RawMessage) (string, error),
 ) (string, int, bool, error) {
 	if model == "" {
@@ -266,168 +139,111 @@ func (c *ClaudeClient) RunToolLoop(
 	if maxRounds <= 0 {
 		return "", 0, false, fmt.Errorf("maxRounds must be at least 1, got %d", maxRounds)
 	}
-	messages := []ToolMessage{{Role: "user", Content: userPrompt}}
 
-	var totalInput, totalOutput, totalCacheCreation, totalCacheRead int
+	messages := []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(userPrompt))}
+
+	var totalInput, totalOutput, totalCacheCreation, totalCacheRead int64
+	defer func() {
+		c.metrics.RecordClaudeUsage(c.source, "all", model,
+			int(totalInput), int(totalOutput), int(totalCacheCreation), int(totalCacheRead))
+	}()
 
 	for round := range maxRounds {
 		slog.Info("tool loop round", "round", round+1, "maxRounds", maxRounds)
 
-		reqBody := ToolRequest{
-			Model:     model,
-			MaxTokens: 4096,
-			System:    systemBlocks(systemPrompt),
-			Tools:     withCachedTail(tools),
-			Messages:  messages,
-		}
-
-		respBody, err := c.sendRequest(ctx, reqBody)
+		msg, err := c.sdk.Messages.New(ctx, anthropic.MessageNewParams{
+			Model: anthropic.Model(model), MaxTokens: 4096, System: systemBlocks(systemPrompt),
+			Tools: toolsWithCachedTail(tools), Messages: messages,
+		})
 		if err != nil {
 			return "", round + 1, false, fmt.Errorf("round %d: %w", round+1, err)
 		}
 
-		var resp ToolResponse
-		if err := json.Unmarshal(respBody, &resp); err != nil {
-			return "", round + 1, false, fmt.Errorf("round %d parse: %w", round+1, err)
+		totalInput += msg.Usage.InputTokens
+		totalOutput += msg.Usage.OutputTokens
+		totalCacheCreation += msg.Usage.CacheCreationInputTokens
+		totalCacheRead += msg.Usage.CacheReadInputTokens
+		messages = append(messages, msg.ToParam())
+
+		if msg.StopReason == anthropic.StopReasonEndTurn {
+			slog.Info("tool loop complete", "rounds", round+1,
+				"totalInputTokens", totalInput, "totalOutputTokens", totalOutput)
+			return extractText(msg), round + 1, false, nil
 		}
 
-		if resp.Error != nil {
-			return "", round + 1, false, fmt.Errorf("round %d API error: %s: %s", round+1, resp.Error.Type, resp.Error.Message)
-		}
-
-		totalInput += resp.Usage.InputTokens
-		totalOutput += resp.Usage.OutputTokens
-		totalCacheCreation += resp.Usage.CacheCreationInputTokens
-		totalCacheRead += resp.Usage.CacheReadInputTokens
-
-		// Append assistant response to conversation
-		messages = append(messages, ToolMessage{Role: "assistant", Content: resp.Content})
-
-		if resp.StopReason == "end_turn" {
-			slog.Info("tool loop complete",
-				"rounds", round+1,
-				"totalInputTokens", totalInput,
-				"totalOutputTokens", totalOutput)
-			c.metrics.RecordClaudeUsage(c.source, "all", model, totalInput, totalOutput, totalCacheCreation, totalCacheRead)
-			return extractText(resp.Content), round + 1, false, nil
-		}
-
-		// Process tool calls
-		var toolResults []ContentBlock
-		for _, block := range resp.Content {
-			if block.Type != "tool_use" {
+		var toolResults []anthropic.ContentBlockParamUnion
+		for _, block := range msg.Content {
+			tu, ok := block.AsAny().(anthropic.ToolUseBlock)
+			if !ok {
 				continue
 			}
-
-			slog.Info("tool call", "round", round+1, "tool", block.Name, "id", block.ID)
-			output, err := handleTool(block.Name, block.Input)
-			var isError bool
-			if err != nil {
+			slog.Info("tool call", "round", round+1, "tool", tu.Name, "id", tu.ID)
+			output, err := handleTool(tu.Name, tu.Input)
+			isError := err != nil
+			if isError {
 				output = fmt.Sprintf("error: %v", err)
-				isError = true
 			}
-
-			toolResults = append(toolResults, ContentBlock{
-				Type:      "tool_result",
-				ToolUseID: block.ID,
-				Content:   output,
-				IsError:   isError,
-			})
+			toolResults = append(toolResults, anthropic.NewToolResultBlock(tu.ID, output, isError))
 		}
 
-		// No tool_use blocks in response — treat as final answer. This handles
-		// "max_tokens" and other non-"end_turn" stop reasons that carry text but
-		// no tool calls. Appending a nil tool_results slice would marshal to
-		// "content": null and cause the next API call to fail with 400.
+		// No tool_use blocks: treat as final answer (covers stop_reason=max_tokens).
 		if len(toolResults) == 0 {
-			slog.Warn("tool loop: no tool_use blocks found, returning text as final answer",
-				"stop_reason", resp.StopReason, "round", round+1)
-			c.metrics.RecordClaudeUsage(c.source, "all", model, totalInput, totalOutput, totalCacheCreation, totalCacheRead)
-			return extractText(resp.Content), round + 1, false, nil
+			slog.Warn("tool loop: no tool_use blocks, returning text as final answer",
+				"stop_reason", string(msg.StopReason), "round", round+1)
+			return extractText(msg), round + 1, false, nil
 		}
-
-		// Mark the last tool_result block with a cache_control breakpoint so the
-		// conversation prefix gets cached for the next round. Anthropic's 4-breakpoint
-		// budget ages out older markers automatically, so overwriting only the latest
-		// tail each round gives us a sliding cache that always pays off where it
-		// matters most (the growing tool_result history).
-		toolResults[len(toolResults)-1].CacheControl = &CacheControl{Type: "ephemeral"}
-
-		messages = append(messages, ToolMessage{Role: "user", Content: toolResults})
+		messages = appendToolResultsAndCacheTail(messages, toolResults)
 	}
 
-	// Max rounds reached — append the summary prompt to the last user message (which
-	// contains the final round's tool_result blocks) rather than starting a new user
-	// turn. Creating a second consecutive user message would be rejected by the
-	// Anthropic API with a 400 "roles must alternate" error. The API explicitly
-	// supports mixing tool_result and text blocks in the same user message.
+	// Max rounds reached — append summary text to the last (user) message
+	// to preserve role alternation, then issue the tool-less summary call.
 	slog.Info("tool loop max rounds reached, requesting summary", "maxRounds", maxRounds)
-
 	const summaryPrompt = "You have reached the maximum number of diagnostic rounds. Do NOT call any more tools. Provide your final analysis now based on all information gathered so far. Start directly with the analysis — no preamble or meta-commentary."
-
-	// Each iteration appends a ToolMessage{Role:"user", Content:[]ContentBlock{…}}
-	// at the end of the for-loop body above, so by the time all rounds complete,
-	// messages[lastIdx].Content is always a []ContentBlock. The type assertion
-	// must therefore always succeed. A panic here would indicate a broken loop
-	// invariant, making the bug immediately visible rather than silently
-	// corrupting the conversation with two consecutive user messages.
-	lastIdx := len(messages) - 1
-	toolResults := messages[lastIdx].Content.([]ContentBlock)
-	messages[lastIdx].Content = append(toolResults, ContentBlock{
-		Type: "text",
-		Text: summaryPrompt,
-	})
-
-	reqBody := ToolRequest{
-		Model:      model,
-		MaxTokens:  4096,
-		System:     systemBlocks(systemPrompt),
-		Tools:      withCachedTail(tools),
-		ToolChoice: &ToolChoice{Type: "none"}, // prevent tool calls in the forced-summary turn
-		Messages:   messages,
+	if err := appendTextToLastUserMessage(messages, summaryPrompt); err != nil {
+		return "", maxRounds, true, err
 	}
-
-	respBody, err := c.sendRequest(ctx, reqBody)
-	if err != nil {
-		return "", maxRounds, true, fmt.Errorf("summary request: %w", err)
-	}
-
-	var resp ToolResponse
-	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return "", maxRounds, true, fmt.Errorf("summary parse: %w", err)
-	}
-
-	if resp.Error != nil {
-		return "", maxRounds, true, fmt.Errorf("summary API error: %s: %s", resp.Error.Type, resp.Error.Message)
-	}
-
-	totalInput += resp.Usage.InputTokens
-	totalOutput += resp.Usage.OutputTokens
-	totalCacheCreation += resp.Usage.CacheCreationInputTokens
-	totalCacheRead += resp.Usage.CacheReadInputTokens
-
-	analysis := extractText(resp.Content)
-
-	slog.Info("tool loop complete (forced summary)",
-		"totalRounds", maxRounds,
-		"totalInputTokens", totalInput,
-		"totalOutputTokens", totalOutput,
-		"analysisLen", len(analysis))
-
-	if len(analysis) == 0 {
-		slog.Warn("forced summary produced empty analysis", "contentBlocks", len(resp.Content))
-	}
-
-	c.metrics.RecordClaudeUsage(c.source, "all", model, totalInput, totalOutput, totalCacheCreation, totalCacheRead)
-	return analysis, maxRounds, true, nil
+	analysis, err := c.runForcedSummary(ctx, model, systemPrompt, tools, messages,
+		&totalInput, &totalOutput, &totalCacheCreation, &totalCacheRead)
+	return analysis, maxRounds, true, err
 }
 
-func extractText(blocks []ContentBlock) string {
-	var parts []string
-	for _, b := range blocks {
-		if b.Type == "text" && b.Text != "" {
-			parts = append(parts, b.Text)
-		}
+// runForcedSummary issues the final tool-less request after max rounds.
+func (c *ClaudeClient) runForcedSummary(ctx context.Context, model, systemPrompt string,
+	tools []anthropic.ToolUnionParam, messages []anthropic.MessageParam,
+	totalInput, totalOutput, totalCacheCreation, totalCacheRead *int64,
+) (string, error) {
+	msg, err := c.sdk.Messages.New(ctx, anthropic.MessageNewParams{
+		Model: anthropic.Model(model), MaxTokens: 4096, System: systemBlocks(systemPrompt),
+		Tools:      toolsWithCachedTail(tools),
+		ToolChoice: anthropic.ToolChoiceUnionParam{OfNone: &anthropic.ToolChoiceNoneParam{}},
+		Messages:   messages,
+	})
+	if err != nil {
+		return "", fmt.Errorf("summary: %w", err)
 	}
-	return strings.Join(parts, "\n")
+
+	*totalInput += msg.Usage.InputTokens
+	*totalOutput += msg.Usage.OutputTokens
+	*totalCacheCreation += msg.Usage.CacheCreationInputTokens
+	*totalCacheRead += msg.Usage.CacheReadInputTokens
+	analysis := extractText(msg)
+	slog.Info("tool loop complete (forced summary)", "totalInputTokens", *totalInput,
+		"totalOutputTokens", *totalOutput, "analysisLen", len(analysis))
+	if len(analysis) == 0 {
+		slog.Warn("forced summary produced empty analysis", "contentBlocks", len(msg.Content))
+	}
+	return analysis, nil
+}
+
+// appendTextToLastUserMessage appends a text block to the last (user) message.
+func appendTextToLastUserMessage(messages []anthropic.MessageParam, text string) error {
+	if len(messages) == 0 {
+		return errors.New("internal: messages slice is empty when appending forced-summary text")
+	}
+	last := &messages[len(messages)-1]
+	if last.Role != anthropic.MessageParamRoleUser {
+		return fmt.Errorf("internal: last message role is %q, expected user", string(last.Role))
+	}
+	last.Content = append(last.Content, anthropic.NewTextBlock(text))
+	return nil
 }

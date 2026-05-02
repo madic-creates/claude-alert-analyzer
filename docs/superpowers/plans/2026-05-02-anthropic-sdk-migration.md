@@ -839,18 +839,29 @@ type ClaudeClient struct {
 // is responsible for body-size capping and latency-histogram observation; the
 // SDK client itself only deals with API semantics.
 //
-// cfg.APIKey and cfg.AuthToken are passed unconditionally so the SDK never
-// falls back to its own ANTHROPIC_*_KEY / ANTHROPIC_AUTH_TOKEN env-var
-// lookups. main.go is the single source of truth for these values and is
-// expected to have unset the env vars before this constructor is called.
+// Auth options are passed only when the corresponding field is non-empty.
+// main.go is the single source of truth: it reads exactly one of
+// ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN, validates the choice, and
+// (in T6/T7) unsets all ANTHROPIC_* env vars before constructing this client
+// so the SDK has no env-var fallback path.
+//
+// IMPORTANT: do NOT pass empty values via option.WithAPIKey("") or
+// option.WithAuthToken(""). The SDK sets the corresponding header
+// unconditionally — `Authorization: Bearer ` (literal, empty value) and
+// `X-Api-Key: ` — which is RFC-7235 malformed and rejected by strict
+// reverse proxies (CDN WAFs, OpenRouter, auth-translating proxies).
 func NewClaudeClient(cfg BaseConfig, transport http.RoundTripper) *ClaudeClient {
 	httpClient := &http.Client{Timeout: 120 * time.Second, Transport: transport}
 
 	opts := []option.RequestOption{
 		option.WithHTTPClient(httpClient),
 		option.WithMaxRetries(2),
-		option.WithAPIKey(cfg.APIKey),
-		option.WithAuthToken(cfg.AuthToken),
+	}
+	if cfg.APIKey != "" {
+		opts = append(opts, option.WithAPIKey(cfg.APIKey))
+	}
+	if cfg.AuthToken != "" {
+		opts = append(opts, option.WithAuthToken(cfg.AuthToken))
 	}
 	if cfg.APIBaseURL != "" {
 		opts = append(opts, option.WithBaseURL(cfg.APIBaseURL))

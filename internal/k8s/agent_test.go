@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 )
 
@@ -282,19 +283,35 @@ func TestAgentSystemPromptForRounds(t *testing.T) {
 }
 
 func TestKubectlTool_Definition(t *testing.T) {
-	if kubectlTool.Name != "kubectl_exec" {
-		t.Errorf("kubectlTool.Name = %q, want kubectl_exec", kubectlTool.Name)
+	tp := kubectlTool.OfTool
+	if tp == nil {
+		t.Fatal("kubectlTool.OfTool is nil")
 	}
-	if _, ok := kubectlTool.InputSchema.Properties["command"]; !ok {
+	if tp.Name != "kubectl_exec" {
+		t.Errorf("kubectlTool.Name = %q, want kubectl_exec", tp.Name)
+	}
+	props, ok := tp.InputSchema.Properties.(map[string]any)
+	if !ok {
+		t.Fatalf("kubectlTool.InputSchema.Properties is not map[string]any: %T", tp.InputSchema.Properties)
+	}
+	if _, ok := props["command"]; !ok {
 		t.Error("kubectlTool.InputSchema missing 'command' property")
 	}
 }
 
 func TestPromqlTool_Definition(t *testing.T) {
-	if promqlTool.Name != "promql_query" {
-		t.Errorf("promqlTool.Name = %q, want promql_query", promqlTool.Name)
+	tp := promqlTool.OfTool
+	if tp == nil {
+		t.Fatal("promqlTool.OfTool is nil")
 	}
-	if _, ok := promqlTool.InputSchema.Properties["query"]; !ok {
+	if tp.Name != "promql_query" {
+		t.Errorf("promqlTool.Name = %q, want promql_query", tp.Name)
+	}
+	props, ok := tp.InputSchema.Properties.(map[string]any)
+	if !ok {
+		t.Fatalf("promqlTool.InputSchema.Properties is not map[string]any: %T", tp.InputSchema.Properties)
+	}
+	if _, ok := props["query"]; !ok {
 		t.Error("promqlTool.InputSchema missing 'query' property")
 	}
 }
@@ -496,7 +513,7 @@ type fakeToolLoopRunner struct {
 
 func (f *fakeToolLoopRunner) RunToolLoop(
 	ctx context.Context, model, system, user string,
-	tools []shared.Tool, maxRounds int,
+	tools []anthropic.ToolUnionParam, maxRounds int,
 	handleTool func(name string, input json.RawMessage) (string, error),
 ) (string, int, bool, error) {
 	f.captured = user
@@ -722,7 +739,7 @@ type fakeToolLoopRunnerExhausted struct {
 
 func (f *fakeToolLoopRunnerExhausted) RunToolLoop(
 	ctx context.Context, model, system, user string,
-	tools []shared.Tool, maxRounds int,
+	tools []anthropic.ToolUnionParam, maxRounds int,
 	handleTool func(name string, input json.RawMessage) (string, error),
 ) (string, int, bool, error) {
 	return "forced summary text", f.maxRounds, true, nil

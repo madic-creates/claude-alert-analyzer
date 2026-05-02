@@ -10,38 +10,25 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	dto "github.com/prometheus/client_model/go"
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 )
 
-func TestSendRequest_OversizedResponseIsBounded(t *testing.T) {
-	// Serve a response body larger than MaxResponseBytes (2 MiB).
-	oversized := 3 * 1024 * 1024 // 3 MiB
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.WriteHeader(http.StatusOK)
-		// Write oversized payload of repeated 'A' bytes.
-		buf := make([]byte, oversized)
-		for i := range buf {
-			buf[i] = 'A'
-		}
-		w.Write(buf)
-	}))
-	defer srv.Close()
-
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
-	body, err := client.sendRequest(context.Background(), map[string]string{"msg": "hi"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(body) > MaxResponseBytes {
-		t.Errorf("response should be bounded to %d bytes, got %d", MaxResponseBytes, len(body))
-	}
-	if len(body) != MaxResponseBytes {
-		t.Errorf("expected exactly %d bytes (LimitReader cap), got %d", MaxResponseBytes, len(body))
-	}
+// newTestClient builds a ClaudeClient pointed at the test server using the
+// SDK directly. retries=0 disables retries (the default behavior for tests
+// that assert error propagation); retries>0 enables them. The api-key value
+// is sent as the X-Api-Key header.
+func newTestClient(t *testing.T, srv *httptest.Server, model, apiKey string, retries int) *ClaudeClient {
+	t.Helper()
+	httpClient := srv.Client()
+	sdk := anthropic.NewClient(
+		option.WithBaseURL(srv.URL),
+		option.WithHTTPClient(httpClient),
+		option.WithAPIKey(apiKey),
+		option.WithMaxRetries(retries),
+	)
+	return &ClaudeClient{sdk: &sdk, Model: model}
 }
 
 // ---- Analyze tests ----
@@ -56,7 +43,7 @@ func TestAnalyze_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
+	client := newTestClient(t, srv, "claude-3", "test-key", 0)
 	result, err := client.Analyze(context.Background(), "test-model", "sys prompt", "user prompt")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -79,7 +66,7 @@ func TestAnalyze_MultipleTextBlocks(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
+	client := newTestClient(t, srv, "claude-3", "test-key", 0)
 	result, err := client.Analyze(context.Background(), "test-model", "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -99,7 +86,7 @@ func TestAnalyze_EmptyContent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
+	client := newTestClient(t, srv, "claude-3", "test-key", 0)
 	result, err := client.Analyze(context.Background(), "test-model", "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -123,36 +110,13 @@ func TestAnalyze_NonTextBlocksIgnored(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
+	client := newTestClient(t, srv, "claude-3", "test-key", 0)
 	result, err := client.Analyze(context.Background(), "test-model", "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result != "Analysis result." {
 		t.Errorf("unexpected result: %q", result)
-	}
-}
-
-func TestAnalyze_APIErrorInBody(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{
-			"error": {"type": "invalid_request_error", "message": "model not found"},
-			"content": []
-		}`)
-	}))
-	defer srv.Close()
-
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "bad-model"}
-	_, err := client.Analyze(context.Background(), "test-model", "sys", "user")
-	if err == nil {
-		t.Fatal("expected error for API error body")
-	}
-	if !strings.Contains(err.Error(), "invalid_request_error") {
-		t.Errorf("error should mention error type, got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "model not found") {
-		t.Errorf("error should mention error message, got: %v", err)
 	}
 }
 
@@ -172,7 +136,7 @@ func TestAnalyze_MaxTokensStopReason(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
+	client := newTestClient(t, srv, "claude-3", "test-key", 0)
 	result, err := client.Analyze(context.Background(), "test-model", "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error for max_tokens stop reason: %v", err)
@@ -182,59 +146,24 @@ func TestAnalyze_MaxTokensStopReason(t *testing.T) {
 	}
 }
 
+// TestAnalyze_HTTPError verifies that a non-2xx HTTP status from the API is
+// surfaced as an error containing the status code so operators can identify
+// rate-limit and server-error responses in logs. The SDK wraps non-2xx
+// responses in an *anthropic.Error whose Error() string includes the status.
 func TestAnalyze_HTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
-		fmt.Fprint(w, "rate limited")
+		fmt.Fprint(w, `{"error":{"type":"rate_limit_error","message":"rate limited"}}`)
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3", retryDelays: []time.Duration{}}
+	client := newTestClient(t, srv, "claude-3", "test-key", 0)
 	_, err := client.Analyze(context.Background(), "test-model", "sys", "user")
 	if err == nil {
 		t.Fatal("expected error for non-200 response")
 	}
 	if !strings.Contains(err.Error(), "429") {
 		t.Errorf("error should contain status code, got: %v", err)
-	}
-}
-
-// TestSendRequest_AlwaysUsesXAPIKey verifies that x-api-key and anthropic-version
-// are always sent regardless of the configured BaseURL. The URL-conditional
-// Bearer-auth branch was removed as a breaking change; operators using OpenRouter
-// must front-end with an auth-translating proxy.
-func TestSendRequest_AlwaysUsesXAPIKey(t *testing.T) {
-	for _, baseURL := range []string{
-		"https://api.anthropic.com/v1/messages",
-		"https://openrouter.ai/api/v1/messages",
-		"https://example.com/proxy",
-	} {
-		t.Run(baseURL, func(t *testing.T) {
-			var gotKey, gotAuth, gotVersion string
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				gotKey = r.Header.Get("x-api-key")
-				gotAuth = r.Header.Get("Authorization")
-				gotVersion = r.Header.Get("anthropic-version")
-				w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`))
-			}))
-			defer srv.Close()
-
-			c := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "tok", Model: "m"}
-			c.retryDelays = []time.Duration{}
-			_, err := c.Analyze(context.Background(), "m", "s", "u")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if gotKey != "tok" {
-				t.Errorf("x-api-key: got %q, want tok", gotKey)
-			}
-			if gotAuth != "" {
-				t.Errorf("Authorization should be empty, got %q", gotAuth)
-			}
-			if gotVersion != "2023-06-01" {
-				t.Errorf("anthropic-version: got %q, want 2023-06-01", gotVersion)
-			}
-		})
 	}
 }
 
@@ -248,12 +177,36 @@ func TestAnalyze_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
+	client := newTestClient(t, srv, "claude-3", "test-key", 0)
 	_, err := client.Analyze(ctx, "test-model", "sys", "user")
 	if err == nil {
 		t.Fatal("expected error for cancelled context")
 	}
 }
+
+// TestAnalyze_ParseResponseError verifies that when the Claude API returns a
+// 200 OK but with a non-JSON body (e.g. a CDN maintenance page, a load-balancer
+// error page, or a half-written response), Analyze propagates a JSON parse
+// error rather than silently returning empty output. The SDK surfaces JSON
+// errors via its respjson layer; we only need to verify that an error is
+// returned (the precise wording is the SDK's responsibility).
+func TestAnalyze_ParseResponseError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		// Simulate a CDN or proxy returning an HTML maintenance page instead of JSON.
+		fmt.Fprint(w, `<!DOCTYPE html><html><body>Service Unavailable</body></html>`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv, "claude-3", "test-key", 0)
+	_, err := client.Analyze(context.Background(), "test-model", "sys", "user")
+	if err == nil {
+		t.Fatal("expected error when API returns non-JSON body, got nil")
+	}
+}
+
+// ---- RunToolLoop tests ----
 
 func TestRunToolLoop_EndTurnImmediately(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -267,8 +220,10 @@ func TestRunToolLoop_EndTurnImmediately(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
-	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+	client := newTestClient(t, srv, "test", "test-key", 0)
+	tools := []anthropic.ToolUnionParam{{
+		OfTool: &anthropic.ToolParam{Name: "execute_command"},
+	}}
 
 	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) {
@@ -310,8 +265,10 @@ func TestRunToolLoop_OneToolRoundThenEnd(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
-	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+	client := newTestClient(t, srv, "test", "test-key", 0)
+	tools := []anthropic.ToolUnionParam{{
+		OfTool: &anthropic.ToolParam{Name: "execute_command"},
+	}}
 
 	var toolCalls int
 	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 10,
@@ -362,8 +319,10 @@ func TestRunToolLoop_MaxRoundsForcesSummary(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
-	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+	client := newTestClient(t, srv, "test", "test-key", 0)
+	tools := []anthropic.ToolUnionParam{{
+		OfTool: &anthropic.ToolParam{Name: "execute_command"},
+	}}
 
 	var toolCalls int
 	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 2,
@@ -386,42 +345,20 @@ func TestRunToolLoop_MaxRoundsForcesSummary(t *testing.T) {
 func TestRunToolLoop_APIError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprint(w, "internal error")
+		fmt.Fprint(w, `{"error":{"type":"api_error","message":"internal error"}}`)
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test", retryDelays: []time.Duration{}}
-	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+	client := newTestClient(t, srv, "test", "test-key", 0)
+	tools := []anthropic.ToolUnionParam{{
+		OfTool: &anthropic.ToolParam{Name: "execute_command"},
+	}}
 
 	_, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) { return "", nil })
 
 	if err == nil {
 		t.Fatal("expected error for 500 response")
-	}
-}
-
-func TestRunToolLoop_APIErrorInBody(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{
-			"error": {"type": "overloaded_error", "message": "Service temporarily overloaded"},
-			"content": []
-		}`)
-	}))
-	defer srv.Close()
-
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
-	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
-
-	_, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 10,
-		func(name string, input json.RawMessage) (string, error) { return "", nil })
-
-	if err == nil {
-		t.Fatal("expected error for API error in body")
-	}
-	if !strings.Contains(err.Error(), "overloaded_error") {
-		t.Errorf("error should mention error type, got: %v", err)
 	}
 }
 
@@ -452,9 +389,15 @@ func TestRunToolLoop_ToolHandlerError(t *testing.T) {
 			lastMsg := msgs[len(msgs)-1].(map[string]any)
 			content := lastMsg["content"].([]any)
 			toolResult := content[0].(map[string]any)
-			gotContent, _ := toolResult["content"].(string)
-			if !strings.HasPrefix(gotContent, "error:") {
-				t.Errorf("tool result content should start with 'error:', got: %q", gotContent)
+			// Tool result content is now a list of text blocks (SDK shape).
+			trContent, _ := toolResult["content"].([]any)
+			if len(trContent) == 0 {
+				t.Fatalf("tool_result content list is empty: %+v", toolResult)
+			}
+			textBlock, _ := trContent[0].(map[string]any)
+			gotText, _ := textBlock["text"].(string)
+			if !strings.HasPrefix(gotText, "error:") {
+				t.Errorf("tool result text should start with 'error:', got: %q", gotText)
 			}
 			if toolResult["is_error"] != true {
 				t.Errorf("tool result should have is_error=true when handleTool returns an error, got: %v", toolResult["is_error"])
@@ -469,8 +412,10 @@ func TestRunToolLoop_ToolHandlerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
-	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+	client := newTestClient(t, srv, "test", "test-key", 0)
+	tools := []anthropic.ToolUnionParam{{
+		OfTool: &anthropic.ToolParam{Name: "execute_command"},
+	}}
 
 	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 5,
 		func(name string, input json.RawMessage) (string, error) {
@@ -512,10 +457,10 @@ func TestRunToolLoop_MultipleToolsInOneRound(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
-	tools := []Tool{
-		{Name: "tool_a", Description: "first", InputSchema: InputSchema{Type: "object"}},
-		{Name: "tool_b", Description: "second", InputSchema: InputSchema{Type: "object"}},
+	client := newTestClient(t, srv, "test", "test-key", 0)
+	tools := []anthropic.ToolUnionParam{
+		{OfTool: &anthropic.ToolParam{Name: "tool_a"}},
+		{OfTool: &anthropic.ToolParam{Name: "tool_b"}},
 	}
 
 	var calledTools []string
@@ -565,8 +510,10 @@ func TestRunToolLoop_MaxTokensStopReason(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
-	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+	client := newTestClient(t, srv, "test", "test-key", 0)
+	tools := []anthropic.ToolUnionParam{{
+		OfTool: &anthropic.ToolParam{Name: "execute_command"},
+	}}
 
 	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) {
@@ -629,8 +576,10 @@ func TestRunToolLoop_MaxRounds_NoConsecutiveUserMessages(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
-	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+	client := newTestClient(t, srv, "test", "test-key", 0)
+	tools := []anthropic.ToolUnionParam{{
+		OfTool: &anthropic.ToolParam{Name: "execute_command"},
+	}}
 
 	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil })
@@ -696,13 +645,15 @@ func TestRunToolLoop_SummaryRequestFails(t *testing.T) {
 		} else {
 			// Forced summary request fails
 			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprint(w, "service unavailable")
+			fmt.Fprint(w, `{"error":{"type":"overloaded_error","message":"service unavailable"}}`)
 		}
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test", retryDelays: []time.Duration{}}
-	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+	client := newTestClient(t, srv, "test", "test-key", 0)
+	tools := []anthropic.ToolUnionParam{{
+		OfTool: &anthropic.ToolParam{Name: "execute_command"},
+	}}
 
 	_, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "ok", nil })
@@ -754,8 +705,10 @@ func TestRunToolLoop_SummaryRequestHasToolChoiceNone(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
-	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+	client := newTestClient(t, srv, "test", "test-key", 0)
+	tools := []anthropic.ToolUnionParam{{
+		OfTool: &anthropic.ToolParam{Name: "execute_command"},
+	}}
 
 	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil })
@@ -774,253 +727,10 @@ func TestRunToolLoop_SummaryRequestHasToolChoiceNone(t *testing.T) {
 	}
 }
 
-// TestRunToolLoop_SummaryAPIErrorInBody verifies that when maxRounds is exhausted
-// and the forced-summary response is a 200 OK containing an API error object in the
-// body (e.g. an overload error reported inline by the API), the error is returned
-// with a "summary API error:" prefix rather than silently producing empty output.
-func TestRunToolLoop_SummaryAPIErrorInBody(t *testing.T) {
-	var callCount atomic.Int32
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		call := callCount.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-
-		if call == 1 {
-			// Round 1 (only round, maxRounds=1): request a tool call.
-			fmt.Fprint(w, `{
-				"content": [
-					{"type": "tool_use", "id": "toolu_1", "name": "execute_command", "input": {"command": ["uptime"]}}
-				],
-				"stop_reason": "tool_use",
-				"usage": {"input_tokens": 50, "output_tokens": 10}
-			}`)
-		} else {
-			// Call 2 = forced summary. Return 200 OK but with an API error in the body.
-			fmt.Fprint(w, `{
-				"error": {"type": "overloaded_error", "message": "Service temporarily overloaded"},
-				"content": []
-			}`)
-		}
-	}))
-	defer srv.Close()
-
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
-	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
-
-	_, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 1,
-		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil })
-
-	if err == nil {
-		t.Fatal("expected error when summary response contains API error")
-	}
-	if !strings.Contains(err.Error(), "summary API error") {
-		t.Errorf("error should mention 'summary API error', got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "overloaded_error") {
-		t.Errorf("error should include the API error type, got: %v", err)
-	}
-}
-
-// TestAnalyze_ParseResponseError verifies that when the Claude API returns a
-// 200 OK but with a non-JSON body (e.g. a CDN maintenance page, a load-balancer
-// error page, or a half-written response), Analyze propagates a clear
-// "parse response" error rather than silently returning empty output. Without
-// this the caller would receive ("", nil) and the pipeline would fire a
-// failure notification saying "Analysis produced empty result" with no hint
-// that the API returned garbage — making the failure much harder to diagnose.
-func TestAnalyze_ParseResponseError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
-		w.WriteHeader(http.StatusOK)
-		// Simulate a CDN or proxy returning an HTML maintenance page instead of JSON.
-		fmt.Fprint(w, `<!DOCTYPE html><html><body>Service Unavailable</body></html>`)
-	}))
-	defer srv.Close()
-
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
-	_, err := client.Analyze(context.Background(), "test-model", "sys", "user")
-	if err == nil {
-		t.Fatal("expected error when API returns non-JSON body, got nil")
-	}
-	if !strings.Contains(err.Error(), "parse response") {
-		t.Errorf("error should mention 'parse response', got: %v", err)
-	}
-}
-
-// TestSendRequest_DurationHistogramObservedOnSuccess verifies that the
-// durationHistogram is observed exactly once for a successful round-trip.
-// Without this, claude_api_duration_seconds would never increment regardless
-// of how many successful API calls are made, making latency invisible.
-func TestSendRequest_DurationHistogramObservedOnSuccess(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"content": [], "usage": {}}`)
-	}))
-	defer srv.Close()
-
-	hist := prometheus.NewHistogram(prometheus.HistogramOpts{
-		Name: "test_sendrequest_duration_seconds",
-		Help: "test histogram",
-	})
-	client := &ClaudeClient{
-		HTTP:              srv.Client(),
-		BaseURL:           srv.URL,
-		APIKey:            "test-key",
-		Model:             "test",
-		durationHistogram: hist,
-	}
-	if _, err := client.sendRequest(context.Background(), map[string]string{"k": "v"}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var m dto.Metric
-	if err := hist.Write(&m); err != nil {
-		t.Fatalf("read histogram: %v", err)
-	}
-	if m.Histogram.GetSampleCount() != 1 {
-		t.Errorf("expected 1 histogram observation, got %d", m.Histogram.GetSampleCount())
-	}
-	if m.Histogram.GetSampleSum() <= 0 {
-		t.Errorf("expected positive duration sum, got %f", m.Histogram.GetSampleSum())
-	}
-}
-
-// TestSendRequest_DurationHistogramObservedOnNonOK verifies that the
-// durationHistogram is observed even when the Claude API returns a non-200
-// status code (e.g. 429 rate limit, 500 server error). Recording latency for
-// failed round-trips lets operators correlate error spikes with latency changes
-// — e.g. distinguishing a fast 429 (normal back-pressure) from a slow 500
-// (upstream overload). Before this fix, only successful calls contributed to
-// claude_api_duration_seconds, making error latency invisible.
-func TestSendRequest_DurationHistogramObservedOnNonOK(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusTooManyRequests)
-		fmt.Fprint(w, `{"error":{"type":"rate_limit_error","message":"too many requests"}}`)
-	}))
-	defer srv.Close()
-
-	hist := prometheus.NewHistogram(prometheus.HistogramOpts{
-		Name: "test_sendrequest_nonok_duration_seconds",
-		Help: "test histogram for non-OK responses",
-	})
-	client := &ClaudeClient{
-		HTTP:              srv.Client(),
-		BaseURL:           srv.URL,
-		APIKey:            "test-key",
-		Model:             "test",
-		durationHistogram: hist,
-		retryDelays:       []time.Duration{},
-	}
-	_, err := client.sendRequest(context.Background(), map[string]string{"k": "v"})
-	if err == nil {
-		t.Fatal("expected error for 429 response, got nil")
-	}
-
-	var m dto.Metric
-	if err := hist.Write(&m); err != nil {
-		t.Fatalf("read histogram: %v", err)
-	}
-	if m.Histogram.GetSampleCount() != 1 {
-		t.Errorf("expected 1 histogram observation for failed round-trip, got %d; "+
-			"latency must be recorded even when the API returns a non-200 status",
-			m.Histogram.GetSampleCount())
-	}
-	if m.Histogram.GetSampleSum() <= 0 {
-		t.Errorf("expected positive duration sum for failed round-trip, got %f", m.Histogram.GetSampleSum())
-	}
-}
-
-// TestSendRequest_RetriesOnTransientError verifies that sendRequest retries on
-// transient HTTP errors (5xx, 429) and succeeds when a later attempt returns 200.
-func TestSendRequest_RetriesOnTransientError(t *testing.T) {
-	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := calls.Add(1)
-		if n < 3 {
-			// First two attempts fail with transient errors.
-			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprint(w, "temporarily unavailable")
-			return
-		}
-		// Third attempt succeeds.
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"content":[{"type":"text","text":"ok"}],"usage":{}}`)
-	}))
-	defer srv.Close()
-
-	client := &ClaudeClient{
-		HTTP:        srv.Client(),
-		BaseURL:     srv.URL,
-		APIKey:      "test-key",
-		Model:       "test",
-		retryDelays: []time.Duration{0, 0}, // zero-delay retries to keep test fast
-	}
-	result, err := client.Analyze(context.Background(), "test-model", "sys", "user")
-	if err != nil {
-		t.Fatalf("expected success after retries, got error: %v", err)
-	}
-	if result != "ok" {
-		t.Errorf("expected result %q, got %q", "ok", result)
-	}
-	if n := calls.Load(); n != 3 {
-		t.Errorf("expected 3 attempts (1 initial + 2 retries), got %d", n)
-	}
-}
-
-// TestSendRequest_NoRetryOnClientError verifies that sendRequest does NOT retry
-// on 4xx client errors (except 429), since these indicate a permanent problem.
-func TestSendRequest_NoRetryOnClientError(t *testing.T) {
-	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprint(w, `{"error":{"type":"invalid_request_error","message":"bad"}}`)
-	}))
-	defer srv.Close()
-
-	client := &ClaudeClient{
-		HTTP:        srv.Client(),
-		BaseURL:     srv.URL,
-		APIKey:      "test-key",
-		Model:       "test",
-		retryDelays: []time.Duration{0, 0},
-	}
-	_, err := client.sendRequest(context.Background(), map[string]string{"k": "v"})
-	if err == nil {
-		t.Fatal("expected error for 400 response")
-	}
-	if n := calls.Load(); n != 1 {
-		t.Errorf("expected exactly 1 attempt for non-transient error, got %d", n)
-	}
-}
-
-// TestSendRequest_MarshalFailure verifies that sendRequest returns a clear
-// "marshal request" error when the request body cannot be marshalled to JSON.
-// This protects future callers that may pass non-serialisable types (channels,
-// functions, etc.) from receiving a confusing HTTP error or a silent failure.
-func TestSendRequest_MarshalFailure(t *testing.T) {
-	client := &ClaudeClient{
-		HTTP:    http.DefaultClient,
-		BaseURL: "http://127.0.0.1:1", // unreachable — should never be dialled
-		APIKey:  "test-key",
-		Model:   "test",
-	}
-	// Channels are not JSON-serialisable and cause json.Marshal to return an error.
-	_, err := client.sendRequest(context.Background(), make(chan int))
-	if err == nil {
-		t.Fatal("expected error for unmarshalable body, got nil")
-	}
-	if !strings.Contains(err.Error(), "marshal request") {
-		t.Errorf("expected 'marshal request' in error, got: %v", err)
-	}
-}
-
 // TestRunToolLoop_SummaryParseFailure verifies that when max rounds are
 // exhausted and the forced-summary response is a 200 OK with a non-JSON body
-// (e.g. a proxy returning an HTML error page), RunToolLoop returns a clear
-// "summary parse" error rather than silently returning empty output. This
-// makes it obvious at the call site that the summary request failed at the
-// JSON parsing stage rather than appearing as an unexplained empty analysis.
+// (e.g. a proxy returning an HTML error page), RunToolLoop returns an error
+// rather than silently returning empty output.
 func TestRunToolLoop_SummaryParseFailure(t *testing.T) {
 	var callCount atomic.Int32
 
@@ -1046,8 +756,10 @@ func TestRunToolLoop_SummaryParseFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
-	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+	client := newTestClient(t, srv, "test", "test-key", 0)
+	tools := []anthropic.ToolUnionParam{{
+		OfTool: &anthropic.ToolParam{Name: "execute_command"},
+	}}
 
 	_, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil })
@@ -1055,24 +767,25 @@ func TestRunToolLoop_SummaryParseFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when summary response is not valid JSON, got nil")
 	}
-	if !strings.Contains(err.Error(), "summary parse") {
-		t.Errorf("error should mention 'summary parse', got: %v", err)
+	if !strings.Contains(err.Error(), "summary") {
+		t.Errorf("error should mention 'summary', got: %v", err)
 	}
 }
 
-// TestRunToolLoop_FallbackWhenNoToolRoundsOccurred covers the defensive else-branch
-// in the forced-summary code (claude.go). When maxRounds=0, the for loop does not
-// execute, so messages[0].Content remains the initial string userPrompt rather than
-// a []ContentBlock. The type assertion fails and the else-branch appends a new user
-// turn as a fallback before issuing the summary request.
+// TestRunToolLoop_FallbackWhenNoToolRoundsOccurred covers the input-validation
+// for maxRounds=0: RunToolLoop must return an error immediately without making
+// any API calls.
 func TestRunToolLoop_FallbackWhenNoToolRoundsOccurred(t *testing.T) {
-	client := &ClaudeClient{HTTP: http.DefaultClient, BaseURL: "http://unused", APIKey: "test-key", Model: "test"}
-	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("API must not be called when maxRounds=0")
+	}))
+	defer srv.Close()
 
-	// maxRounds=0: RunToolLoop must return an error immediately without making
-	// any API calls. Previously the for loop silently skipped and the
-	// forced-summary path appended a second consecutive user message, which the
-	// Anthropic API rejects with 400 "roles must alternate".
+	client := newTestClient(t, srv, "test", "test-key", 0)
+	tools := []anthropic.ToolUnionParam{{
+		OfTool: &anthropic.ToolParam{Name: "execute_command"},
+	}}
+
 	_, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 0,
 		func(_ string, _ json.RawMessage) (string, error) {
 			t.Fatal("tool handler must not be called when maxRounds=0")
@@ -1092,16 +805,16 @@ func TestRunToolLoop_LastToolHasCacheControl(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}`))
 	}))
 	defer srv.Close()
 
-	c := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "x", Model: "m"}
-	c.retryDelays = []time.Duration{}
+	c := newTestClient(t, srv, "m", "x", 0)
 
-	tools := []Tool{
-		{Name: "a", Description: "first", InputSchema: InputSchema{Type: "object"}},
-		{Name: "b", Description: "second", InputSchema: InputSchema{Type: "object"}},
+	tools := []anthropic.ToolUnionParam{
+		{OfTool: &anthropic.ToolParam{Name: "a"}},
+		{OfTool: &anthropic.ToolParam{Name: "b"}},
 	}
 	_, _, _, err := c.RunToolLoop(context.Background(), "m", "sys", "user", tools, 1, func(string, json.RawMessage) (string, error) { return "", nil })
 	if err != nil {
@@ -1124,12 +837,12 @@ func TestAnalyze_UsesProvidedModel(t *testing.T) {
 	var capturedBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`))
 	}))
 	defer srv.Close()
 
-	c := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "x", Model: "default-model"}
-	c.retryDelays = []time.Duration{}
+	c := newTestClient(t, srv, "default-model", "x", 0)
 
 	if _, err := c.Analyze(context.Background(), "override-model", "sys", "usr"); err != nil {
 		t.Fatal(err)
@@ -1144,12 +857,12 @@ func TestAnalyze_SystemPromptHasCacheControl(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`))
 	}))
 	defer srv.Close()
 
-	c := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "x", Model: "m"}
-	c.retryDelays = []time.Duration{}
+	c := newTestClient(t, srv, "m", "x", 0)
 	if _, err := c.Analyze(context.Background(), "m", "system", "user"); err != nil {
 		t.Fatal(err)
 	}
@@ -1188,17 +901,20 @@ func TestRunToolLoop_LastToolResultHasCacheControl(t *testing.T) {
 		}
 		// Round 1 returns tool_use, round 2 returns end_turn.
 		if round == 1 {
+			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"content":[{"type":"tool_use","id":"t1","name":"a","input":{}}],"stop_reason":"tool_use"}`))
 		} else {
+			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}`))
 		}
 	}))
 	defer srv.Close()
 
-	c := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "x", Model: "m"}
-	c.retryDelays = []time.Duration{}
+	c := newTestClient(t, srv, "m", "x", 0)
 
-	tools := []Tool{{Name: "a", Description: "x", InputSchema: InputSchema{Type: "object"}}}
+	tools := []anthropic.ToolUnionParam{{
+		OfTool: &anthropic.ToolParam{Name: "a"},
+	}}
 	_, rounds, _, err := c.RunToolLoop(context.Background(), "m", "sys", "user", tools, 5,
 		func(string, json.RawMessage) (string, error) { return "tool-output-data", nil })
 	if err != nil {
@@ -1218,17 +934,20 @@ func TestRunToolLoop_UsesProvidedModel(t *testing.T) {
 		round++
 		// First call returns a tool_use, second call returns end_turn forced summary.
 		if round == 1 {
+			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"content":[{"type":"tool_use","id":"t1","name":"a","input":{}}],"stop_reason":"tool_use"}`))
 		} else {
+			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}`))
 		}
 	}))
 	defer srv.Close()
 
-	c := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "x", Model: "default-model"}
-	c.retryDelays = []time.Duration{}
+	c := newTestClient(t, srv, "default-model", "x", 0)
 
-	tools := []Tool{{Name: "a", Description: "x", InputSchema: InputSchema{Type: "object"}}}
+	tools := []anthropic.ToolUnionParam{{
+		OfTool: &anthropic.ToolParam{Name: "a"},
+	}}
 	_, _, _, err := c.RunToolLoop(context.Background(), "override-model", "sys", "usr", tools, 1,
 		func(string, json.RawMessage) (string, error) { return "out", nil })
 	if err != nil {
@@ -1241,5 +960,234 @@ func TestRunToolLoop_UsesProvidedModel(t *testing.T) {
 		if !strings.Contains(string(b), `"model":"override-model"`) {
 			t.Errorf("request %d missing override-model: %s", i, b)
 		}
+	}
+}
+
+// ---- Retry tests ----
+
+// TestClaudeClient_RetriesOnTransientError verifies that the SDK client retries
+// on transient HTTP errors (5xx, 429) and succeeds when a later attempt
+// returns 200. With option.WithMaxRetries(2), up to 3 attempts are made.
+func TestClaudeClient_RetriesOnTransientError(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+		if n < 3 {
+			// First two attempts fail with transient errors.
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, `{"error":{"type":"overloaded_error","message":"temporarily unavailable"}}`)
+			return
+		}
+		// Third attempt succeeds.
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"content":[{"type":"text","text":"ok"}],"usage":{}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv, "test", "test-key", 2)
+	result, err := client.Analyze(context.Background(), "test-model", "sys", "user")
+	if err != nil {
+		t.Fatalf("expected success after retries, got error: %v", err)
+	}
+	if result != "ok" {
+		t.Errorf("expected result %q, got %q", "ok", result)
+	}
+	if n := calls.Load(); n != 3 {
+		t.Errorf("expected 3 attempts (1 initial + 2 retries), got %d", n)
+	}
+}
+
+// TestClaudeClient_NoRetryOnClientError verifies that the SDK does NOT retry
+// on 4xx client errors (except 429), since these indicate a permanent problem.
+func TestClaudeClient_NoRetryOnClientError(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":{"type":"invalid_request_error","message":"bad"}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv, "test", "test-key", 2)
+	_, err := client.Analyze(context.Background(), "test-model", "sys", "user")
+	if err == nil {
+		t.Fatal("expected error for 400 response")
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("expected exactly 1 attempt for non-transient error, got %d", n)
+	}
+}
+
+// ---- Auth header tests ----
+
+// TestNewClaudeClient_APIKeyHeader verifies that when BaseConfig.APIKey is set,
+// the SDK client sends the value as the X-Api-Key header on every request.
+func TestNewClaudeClient_APIKeyHeader(t *testing.T) {
+	var gotKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.Header.Get("X-Api-Key")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`))
+	}))
+	defer srv.Close()
+
+	cfg := BaseConfig{
+		APIKey:      "my-api-key",
+		APIBaseURL:  srv.URL,
+		ClaudeModel: "m",
+	}
+	c := NewClaudeClient(cfg, nil)
+	if _, err := c.Analyze(context.Background(), "m", "s", "u"); err != nil {
+		t.Fatal(err)
+	}
+	if gotKey != "my-api-key" {
+		t.Errorf("X-Api-Key: got %q, want %q", gotKey, "my-api-key")
+	}
+}
+
+// TestNewClaudeClient_AuthTokenHeader verifies that when BaseConfig.AuthToken
+// is set, the SDK client sends "Authorization: Bearer <token>" on every
+// request. This is the OpenRouter / proxy compatibility path.
+func TestNewClaudeClient_AuthTokenHeader(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`))
+	}))
+	defer srv.Close()
+
+	cfg := BaseConfig{
+		AuthToken:   "my-bearer-token",
+		APIBaseURL:  srv.URL,
+		ClaudeModel: "m",
+	}
+	c := NewClaudeClient(cfg, nil)
+	if _, err := c.Analyze(context.Background(), "m", "s", "u"); err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer my-bearer-token" {
+		t.Errorf("Authorization: got %q, want %q", gotAuth, "Bearer my-bearer-token")
+	}
+}
+
+// TestNewClaudeClient_APIKeyOnly_NoAuthorizationHeader verifies that when only
+// APIKey is configured, the outgoing request contains no Authorization header.
+// Without conditional WithAuthToken, the SDK sends "Authorization: Bearer "
+// (literally, with empty value) which is RFC-7235 malformed and rejected by
+// strict reverse proxies (CDN WAFs, OpenRouter, etc.).
+func TestNewClaudeClient_APIKeyOnly_NoAuthorizationHeader(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	c := NewClaudeClient(BaseConfig{
+		APIKey:      "tok",
+		AuthToken:   "",
+		APIBaseURL:  srv.URL,
+		ClaudeModel: "m",
+	}, srv.Client().Transport)
+	if _, err := c.Analyze(context.Background(), "m", "s", "u"); err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "" {
+		t.Errorf("Authorization header should be absent when only APIKey is set, got %q", gotAuth)
+	}
+}
+
+// TestNewClaudeClient_AuthTokenOnly_NoAPIKeyHeader is the symmetric guard for
+// the bearer-token case.
+func TestNewClaudeClient_AuthTokenOnly_NoAPIKeyHeader(t *testing.T) {
+	var gotKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.Header.Get("X-Api-Key")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	c := NewClaudeClient(BaseConfig{
+		APIKey:      "",
+		AuthToken:   "bearer-tok",
+		APIBaseURL:  srv.URL,
+		ClaudeModel: "m",
+	}, srv.Client().Transport)
+	if _, err := c.Analyze(context.Background(), "m", "s", "u"); err != nil {
+		t.Fatal(err)
+	}
+	if gotKey != "" {
+		t.Errorf("X-Api-Key header should be absent when only AuthToken is set, got %q", gotKey)
+	}
+}
+
+// TestRunToolLoop_RoundErrorIsWrappedWithRoundIndex verifies that when the
+// SDK returns an error mid-loop, RunToolLoop wraps it with "round N:" so
+// operators can see which round failed in the error message.
+func TestRunToolLoop_RoundErrorIsWrappedWithRoundIndex(t *testing.T) {
+	var callCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := callCount.Add(1)
+		if call == 1 {
+			// Round 1 returns a tool_use so the loop continues.
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{
+				"content":[{"type":"tool_use","id":"toolu_1","name":"execute_command","input":{"command":["uptime"]}}],
+				"stop_reason":"tool_use",
+				"usage":{"input_tokens":50,"output_tokens":10}
+			}`)
+			return
+		}
+		// Round 2 fails with 500.
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `{"type":"error","error":{"type":"api_error","message":"upstream"}}`)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv, "test-model", "test-key", 0)
+	tools := []anthropic.ToolUnionParam{{
+		OfTool: &anthropic.ToolParam{
+			Name: "execute_command", Description: anthropic.String("test"),
+			InputSchema: anthropic.ToolInputSchemaParam{Properties: map[string]any{}},
+		},
+	}}
+
+	_, _, _, err := c.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 5,
+		func(_ string, _ json.RawMessage) (string, error) { return "load: 0.1", nil })
+	if err == nil {
+		t.Fatal("expected error from round 2")
+	}
+	if !strings.Contains(err.Error(), "round 2") {
+		t.Errorf("error should mention 'round 2', got: %v", err)
+	}
+}
+
+// TestNewClaudeClient_AnthropicVersionHeader verifies that the SDK sends the
+// anthropic-version header on every request without any explicit configuration
+// from our code. The exact version is the SDK's responsibility; we only assert
+// it is non-empty.
+func TestNewClaudeClient_AnthropicVersionHeader(t *testing.T) {
+	var gotVersion string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotVersion = r.Header.Get("anthropic-version")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`))
+	}))
+	defer srv.Close()
+
+	cfg := BaseConfig{
+		APIKey:      "k",
+		APIBaseURL:  srv.URL,
+		ClaudeModel: "m",
+	}
+	c := NewClaudeClient(cfg, nil)
+	if _, err := c.Analyze(context.Background(), "m", "s", "u"); err != nil {
+		t.Fatal(err)
+	}
+	if gotVersion == "" {
+		t.Error("anthropic-version header must be non-empty")
 	}
 }

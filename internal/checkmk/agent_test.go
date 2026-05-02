@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 	"golang.org/x/crypto/ssh"
 )
@@ -33,7 +34,7 @@ type agentToolCall struct {
 
 func (r *capturingToolRunner) RunToolLoop(
 	_ context.Context, _, systemPrompt, _ string,
-	_ []shared.Tool, maxRounds int,
+	_ []anthropic.ToolUnionParam, maxRounds int,
 	handleTool func(string, json.RawMessage) (string, error),
 ) (string, int, bool, error) {
 	r.capturedSystemPrompt = systemPrompt
