@@ -252,9 +252,13 @@ use the per-severity overrides for that).
 
 ### Authentication suddenly broken after upgrade
 
-You probably ran against OpenRouter using `Authorization: Bearer`. See the
-breaking-change notice below, and [docs/openrouter.md](openrouter.md) for
-ready-made nginx / Caddy / Go-sidecar proxy recipes.
+You probably ran against OpenRouter using `Authorization: Bearer`. The
+URL-conditional Bearer path was removed in this phase. OpenRouter
+compatibility will return in a follow-up that migrates the analyzer to the
+official `anthropic-sdk-go`, which honors the standard
+`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` env vars. Until then, point
+`API_BASE_URL` at `api.anthropic.com` directly or use a different
+`x-api-key`-compatible relay.
 
 ## Breaking change in Phase 1: OpenRouter Bearer auth removed
 
@@ -262,17 +266,20 @@ The client used to detect non-`anthropic.com` URLs and switch to
 `Authorization: Bearer`. That URL-conditional code is gone. The client now
 always sends `x-api-key` + `anthropic-version`.
 
-If you point `API_BASE_URL` at OpenRouter, you must:
-- Run an auth-translating proxy that converts `x-api-key` to `Bearer
-  <token>` — see [docs/openrouter.md](openrouter.md) for nginx, Caddy,
-  and Go-sidecar recipes, or
+If you point `API_BASE_URL` at OpenRouter, you must currently:
 - Migrate to an Anthropic-compatible provider that accepts `x-api-key`
   directly, or
 - Run against `api.anthropic.com` directly.
 
-The change reduces the auth code path to one branch and unblocks the
-prompt-caching headers — keeping a divergent code path for one provider's
-auth was not justified.
+A follow-up phase will migrate the analyzer to the official
+`anthropic-sdk-go`, which honors the standard `ANTHROPIC_AUTH_TOKEN` /
+`ANTHROPIC_BASE_URL` env vars used by Anthropic's other clients (Claude
+Code, Python/JS SDKs). That restores OpenRouter compatibility via env
+vars alone — no proxy.
+
+The change in this phase reduces the auth code path to one branch and
+unblocks the prompt-caching headers; keeping a divergent code path for
+one provider's auth was not justified inside a hand-rolled HTTP client.
 
 ## Phase 2 (planned, not shipped)
 
