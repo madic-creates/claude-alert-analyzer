@@ -30,11 +30,25 @@ func loadConfig() k8s.Config {
 		slog.Error("config error", "error", err)
 		os.Exit(1)
 	}
-	apiKey, err := shared.RequireEnv("API_KEY")
-	if err != nil {
-		slog.Error("config error", "error", err)
+
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	authToken := os.Getenv("ANTHROPIC_AUTH_TOKEN")
+	baseURL := os.Getenv("ANTHROPIC_BASE_URL")
+
+	switch {
+	case apiKey == "" && authToken == "":
+		slog.Error("config error", "error", "either ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN must be set")
+		os.Exit(1)
+	case apiKey != "" && authToken != "":
+		slog.Error("config error", "error", "set exactly one of ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN, not both")
 		os.Exit(1)
 	}
+
+	// Unset the three vars so the SDK never falls back to its own env-var
+	// lookups; main.go is the single source of truth.
+	_ = os.Unsetenv("ANTHROPIC_API_KEY")
+	_ = os.Unsetenv("ANTHROPIC_AUTH_TOKEN")
+	_ = os.Unsetenv("ANTHROPIC_BASE_URL")
 
 	return k8s.Config{
 		PrometheusURL:   shared.EnvOrDefault("PROMETHEUS_URL", "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"),
@@ -45,8 +59,9 @@ func loadConfig() k8s.Config {
 		MetricsPort:     shared.EnvOrDefault("METRICS_PORT", "9101"),
 		WebhookSecret:   webhookSecret,
 		MaxLogBytes:     maxLogBytes,
-		APIBaseURL:      shared.EnvOrDefault("API_BASE_URL", "https://api.anthropic.com/v1/messages"),
+		APIBaseURL:      baseURL,
 		APIKey:          apiKey,
+		AuthToken:       authToken,
 	}
 }
 
