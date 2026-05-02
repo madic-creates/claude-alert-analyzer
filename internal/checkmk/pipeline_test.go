@@ -120,9 +120,8 @@ func TestProcessAlert_UsesPolicyForModelAndRounds(t *testing.T) {
 		Metrics:    new(shared.AlertMetrics),
 		SSHEnabled: true,
 		SSHDialer:  &fixedDialer{client: sshClient},
-		// MaxAgentRounds here is intentionally a value the policy must override;
-		// this field is no longer consulted by the pipeline.
-		SSHConfig:  Config{MaxAgentRounds: 999, SSHDeniedCommands: DefaultDeniedCommands},
+		// Policy.MaxRoundsFor is the only source of the rounds budget; SSHConfig has no MaxAgentRounds.
+		SSHConfig:  Config{SSHDeniedCommands: DefaultDeniedCommands},
 		Publishers: []shared.Publisher{&mockPublisher{}},
 		GatherContext: func(context.Context, shared.AlertPayload, *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{}
@@ -242,7 +241,7 @@ func TestProcessAlert_SSH_DialUsesVerifiedIP(t *testing.T) {
 		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: true,
 		SSHDialer:  dialer,
-		SSHConfig:  Config{MaxAgentRounds: 1},
+		SSHConfig:  Config{},
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -296,7 +295,7 @@ func TestProcessAlert_SSH_Success(t *testing.T) {
 		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: true,
 		SSHDialer:  dialer,
-		SSHConfig:  Config{MaxAgentRounds: 3, SSHDeniedCommands: DefaultDeniedCommands},
+		SSHConfig:  Config{SSHDeniedCommands: DefaultDeniedCommands},
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{Sections: []shared.ContextSection{{Name: "Test", Content: "data"}}}
 		},
@@ -838,7 +837,7 @@ func TestProcessAlert_SSH_PanicClearsCooldown(t *testing.T) {
 		Metrics:    metrics,
 		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: true,
-		SSHConfig:  Config{MaxAgentRounds: 3, SSHDeniedCommands: DefaultDeniedCommands},
+		SSHConfig:  Config{SSHDeniedCommands: DefaultDeniedCommands},
 		// SSHDialer is nil — RunAgenticDiagnostics panics before dialing.
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{}

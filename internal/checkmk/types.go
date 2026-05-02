@@ -31,7 +31,6 @@ type Config struct {
 	SSHKeyPath        string
 	SSHKnownHostsPath string
 	SSHDeniedCommands map[string]bool // nil = use default, empty = no guardrails
-	MaxAgentRounds    int
 }
 
 // BaseConfig returns a shared.BaseConfig derived from this Config.

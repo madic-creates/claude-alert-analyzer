@@ -332,7 +332,7 @@ func TestProcessAlert_SSH_AgenticFails_PublishFailureNotification(t *testing.T) 
 		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: true,
 		SSHDialer:  dialer,
-		SSHConfig:  Config{MaxAgentRounds: 3, SSHDeniedCommands: DefaultDeniedCommands},
+		SSHConfig:  Config{SSHDeniedCommands: DefaultDeniedCommands},
 		GatherContext: func(_ context.Context, _ shared.AlertPayload, _ *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -581,7 +581,7 @@ func TestProcessAlert_SSH_AgenticFails_RecordsClaudeAPIErrorCounter(t *testing.T
 		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: true,
 		SSHDialer:  dialer,
-		SSHConfig:  Config{MaxAgentRounds: 3, SSHDeniedCommands: DefaultDeniedCommands},
+		SSHConfig:  Config{SSHDeniedCommands: DefaultDeniedCommands},
 		GatherContext: func(_ context.Context, _ shared.AlertPayload, _ *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
