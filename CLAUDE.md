@@ -78,7 +78,7 @@ Phase 1 ships three operator-facing features: prompt caching (always on), severi
 - `internal/shared/claude.go` — Cache breakpoints set at three levels: `systemBlocks()` helper, `withCachedTail()` helper for tools, and an inline assignment on the last `tool_result` of each `RunToolLoop` round.
 - Pipelines (`internal/k8s/pipeline.go`, `internal/checkmk/pipeline.go`) branch on `policy.MaxRoundsFor(...) == 0` to call `Analyzer.Analyze` (static-only) instead of `RunAgenticDiagnostics`.
 
-⚠️ **Breaking change**: `Authorization: Bearer` removed; `API_BASE_URL` must accept `x-api-key`. Operators running against OpenRouter standard endpoints need a translating proxy. See `docs/cost-and-storm-protection.md` for migration details.
+⚠️ **Breaking change**: `Authorization: Bearer` removed; `API_BASE_URL` must accept `x-api-key`. Operators running against OpenRouter need a translating proxy — see `docs/openrouter.md` for ready-made recipes. Migration overview in `docs/cost-and-storm-protection.md`.
 
 Phase 2 (storm-mode, circuit-breaker, group-cooldown) is designed but not yet implemented — see `docs/superpowers/specs/2026-05-01-storm-cost-protection-design.md` for the full design.
 

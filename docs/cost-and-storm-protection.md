@@ -253,8 +253,8 @@ use the per-severity overrides for that).
 ### Authentication suddenly broken after upgrade
 
 You probably ran against OpenRouter using `Authorization: Bearer`. See the
-breaking-change notice below. Either put a header-translating proxy in
-front, or switch to a different `x-api-key`-compatible endpoint.
+breaking-change notice below, and [docs/openrouter.md](openrouter.md) for
+ready-made nginx / Caddy / Go-sidecar proxy recipes.
 
 ## Breaking change in Phase 1: OpenRouter Bearer auth removed
 
@@ -264,7 +264,8 @@ always sends `x-api-key` + `anthropic-version`.
 
 If you point `API_BASE_URL` at OpenRouter, you must:
 - Run an auth-translating proxy that converts `x-api-key` to `Bearer
-  <token>`, or
+  <token>` — see [docs/openrouter.md](openrouter.md) for nginx, Caddy,
+  and Go-sidecar recipes, or
 - Migrate to an Anthropic-compatible provider that accepts `x-api-key`
   directly, or
 - Run against `api.anthropic.com` directly.

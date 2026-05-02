@@ -269,7 +269,7 @@ The default denylist is defined in [`internal/checkmk/agent.go`](internal/checkm
 
 ### LLM provider
 
-The client always uses the Anthropic Messages API format with `x-api-key` + `anthropic-version: 2023-06-01` headers. `API_BASE_URL` must point at an endpoint that accepts these headers — Anthropic directly, or an Anthropic-API-compatible relay. Providers that require `Authorization: Bearer` (e.g. OpenRouter standard endpoints) need a header-translating proxy in front. Response tokens are capped at 2048 (`Analyze`) / 4096 (tool-loop rounds).
+The client always uses the Anthropic Messages API format with `x-api-key` + `anthropic-version: 2023-06-01` headers. `API_BASE_URL` must point at an endpoint that accepts these headers — Anthropic directly, or an Anthropic-API-compatible relay. Providers that require `Authorization: Bearer` (e.g. OpenRouter standard endpoints) need a header-translating proxy in front — see [docs/openrouter.md](docs/openrouter.md) for nginx / Caddy / Go-sidecar recipes. Response tokens are capped at 2048 (`Analyze`) / 4096 (tool-loop rounds).
 
 ### Cost & storm protection
 
@@ -447,6 +447,7 @@ GitHub Actions (`.github/workflows/build.yaml`) runs tests and lint, then builds
 Further docs:
 
 - [docs/cost-and-storm-protection.md](docs/cost-and-storm-protection.md) — operator guide for prompt caching, severity-based routing, token-cost dashboards, and rollout playbook
+- [docs/openrouter.md](docs/openrouter.md) — auth-translating proxy recipes for running against OpenRouter's Anthropic skin
 - [docs/pre-commit.md](docs/pre-commit.md) — pre-commit hook configuration
 - [docs/renovate.md](docs/renovate.md) — dependency update automation
 - [docs/cleanup-ghcr.md](docs/cleanup-ghcr.md) — GHCR tag retention
