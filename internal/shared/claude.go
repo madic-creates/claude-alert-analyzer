@@ -99,7 +99,9 @@ func (c *ClaudeClient) Analyze(ctx context.Context, model, systemPrompt, userPro
 	}
 
 	slog.Info("Claude analysis complete", "model", model,
-		"inputTokens", msg.Usage.InputTokens, "outputTokens", msg.Usage.OutputTokens)
+		"inputTokens", msg.Usage.InputTokens, "outputTokens", msg.Usage.OutputTokens,
+		"cacheCreationTokens", msg.Usage.CacheCreationInputTokens,
+		"cacheReadTokens", msg.Usage.CacheReadInputTokens)
 
 	c.metrics.RecordClaudeUsage(c.source, "all", model,
 		int(msg.Usage.InputTokens), int(msg.Usage.OutputTokens),
@@ -167,7 +169,9 @@ func (c *ClaudeClient) RunToolLoop(ctx context.Context, model, systemPrompt, use
 
 		if msg.StopReason == anthropic.StopReasonEndTurn {
 			slog.Info("tool loop complete", "rounds", round+1,
-				"totalInputTokens", totalInput, "totalOutputTokens", totalOutput)
+				"totalInputTokens", totalInput, "totalOutputTokens", totalOutput,
+				"totalCacheCreationTokens", totalCacheCreation,
+				"totalCacheReadTokens", totalCacheRead)
 			return extractText(msg), round + 1, false, nil
 		}
 
@@ -228,7 +232,10 @@ func (c *ClaudeClient) runForcedSummary(ctx context.Context, model, systemPrompt
 	*totalCacheRead += msg.Usage.CacheReadInputTokens
 	analysis := extractText(msg)
 	slog.Info("tool loop complete (forced summary)", "totalInputTokens", *totalInput,
-		"totalOutputTokens", *totalOutput, "analysisLen", len(analysis))
+		"totalOutputTokens", *totalOutput,
+		"totalCacheCreationTokens", *totalCacheCreation,
+		"totalCacheReadTokens", *totalCacheRead,
+		"analysisLen", len(analysis))
 	if len(analysis) == 0 {
 		slog.Warn("forced summary produced empty analysis", "contentBlocks", len(msg.Content))
 	}
