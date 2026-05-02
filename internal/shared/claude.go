@@ -224,7 +224,9 @@ func (c *ClaudeClient) Analyze(ctx context.Context, model, systemPrompt, userPro
 	slog.Info("Claude analysis complete",
 		"model", model,
 		"inputTokens", result.Usage.InputTokens,
-		"outputTokens", result.Usage.OutputTokens)
+		"outputTokens", result.Usage.OutputTokens,
+		"cacheCreationTokens", result.Usage.CacheCreationInputTokens,
+		"cacheReadTokens", result.Usage.CacheReadInputTokens)
 
 	c.metrics.RecordClaudeUsage(c.source, "all", model,
 		result.Usage.InputTokens, result.Usage.OutputTokens,
@@ -309,7 +311,9 @@ func (c *ClaudeClient) RunToolLoop(
 			slog.Info("tool loop complete",
 				"rounds", round+1,
 				"totalInputTokens", totalInput,
-				"totalOutputTokens", totalOutput)
+				"totalOutputTokens", totalOutput,
+				"totalCacheCreationTokens", totalCacheCreation,
+				"totalCacheReadTokens", totalCacheRead)
 			c.metrics.RecordClaudeUsage(c.source, "all", model, totalInput, totalOutput, totalCacheCreation, totalCacheRead)
 			return extractText(resp.Content), round + 1, false, nil
 		}
@@ -414,6 +418,8 @@ func (c *ClaudeClient) RunToolLoop(
 		"totalRounds", maxRounds,
 		"totalInputTokens", totalInput,
 		"totalOutputTokens", totalOutput,
+		"totalCacheCreationTokens", totalCacheCreation,
+		"totalCacheReadTokens", totalCacheRead,
 		"analysisLen", len(analysis))
 
 	if len(analysis) == 0 {
