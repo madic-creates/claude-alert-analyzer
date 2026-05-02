@@ -24,12 +24,6 @@ func loadConfig() k8s.Config {
 		slog.Error("invalid config", "error", err)
 		os.Exit(1)
 	}
-	maxAgentRounds, err := shared.ParseIntEnv("MAX_AGENT_ROUNDS", "10", 1, 50)
-	if err != nil {
-		slog.Error("invalid config", "error", err)
-		os.Exit(1)
-	}
-
 	webhookSecret, err := shared.RequireEnv("WEBHOOK_SECRET")
 	if err != nil {
 		slog.Error("config error", "error", err)
@@ -52,7 +46,6 @@ func loadConfig() k8s.Config {
 		MaxLogBytes:     maxLogBytes,
 		APIBaseURL:      shared.EnvOrDefault("API_BASE_URL", "https://api.anthropic.com/v1/messages"),
 		APIKey:          apiKey,
-		MaxAgentRounds:  maxAgentRounds,
 	}
 }
 
@@ -72,6 +65,12 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})))
 
 	cfg := loadConfig()
+
+	policy, err := shared.LoadPolicy(cfg.BaseConfig())
+	if err != nil {
+		slog.Error("policy config", "error", err)
+		os.Exit(1)
+	}
 
 	k8sConfig, err := rest.InClusterConfig()
 	if err != nil {
@@ -97,16 +96,24 @@ func main() {
 	}
 
 	deps := k8s.PipelineDeps{
-		ToolRunner:     claudeClient,
-		KubectlRunner:  k8s.NewKubectlSubprocess(""),
-		Prom:           promClient,
-		Publishers:     publishers,
-		Cooldown:       cooldownMgr,
-		Metrics:        metrics,
-		MaxAgentRounds: cfg.MaxAgentRounds,
+		Analyzer:      claudeClient,
+		ToolRunner:    claudeClient,
+		KubectlRunner: k8s.NewKubectlSubprocess(""),
+		Prom:          promClient,
+		Publishers:    publishers,
+		Cooldown:      cooldownMgr,
+		Metrics:       metrics,
+		Policy:        policy,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return k8s.GatherContext(ctx, promClient, clientset, k8s.AlertPayloadToAlert(alert), cfg)
 		},
+	}
+
+	if deps.Analyzer == nil || deps.ToolRunner == nil || deps.Policy == nil ||
+		deps.Cooldown == nil || deps.Metrics == nil || deps.GatherContext == nil ||
+		deps.KubectlRunner == nil || deps.Prom == nil {
+		slog.Error("k8s pipeline deps incomplete — refusing to start")
+		os.Exit(1)
 	}
 
 	srv := shared.NewServer(shared.ServerConfig{
@@ -123,7 +130,9 @@ func main() {
 	slog.Info("K8s Alert Analyzer started",
 		"port", cfg.Port, "metricsPort", cfg.MetricsPort, "model", cfg.ClaudeModel,
 		"apiBaseURL", cfg.APIBaseURL,
-		"maxAgentRounds", cfg.MaxAgentRounds)
+		"defaultRounds", policy.DefaultMaxRounds,
+		"modelOverrides", len(policy.ModelOverrides),
+		"roundsOverrides", len(policy.RoundsOverrides))
 
 	handler := k8s.HandleWebhook(cfg, cooldownMgr, srv.Enqueue, metrics)
 	srv.Run(handler)

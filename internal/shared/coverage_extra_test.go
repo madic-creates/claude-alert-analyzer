@@ -57,7 +57,7 @@ func TestRunToolLoop_RoundParseError(t *testing.T) {
 	_, _, _, err := client.RunToolLoop(
 		// context.Background is fine — the request will complete, just with bad JSON
 		t.Context(),
-		"system", "user prompt", tools, 10,
+		"test-model", "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil },
 	)
 
@@ -104,7 +104,7 @@ func TestRunToolLoop_SummaryParseError(t *testing.T) {
 
 	_, _, _, err := client.RunToolLoop(
 		t.Context(),
-		"system", "user prompt", tools, 1,
+		"test-model", "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "ok", nil },
 	)
 
@@ -157,7 +157,7 @@ func TestRunToolLoop_ForcedSummaryEmptyContent(t *testing.T) {
 
 	result, _, _, err := client.RunToolLoop(
 		t.Context(),
-		"system", "user prompt", tools, 1,
+		"test-model", "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil },
 	)
 
@@ -184,7 +184,7 @@ func TestRunToolLoop_ZeroMaxRounds(t *testing.T) {
 	for _, rounds := range []int{0, -1, -100} {
 		_, _, _, err := client.RunToolLoop(
 			t.Context(),
-			"system", "user prompt", tools, rounds,
+			"test-model", "system", "user prompt", tools, rounds,
 			func(name string, input json.RawMessage) (string, error) { return "", nil },
 		)
 		if err == nil {

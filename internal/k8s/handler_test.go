@@ -631,6 +631,33 @@ func TestHandleWebhook_OversizedFingerprintSkipped(t *testing.T) {
 	}
 }
 
+// TestHandler_PopulatesSeverityLevel verifies that AlertPayload.SeverityLevel
+// is populated from the alert labels via SeverityFromAlertmanager.
+func TestHandler_PopulatesSeverityLevel(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	var captured shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		captured = ap
+		return true
+	}, nil)
+
+	alert := Alert{
+		Fingerprint: "fp-severity",
+		Status:      "firing",
+		Labels:      map[string]string{"alertname": "CriticalAlert", "severity": "critical"},
+		Annotations: map[string]string{},
+		StartsAt:    time.Now(),
+	}
+	rr := postWebhook(t, handler, "test-secret", makeWebhook([]Alert{alert}))
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+	if captured.SeverityLevel != shared.SeverityCritical {
+		t.Errorf("expected SeverityCritical, got %v", captured.SeverityLevel)
+	}
+}
+
 // TestHandleWebhook_InvalidFingerprintIncrementsMetric verifies that alerts
 // dropped for an empty or oversized fingerprint increment the
 // AlertsInvalidFingerprint counter so operators can detect malformed payloads

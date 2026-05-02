@@ -330,12 +330,12 @@ func TestK8sProcessAlert_AnalysisFails_PublishFailureNotification(t *testing.T) 
 				return "", fmt.Errorf("claude timeout")
 			},
 		},
-		KubectlRunner:  &fakeKubectlRunner{},
-		Prom:           &fakePromQLQuerier{},
-		Publishers:     []shared.Publisher{failPub},
-		Cooldown:       cooldown,
-		Metrics:        metrics,
-		MaxAgentRounds: 10,
+		KubectlRunner: &fakeKubectlRunner{},
+		Prom:          &fakePromQLQuerier{},
+		Publishers:    []shared.Publisher{failPub},
+		Cooldown:      cooldown,
+		Metrics:       metrics,
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -459,12 +459,12 @@ func TestK8sProcessAlert_EmptyAnalysis_PublishFailureNotification(t *testing.T) 
 				return "", nil
 			},
 		},
-		KubectlRunner:  &fakeKubectlRunner{},
-		Prom:           &fakePromQLQuerier{},
-		Publishers:     []shared.Publisher{failPub},
-		Cooldown:       cooldown,
-		Metrics:        metrics,
-		MaxAgentRounds: 10,
+		KubectlRunner: &fakeKubectlRunner{},
+		Prom:          &fakePromQLQuerier{},
+		Publishers:    []shared.Publisher{failPub},
+		Cooldown:      cooldown,
+		Metrics:       metrics,
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -1008,13 +1008,13 @@ func TestProcessAlert_AlertFieldsArePromptInjectionSafe(t *testing.T) {
 	metrics := new(shared.AlertMetrics)
 
 	deps := PipelineDeps{
-		ToolRunner:     runner,
-		KubectlRunner:  &fakeKubectlRunner{},
-		Prom:           &fakePromQLQuerier{},
-		Publishers:     []shared.Publisher{pub},
-		Cooldown:       cooldown,
-		Metrics:        metrics,
-		MaxAgentRounds: 10,
+		ToolRunner:    runner,
+		KubectlRunner: &fakeKubectlRunner{},
+		Prom:          &fakePromQLQuerier{},
+		Publishers:    []shared.Publisher{pub},
+		Cooldown:      cooldown,
+		Metrics:       metrics,
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},

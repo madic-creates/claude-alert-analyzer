@@ -10,15 +10,27 @@ import (
 )
 
 // PipelineDeps holds all dependencies for CheckMK alert processing.
+//
+// Invariants: Analyzer, ToolRunner, Policy, Cooldown, Metrics, GatherContext,
+// and ValidateHost must all be non-nil. SSHDialer must be non-nil when
+// SSHEnabled is true. Construction in cmd/checkmk-analyzer validates this
+// at startup; the pipeline does not re-check at runtime.
 type PipelineDeps struct {
-	Analyzer      shared.Analyzer
-	ToolRunner    shared.ToolLoopRunner
-	Publishers    []shared.Publisher
-	Cooldown      *shared.CooldownManager
-	Metrics       *shared.AlertMetrics
-	SSHEnabled    bool
-	SSHDialer     Dialer
-	SSHConfig     Config
+	// Analyzer is used for the static-only path (rounds==0 or sshOK==false):
+	// no SSH tool, just the gathered context. In production both Analyzer and
+	// ToolRunner point at the same *shared.ClaudeClient.
+	Analyzer   shared.Analyzer
+	ToolRunner shared.ToolLoopRunner
+	Publishers []shared.Publisher
+	Cooldown   *shared.CooldownManager
+	Metrics    *shared.AlertMetrics
+	SSHEnabled bool
+	SSHDialer  Dialer
+	SSHConfig  Config
+	// Policy decides per-alert model and tool-loop budget keyed on
+	// alert.SeverityLevel. A round budget of 0 routes to Analyzer.Analyze
+	// even when SSH is available.
+	Policy        *shared.AnalysisPolicy
 	GatherContext func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext
 	ValidateHost  func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error)
 }
@@ -72,38 +84,29 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 		alertContext += "\n## Note\nSSH diagnostics unavailable: host validation failed\n"
 	}
 
-	var analysis string
+	model := deps.Policy.ModelFor(alert.SeverityLevel)
+	rounds := deps.Policy.MaxRoundsFor(alert.SeverityLevel)
 
-	if sshOK {
-		var err error
-		analysis, err = RunAgenticDiagnostics(ctx, deps.SSHConfig, deps.ToolRunner, deps.SSHDialer, deps.Metrics, hostname, hostInfo.VerifiedIP, alertContext, deps.SSHConfig.MaxAgentRounds)
-		if err != nil {
-			slog.Error("agentic diagnostics failed", "error", err)
-			deps.Metrics.RecordClaudeAPIError(alert.Source)
-			if notifyErr := shared.PublishAll(ctx, deps.Publishers,
-				fmt.Sprintf("Analysis FAILED: %s", safeTitle), "5",
-				fmt.Sprintf("**Agentic diagnostics failed** for %s: %v\n\nManual investigation needed.", safeTitle, err)); notifyErr != nil {
-				slog.Warn("failed to publish failure notification", "hostname", hostname, "error", notifyErr)
-			}
-			deps.Cooldown.Clear(alert.Fingerprint)
-			deps.Metrics.AlertsFailed.Add(1)
-			return
-		}
+	var (
+		analysis string
+		err      error
+	)
+	if rounds > 0 && sshOK {
+		analysis, err = RunAgenticDiagnostics(ctx, deps.SSHConfig, deps.ToolRunner, deps.SSHDialer, deps.Metrics, hostname, hostInfo.VerifiedIP, alertContext, rounds, model)
 	} else {
-		var err error
-		analysis, err = deps.Analyzer.Analyze(ctx, StaticAnalysisSystemPrompt, alertContext)
-		if err != nil {
-			slog.Error("analysis failed", "error", err)
-			deps.Metrics.RecordClaudeAPIError(alert.Source)
-			if notifyErr := shared.PublishAll(ctx, deps.Publishers,
-				fmt.Sprintf("Analysis FAILED: %s", safeTitle), "5",
-				fmt.Sprintf("**Analysis failed** for %s: %v\n\nManual investigation needed.", safeTitle, err)); notifyErr != nil {
-				slog.Warn("failed to publish failure notification", "hostname", hostname, "error", notifyErr)
-			}
-			deps.Cooldown.Clear(alert.Fingerprint)
-			deps.Metrics.AlertsFailed.Add(1)
-			return
+		analysis, err = deps.Analyzer.Analyze(ctx, model, StaticAnalysisSystemPrompt, alertContext)
+	}
+	if err != nil {
+		slog.Error("analysis failed", "hostname", hostname, "error", err)
+		deps.Metrics.RecordClaudeAPIError(alert.Source)
+		if notifyErr := shared.PublishAll(ctx, deps.Publishers,
+			fmt.Sprintf("Analysis FAILED: %s", safeTitle), "5",
+			fmt.Sprintf("**Analysis failed** for %s: %v\n\nManual investigation needed.", safeTitle, err)); notifyErr != nil {
+			slog.Warn("failed to publish failure notification", "hostname", hostname, "error", notifyErr)
 		}
+		deps.Cooldown.Clear(alert.Fingerprint)
+		deps.Metrics.AlertsFailed.Add(1)
+		return
 	}
 
 	if analysis == "" {

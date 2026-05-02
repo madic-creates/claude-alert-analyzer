@@ -17,24 +17,41 @@ type mockAnalyzer struct {
 	err                error
 	capturedPrompt     string
 	capturedUserPrompt string
+	gotModel           string
+	gotRounds          int
+	calls              struct{ analyze, runToolLoop int }
 }
 
-func (m *mockAnalyzer) Analyze(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+func (m *mockAnalyzer) Reset() {
+	m.capturedPrompt = ""
+	m.capturedUserPrompt = ""
+	m.gotModel = ""
+	m.gotRounds = 0
+	m.calls.analyze = 0
+	m.calls.runToolLoop = 0
+}
+
+func (m *mockAnalyzer) Analyze(ctx context.Context, model, systemPrompt, userPrompt string) (string, error) {
+	m.gotModel = model
 	m.capturedPrompt = systemPrompt
 	m.capturedUserPrompt = userPrompt
+	m.calls.analyze++
 	return m.result, m.err
 }
 
-func (m *mockAnalyzer) RunToolLoop(ctx context.Context, systemPrompt, userPrompt string,
+func (m *mockAnalyzer) RunToolLoop(ctx context.Context, model, systemPrompt, userPrompt string,
 	tools []shared.Tool, maxRounds int, handleTool func(string, json.RawMessage) (string, error)) (string, int, bool, error) {
+	m.gotModel = model
+	m.gotRounds = maxRounds
 	m.capturedPrompt = systemPrompt
 	m.capturedUserPrompt = userPrompt
+	m.calls.runToolLoop++
 	return m.result, 1, false, m.err
 }
 
 type panicAnalyzer struct{}
 
-func (p *panicAnalyzer) Analyze(_ context.Context, _, _ string) (string, error) {
+func (p *panicAnalyzer) Analyze(_ context.Context, _, _, _ string) (string, error) {
 	panic("simulated analysis panic")
 }
 
@@ -42,7 +59,7 @@ func (p *panicAnalyzer) Analyze(_ context.Context, _, _ string) (string, error) 
 // can verify the deferred recovery in ProcessAlert fires on the SSH agentic path.
 type panicToolRunner struct{}
 
-func (p *panicToolRunner) RunToolLoop(_ context.Context, _, _ string,
+func (p *panicToolRunner) RunToolLoop(_ context.Context, _, _, _ string,
 	_ []shared.Tool, _ int, _ func(string, json.RawMessage) (string, error)) (string, int, bool, error) {
 	panic("simulated tool-loop panic")
 }
@@ -74,6 +91,82 @@ func (m *mockPublisher) published() []string {
 	return out
 }
 
+// TestProcessAlert_UsesPolicyForModelAndRounds verifies that ProcessAlert reads
+// model and round budget from the AnalysisPolicy (keyed on alert.SeverityLevel)
+// instead of static PipelineDeps fields. When the policy yields rounds==0 it
+// must take the static-only path (Analyze) and skip the SSH agentic loop even
+// when SSH is available; the rounds==0 short-circuit takes precedence.
+func TestProcessAlert_UsesPolicyForModelAndRounds(t *testing.T) {
+	mock := &mockAnalyzer{result: "ok"}
+	policy := &shared.AnalysisPolicy{
+		DefaultModel:     "default-m",
+		ModelOverrides:   map[shared.Severity]string{shared.SeverityCritical: "opus"},
+		DefaultMaxRounds: 5,
+		RoundsOverrides:  map[shared.Severity]int{shared.SeverityWarning: 0},
+	}
+
+	// startTestSSHServer is unused here because the mock ToolRunner returns
+	// before any SSH dial — but RunAgenticDiagnostics dials before invoking
+	// the tool runner, so we need a working SSH client for the critical case.
+	sshClient := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		sendExitStatus(ch, 0)
+	})
+
+	deps := PipelineDeps{
+		Analyzer:   mock,
+		ToolRunner: mock,
+		Policy:     policy,
+		Cooldown:   shared.NewCooldownManager(),
+		Metrics:    new(shared.AlertMetrics),
+		SSHEnabled: true,
+		SSHDialer:  &fixedDialer{client: sshClient},
+		// Policy.MaxRoundsFor is the only source of the rounds budget; SSHConfig has no MaxAgentRounds.
+		SSHConfig:  Config{SSHDeniedCommands: DefaultDeniedCommands},
+		Publishers: []shared.Publisher{&mockPublisher{}},
+		GatherContext: func(context.Context, shared.AlertPayload, *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		ValidateHost: func(context.Context, string, string) (*HostInfo, error) {
+			return &HostInfo{VerifiedIP: "10.0.0.1"}, nil
+		},
+	}
+
+	t.Run("warning_with_zero_rounds_skips_ssh_uses_Analyze", func(t *testing.T) {
+		mock.Reset()
+		ProcessAlert(context.Background(), deps, shared.AlertPayload{
+			Fingerprint:   "fp1",
+			SeverityLevel: shared.SeverityWarning,
+			Source:        "checkmk",
+			Fields:        map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+		})
+		if mock.gotModel != "default-m" {
+			t.Errorf("model: got %q, want default-m", mock.gotModel)
+		}
+		if mock.calls.analyze != 1 || mock.calls.runToolLoop != 0 {
+			t.Errorf("expected 1 Analyze call (rounds=0 short-circuits SSH), got %+v", mock.calls)
+		}
+	})
+
+	t.Run("critical_with_ssh_uses_RunToolLoop", func(t *testing.T) {
+		mock.Reset()
+		ProcessAlert(context.Background(), deps, shared.AlertPayload{
+			Fingerprint:   "fp2",
+			SeverityLevel: shared.SeverityCritical,
+			Source:        "checkmk",
+			Fields:        map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+		})
+		if mock.gotModel != "opus" {
+			t.Errorf("model: got %q, want opus", mock.gotModel)
+		}
+		if mock.gotRounds != 5 {
+			t.Errorf("rounds: got %d, want 5", mock.gotRounds)
+		}
+		if mock.calls.runToolLoop != 1 || mock.calls.analyze != 0 {
+			t.Errorf("expected 1 RunToolLoop call, got %+v", mock.calls)
+		}
+	})
+}
+
 func TestProcessAlert_NoSSH(t *testing.T) {
 	pub := &mockPublisher{}
 	cooldown := shared.NewCooldownManager()
@@ -84,6 +177,7 @@ func TestProcessAlert_NoSSH(t *testing.T) {
 		Publishers: []shared.Publisher{pub},
 		Cooldown:   cooldown,
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: false,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{Sections: []shared.ContextSection{{Name: "Test", Content: "data"}}}
@@ -144,9 +238,10 @@ func TestProcessAlert_SSH_DialUsesVerifiedIP(t *testing.T) {
 		Publishers: []shared.Publisher{pub},
 		Cooldown:   cooldown,
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: true,
 		SSHDialer:  dialer,
-		SSHConfig:  Config{MaxAgentRounds: 1},
+		SSHConfig:  Config{},
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{}
 		},
@@ -197,9 +292,10 @@ func TestProcessAlert_SSH_Success(t *testing.T) {
 		Publishers: []shared.Publisher{pub},
 		Cooldown:   cooldown,
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: true,
 		SSHDialer:  dialer,
-		SSHConfig:  Config{MaxAgentRounds: 3, SSHDeniedCommands: DefaultDeniedCommands},
+		SSHConfig:  Config{SSHDeniedCommands: DefaultDeniedCommands},
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{Sections: []shared.ContextSection{{Name: "Test", Content: "data"}}}
 		},
@@ -247,6 +343,7 @@ func TestProcessAlert_AnalysisFails_CooldownCleared(t *testing.T) {
 		Publishers: []shared.Publisher{pub},
 		Cooldown:   cooldown,
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: false,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{}
@@ -277,6 +374,7 @@ func TestProcessAlert_PublishFails(t *testing.T) {
 		Publishers: []shared.Publisher{pub},
 		Cooldown:   cooldown,
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: false,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{}
@@ -315,6 +413,7 @@ func TestProcessAlert_PublishFails_RecordsPrometheusCounter(t *testing.T) {
 		Publishers: []shared.Publisher{pub},
 		Cooldown:   shared.NewCooldownManager(),
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: false,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{}
@@ -353,6 +452,7 @@ func TestProcessAlert_AnalysisFails_RecordsClaudeAPIErrorCounter(t *testing.T) {
 		Publishers: []shared.Publisher{pub},
 		Cooldown:   shared.NewCooldownManager(),
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: false,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{}
@@ -390,6 +490,7 @@ func TestProcessAlert_EmptyAnalysis(t *testing.T) {
 		Publishers: []shared.Publisher{pub},
 		Cooldown:   cooldown,
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: false,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{}
@@ -452,6 +553,7 @@ func TestProcessAlert_PriorityMapping(t *testing.T) {
 				Publishers: []shared.Publisher{pub},
 				Cooldown:   shared.NewCooldownManager(),
 				Metrics:    metrics,
+				Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 				SSHEnabled: false,
 				GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 					return shared.AnalysisContext{}
@@ -489,6 +591,7 @@ func TestProcessAlert_TitleFormatting(t *testing.T) {
 		Publishers: []shared.Publisher{pub},
 		Cooldown:   shared.NewCooldownManager(),
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: false,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{}
@@ -528,6 +631,7 @@ func TestProcessAlert_PanicClearsCooldown(t *testing.T) {
 		Publishers: []shared.Publisher{pub},
 		Cooldown:   cooldown,
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: false,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{}
@@ -578,6 +682,7 @@ func TestProcessAlert_SSH_NilHostInfo_FallsBackToStatic(t *testing.T) {
 		Publishers: []shared.Publisher{pub},
 		Cooldown:   cooldown,
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: true,
 		// ValidateHost returns (nil, nil): success but no HostInfo.
 		ValidateHost: func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
@@ -627,6 +732,7 @@ func TestProcessAlert_NoSSH_UsesStaticPrompt(t *testing.T) {
 		Publishers: []shared.Publisher{pub},
 		Cooldown:   cooldown,
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: false,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{Sections: []shared.ContextSection{{Name: "Test", Content: "data"}}}
@@ -669,6 +775,7 @@ func TestProcessAlert_SSH_ValidationError_FallsBackToStatic(t *testing.T) {
 		Publishers: []shared.Publisher{pub},
 		Cooldown:   cooldown,
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: true,
 		ValidateHost: func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
 			return nil, fmt.Errorf("host %q not found in CheckMK", hostname)
@@ -728,8 +835,9 @@ func TestProcessAlert_SSH_PanicClearsCooldown(t *testing.T) {
 		Publishers: []shared.Publisher{pub},
 		Cooldown:   cooldown,
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: true,
-		SSHConfig:  Config{MaxAgentRounds: 3, SSHDeniedCommands: DefaultDeniedCommands},
+		SSHConfig:  Config{SSHDeniedCommands: DefaultDeniedCommands},
 		// SSHDialer is nil — RunAgenticDiagnostics panics before dialing.
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{}
@@ -776,6 +884,7 @@ func TestProcessAlert_FailureBodySanitizesTitle(t *testing.T) {
 		Publishers: []shared.Publisher{pub},
 		Cooldown:   shared.NewCooldownManager(),
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: false,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{}
@@ -818,6 +927,7 @@ func TestProcessAlert_FailureTitleSanitizesTitle(t *testing.T) {
 		Publishers: []shared.Publisher{pub},
 		Cooldown:   shared.NewCooldownManager(),
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: false,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{}
@@ -861,6 +971,7 @@ func TestProcessAlert_SuccessTitleSanitizesTitle(t *testing.T) {
 		Publishers: []shared.Publisher{pub},
 		Cooldown:   shared.NewCooldownManager(),
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: false,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext {
 			return shared.AnalysisContext{}
@@ -909,6 +1020,7 @@ func TestProcessAlert_ValidationErrorNotLeakedToPrompt(t *testing.T) {
 		Publishers: []shared.Publisher{pub},
 		Cooldown:   cooldown,
 		Metrics:    metrics,
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 10},
 		SSHEnabled: true,
 		ValidateHost: func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error) {
 			// Return an error that contains the attacker-controlled hostAddress.

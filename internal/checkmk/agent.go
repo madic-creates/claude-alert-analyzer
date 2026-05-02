@@ -847,6 +847,7 @@ func RunAgenticDiagnostics(
 	verifiedIP string,
 	alertContext string,
 	maxRounds int,
+	model string,
 ) (string, error) {
 	denied := cfg.SSHDeniedCommands
 	if denied == nil {
@@ -923,7 +924,7 @@ func RunAgenticDiagnostics(
 	}
 
 	analysis, rounds, exhausted, err := client.RunToolLoop(
-		ctx, agentSystemPromptForRounds(maxRounds), alertContext,
+		ctx, model, agentSystemPromptForRounds(maxRounds), alertContext,
 		[]shared.Tool{sshTool}, maxRounds, wrappedHandleTool,
 	)
 	if metrics != nil {

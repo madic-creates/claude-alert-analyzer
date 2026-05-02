@@ -32,7 +32,7 @@ type agentToolCall struct {
 }
 
 func (r *capturingToolRunner) RunToolLoop(
-	_ context.Context, systemPrompt, _ string,
+	_ context.Context, _, systemPrompt, _ string,
 	_ []shared.Tool, maxRounds int,
 	handleTool func(string, json.RawMessage) (string, error),
 ) (string, int, bool, error) {
@@ -61,7 +61,7 @@ func TestRunAgenticDiagnostics_DialFailure(t *testing.T) {
 	dialer := &fixedDialer{err: fmt.Errorf("connection refused")}
 	runner := &capturingToolRunner{result: "should not reach"}
 
-	_, err := RunAgenticDiagnostics(context.Background(), Config{}, runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3)
+	_, err := RunAgenticDiagnostics(context.Background(), Config{}, runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model")
 	if err == nil {
 		t.Fatal("expected error when dial fails")
 	}
@@ -85,7 +85,7 @@ func TestRunAgenticDiagnostics_DeniedCommandBlocked(t *testing.T) {
 
 	analysis, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -122,7 +122,7 @@ func TestRunAgenticDiagnostics_AllowedCommandExecuted(t *testing.T) {
 
 	analysis, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -163,7 +163,7 @@ func TestRunAgenticDiagnostics_SpaceArgShellQuoted(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -195,7 +195,7 @@ func TestRunAgenticDiagnostics_UnknownToolReturnsError(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected top-level error: %v", err)
@@ -226,7 +226,7 @@ func TestRunAgenticDiagnostics_OutputRedacted(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -269,7 +269,7 @@ func TestRunAgenticDiagnostics_OutputControlCharsStripped(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -315,7 +315,7 @@ func TestRunAgenticDiagnostics_NonZeroExitControlCharsStripped(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -358,7 +358,7 @@ func TestRunAgenticDiagnostics_NonZeroExitIncludesOutput(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -401,7 +401,7 @@ func TestRunAgenticDiagnostics_NonZeroExitNoOutput(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected top-level error: %v", err)
@@ -438,7 +438,7 @@ func TestRunAgenticDiagnostics_InvalidCommandInputReturnsError(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected top-level error: %v", err)
@@ -1657,7 +1657,7 @@ func TestRunAgenticDiagnostics_SystemPromptContainsMaxRounds(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", customRounds,
+		runner, dialer, nil, "host1", "10.0.0.1", "ctx", customRounds, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1692,7 +1692,7 @@ func TestRunAgenticDiagnostics_RecordsMetrics(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, metrics, "host1", "10.0.0.1", "ctx", 10,
+		runner, dialer, metrics, "host1", "10.0.0.1", "ctx", 10, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -3226,7 +3226,7 @@ func TestRunAgenticDiagnostics_NonZeroExitMetricClassification(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, metrics, "host1", "10.0.0.1", "ctx", 3,
+		runner, dialer, metrics, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

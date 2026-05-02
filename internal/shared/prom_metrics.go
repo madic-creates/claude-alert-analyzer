@@ -37,6 +37,18 @@ type PrometheusMetrics struct {
 	// AgentRoundsExhausted counts loops that returned via the forced-summary path
 	// because maxRounds was reached, labeled by source.
 	AgentRoundsExhausted *prometheus.CounterVec
+
+	// ClaudeInputTokens tracks Claude API input tokens (excluding cache hits),
+	// labeled by source, severity, model. Combine with cache_read for cost analysis.
+	ClaudeInputTokens *prometheus.CounterVec
+	// ClaudeOutputTokens tracks Claude API output tokens, labeled by source/severity/model.
+	ClaudeOutputTokens *prometheus.CounterVec
+	// ClaudeCacheCreationTokens tracks tokens that produced new cache entries
+	// (~25% premium over regular input). Labeled by source/severity/model.
+	ClaudeCacheCreationTokens *prometheus.CounterVec
+	// ClaudeCacheReadTokens tracks tokens served from cache (~10% of regular input cost).
+	// Labeled by source/severity/model. Cache-hit-rate = read / (read + creation + input).
+	ClaudeCacheReadTokens *prometheus.CounterVec
 }
 
 // NewPrometheusMetrics creates and registers all labeled Prometheus metrics on a
@@ -109,6 +121,28 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 		Help: "Number of agentic loops that ended via forced-summary because maxRounds was reached, by source.",
 	}, []string{"source"})
 
+	tokenLabels := []string{"source", "severity", "model"}
+
+	claudeInputTokens := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "claude_input_tokens_total",
+		Help: "Cumulative Claude API input tokens (excluding cache hits), by source/severity/model.",
+	}, tokenLabels)
+
+	claudeOutputTokens := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "claude_output_tokens_total",
+		Help: "Cumulative Claude API output tokens, by source/severity/model.",
+	}, tokenLabels)
+
+	claudeCacheCreationTokens := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "claude_cache_creation_tokens_total",
+		Help: "Cumulative tokens that produced new cache entries, by source/severity/model.",
+	}, tokenLabels)
+
+	claudeCacheReadTokens := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "claude_cache_read_tokens_total",
+		Help: "Cumulative tokens served from cache, by source/severity/model.",
+	}, tokenLabels)
+
 	reg.MustRegister(
 		alertsAnalyzed,
 		alertsCooldown,
@@ -120,20 +154,28 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 		agentToolDuration,
 		agentRoundsUsed,
 		agentRoundsExhausted,
+		claudeInputTokens,
+		claudeOutputTokens,
+		claudeCacheCreationTokens,
+		claudeCacheReadTokens,
 	)
 
 	return &PrometheusMetrics{
-		registry:             reg,
-		AlertsAnalyzed:       alertsAnalyzed,
-		AlertsCooldown:       alertsCooldown,
-		QueueDepth:           queueDepth,
-		ClaudeAPIDuration:    claudeAPIDuration,
-		ClaudeAPIErrors:      claudeAPIErrors,
-		NtfyPublishErrors:    ntfyPublishErrors,
-		AgentToolCalls:       agentToolCalls,
-		AgentToolDuration:    agentToolDuration,
-		AgentRoundsUsed:      agentRoundsUsed,
-		AgentRoundsExhausted: agentRoundsExhausted,
+		registry:                  reg,
+		AlertsAnalyzed:            alertsAnalyzed,
+		AlertsCooldown:            alertsCooldown,
+		QueueDepth:                queueDepth,
+		ClaudeAPIDuration:         claudeAPIDuration,
+		ClaudeAPIErrors:           claudeAPIErrors,
+		NtfyPublishErrors:         ntfyPublishErrors,
+		AgentToolCalls:            agentToolCalls,
+		AgentToolDuration:         agentToolDuration,
+		AgentRoundsUsed:           agentRoundsUsed,
+		AgentRoundsExhausted:      agentRoundsExhausted,
+		ClaudeInputTokens:         claudeInputTokens,
+		ClaudeOutputTokens:        claudeOutputTokens,
+		ClaudeCacheCreationTokens: claudeCacheCreationTokens,
+		ClaudeCacheReadTokens:     claudeCacheReadTokens,
 	}
 }
 

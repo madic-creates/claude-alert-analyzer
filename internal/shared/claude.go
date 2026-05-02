@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -26,6 +25,31 @@ const MaxResponseBytes = 2 * 1024 * 1024 // 2 MiB
 // a short grace period for transient blips while keeping total worst-case wait
 // well under the 120 s HTTP client timeout.
 var defaultRetryDelays = []time.Duration{2 * time.Second, 4 * time.Second}
+
+// withCachedTail returns a copy of tools with cache_control attached to the
+// last element. Tools is a small slice (currently 1-2 elements), so the copy
+// cost is negligible compared to building a flag at every callsite.
+func withCachedTail(tools []Tool) []Tool {
+	if len(tools) == 0 {
+		return tools
+	}
+	out := make([]Tool, len(tools))
+	copy(out, tools)
+	out[len(out)-1].CacheControl = &CacheControl{Type: "ephemeral"}
+	return out
+}
+
+// systemBlocks builds the system field with a single text block carrying
+// a cache_control breakpoint at its tail. This is breakpoint #1 of the
+// 4-breakpoint Anthropic budget; #2 is on the tools array, #3 on the
+// last tool_result of the running conversation.
+func systemBlocks(prompt string) []SystemBlock {
+	return []SystemBlock{{
+		Type:         "text",
+		Text:         prompt,
+		CacheControl: &CacheControl{Type: "ephemeral"},
+	}}
+}
 
 // isTransientStatus reports whether an HTTP status code indicates a transient
 // server-side condition worth retrying. 429 Too Many Requests and 5xx server
@@ -51,6 +75,11 @@ type ClaudeClient struct {
 
 	// durationHistogram records Claude API call latency. May be nil.
 	durationHistogram prometheus.Observer
+
+	// metrics and source are set by WithPrometheusMetrics to enable
+	// per-call token usage recording via RecordClaudeUsage.
+	metrics *AlertMetrics
+	source  string
 }
 
 // NewClaudeClient creates a ClaudeClient from a BaseConfig with a
@@ -65,8 +94,10 @@ func NewClaudeClient(cfg BaseConfig) *ClaudeClient {
 }
 
 // WithPrometheusMetrics attaches Prometheus observers to the client so that
-// each API call is timed. Call this after NewClaudeClient.
+// each API call is timed and token usage is recorded. Call this after NewClaudeClient.
 func (c *ClaudeClient) WithPrometheusMetrics(m *AlertMetrics, source string) *ClaudeClient {
+	c.metrics = m
+	c.source = source
 	if m != nil && m.Prom != nil {
 		c.durationHistogram = m.Prom.ClaudeAPIDuration.WithLabelValues(source)
 	}
@@ -111,12 +142,8 @@ func (c *ClaudeClient) sendRequest(ctx context.Context, body any) ([]byte, error
 			return nil, fmt.Errorf("create request: %w", reqErr)
 		}
 		req.Header.Set("Content-Type", "application/json")
-		if isAnthropicURL(c.BaseURL) {
-			req.Header.Set("x-api-key", c.APIKey)
-			req.Header.Set("anthropic-version", anthropicVersion)
-		} else {
-			req.Header.Set("Authorization", "Bearer "+c.APIKey)
-		}
+		req.Header.Set("x-api-key", c.APIKey)
+		req.Header.Set("anthropic-version", anthropicVersion)
 
 		start := time.Now()
 		resp, doErr := c.HTTP.Do(req)
@@ -168,11 +195,15 @@ func (c *ClaudeClient) sendRequest(ctx context.Context, body any) ([]byte, error
 }
 
 // Analyze sends a single-turn analysis request to the Claude API.
-func (c *ClaudeClient) Analyze(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+// model is the model to use for this request; if empty, c.Model is used as fallback.
+func (c *ClaudeClient) Analyze(ctx context.Context, model, systemPrompt, userPrompt string) (string, error) {
+	if model == "" {
+		model = c.Model
+	}
 	reqBody := ToolRequest{
-		Model:     c.Model,
+		Model:     model,
 		MaxTokens: 2048,
-		System:    systemPrompt,
+		System:    systemBlocks(systemPrompt),
 		Messages:  []ToolMessage{{Role: "user", Content: userPrompt}},
 	}
 
@@ -191,9 +222,13 @@ func (c *ClaudeClient) Analyze(ctx context.Context, systemPrompt, userPrompt str
 	}
 
 	slog.Info("Claude analysis complete",
-		"model", c.Model,
+		"model", model,
 		"inputTokens", result.Usage.InputTokens,
 		"outputTokens", result.Usage.OutputTokens)
+
+	c.metrics.RecordClaudeUsage(c.source, "all", model,
+		result.Usage.InputTokens, result.Usage.OutputTokens,
+		result.Usage.CacheCreationInputTokens, result.Usage.CacheReadInputTokens)
 
 	// Warn when the API signals that the response was cut off before a natural
 	// stopping point. "end_turn" is the normal stop reason; anything else
@@ -204,7 +239,7 @@ func (c *ClaudeClient) Analyze(ctx context.Context, systemPrompt, userPrompt str
 	if result.StopReason != "" && result.StopReason != "end_turn" {
 		slog.Warn("analysis response may be truncated",
 			"stop_reason", result.StopReason,
-			"model", c.Model,
+			"model", model,
 			"outputTokens", result.Usage.OutputTokens)
 	}
 
@@ -220,27 +255,31 @@ func (c *ClaudeClient) Analyze(ctx context.Context, systemPrompt, userPrompt str
 // "roles must alternate").
 func (c *ClaudeClient) RunToolLoop(
 	ctx context.Context,
+	model string,
 	systemPrompt string,
 	userPrompt string,
 	tools []Tool,
 	maxRounds int,
 	handleTool func(name string, input json.RawMessage) (string, error),
 ) (string, int, bool, error) {
+	if model == "" {
+		model = c.Model
+	}
 	if maxRounds <= 0 {
 		return "", 0, false, fmt.Errorf("maxRounds must be at least 1, got %d", maxRounds)
 	}
 	messages := []ToolMessage{{Role: "user", Content: userPrompt}}
 
-	var totalInput, totalOutput int
+	var totalInput, totalOutput, totalCacheCreation, totalCacheRead int
 
 	for round := range maxRounds {
 		slog.Info("tool loop round", "round", round+1, "maxRounds", maxRounds)
 
 		reqBody := ToolRequest{
-			Model:     c.Model,
+			Model:     model,
 			MaxTokens: 4096,
-			System:    systemPrompt,
-			Tools:     tools,
+			System:    systemBlocks(systemPrompt),
+			Tools:     withCachedTail(tools),
 			Messages:  messages,
 		}
 
@@ -260,6 +299,8 @@ func (c *ClaudeClient) RunToolLoop(
 
 		totalInput += resp.Usage.InputTokens
 		totalOutput += resp.Usage.OutputTokens
+		totalCacheCreation += resp.Usage.CacheCreationInputTokens
+		totalCacheRead += resp.Usage.CacheReadInputTokens
 
 		// Append assistant response to conversation
 		messages = append(messages, ToolMessage{Role: "assistant", Content: resp.Content})
@@ -269,6 +310,7 @@ func (c *ClaudeClient) RunToolLoop(
 				"rounds", round+1,
 				"totalInputTokens", totalInput,
 				"totalOutputTokens", totalOutput)
+			c.metrics.RecordClaudeUsage(c.source, "all", model, totalInput, totalOutput, totalCacheCreation, totalCacheRead)
 			return extractText(resp.Content), round + 1, false, nil
 		}
 
@@ -302,8 +344,16 @@ func (c *ClaudeClient) RunToolLoop(
 		if len(toolResults) == 0 {
 			slog.Warn("tool loop: no tool_use blocks found, returning text as final answer",
 				"stop_reason", resp.StopReason, "round", round+1)
+			c.metrics.RecordClaudeUsage(c.source, "all", model, totalInput, totalOutput, totalCacheCreation, totalCacheRead)
 			return extractText(resp.Content), round + 1, false, nil
 		}
+
+		// Mark the last tool_result block with a cache_control breakpoint so the
+		// conversation prefix gets cached for the next round. Anthropic's 4-breakpoint
+		// budget ages out older markers automatically, so overwriting only the latest
+		// tail each round gives us a sliding cache that always pays off where it
+		// matters most (the growing tool_result history).
+		toolResults[len(toolResults)-1].CacheControl = &CacheControl{Type: "ephemeral"}
 
 		messages = append(messages, ToolMessage{Role: "user", Content: toolResults})
 	}
@@ -331,10 +381,10 @@ func (c *ClaudeClient) RunToolLoop(
 	})
 
 	reqBody := ToolRequest{
-		Model:      c.Model,
+		Model:      model,
 		MaxTokens:  4096,
-		System:     systemPrompt,
-		Tools:      tools,
+		System:     systemBlocks(systemPrompt),
+		Tools:      withCachedTail(tools),
 		ToolChoice: &ToolChoice{Type: "none"}, // prevent tool calls in the forced-summary turn
 		Messages:   messages,
 	}
@@ -355,6 +405,8 @@ func (c *ClaudeClient) RunToolLoop(
 
 	totalInput += resp.Usage.InputTokens
 	totalOutput += resp.Usage.OutputTokens
+	totalCacheCreation += resp.Usage.CacheCreationInputTokens
+	totalCacheRead += resp.Usage.CacheReadInputTokens
 
 	analysis := extractText(resp.Content)
 
@@ -368,20 +420,8 @@ func (c *ClaudeClient) RunToolLoop(
 		slog.Warn("forced summary produced empty analysis", "contentBlocks", len(resp.Content))
 	}
 
+	c.metrics.RecordClaudeUsage(c.source, "all", model, totalInput, totalOutput, totalCacheCreation, totalCacheRead)
 	return analysis, maxRounds, true, nil
-}
-
-// isAnthropicURL returns true when rawURL targets the Anthropic API directly
-// (host is exactly "anthropic.com" or a subdomain like "api.anthropic.com").
-// Using net/url host parsing avoids false positives from substring matches
-// on URLs like "https://anthropic.com.proxy.example.com".
-func isAnthropicURL(rawURL string) bool {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	host := strings.ToLower(u.Hostname()) // strips any :port suffix
-	return host == "anthropic.com" || strings.HasSuffix(host, ".anthropic.com")
 }
 
 func extractText(blocks []ContentBlock) string {

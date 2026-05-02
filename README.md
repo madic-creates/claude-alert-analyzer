@@ -34,7 +34,7 @@ Both deduplicate repeat alerts (configurable cooldown) and process work concurre
 
 ## Prerequisites
 
-- An [Anthropic API key](https://console.anthropic.com/) (or an OpenRouter key for other LLMs)
+- An [Anthropic API key](https://console.anthropic.com/), or another Anthropic-Messages-API-compatible provider that accepts `x-api-key` auth
 - An [ntfy](https://ntfy.sh) server for receiving analysis results
 - **k8s-analyzer**: Kubernetes cluster with Alertmanager
 - **checkmk-analyzer**: CheckMK instance with an automation user, and SSH access to monitored hosts
@@ -238,7 +238,7 @@ When set, the attribute appears as a "Host Context (operator-provided)" section 
 | `NTFY_PUBLISH_TOPIC` | *(varies per analyzer)* | ntfy topic name |
 | `NTFY_PUBLISH_TOKEN` | *(empty)* | ntfy auth token (optional) |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
-| `MAX_AGENT_ROUNDS` | `10` | Max tool-loop rounds per agentic analysis (1–50); applies to both analyzers |
+| `MAX_AGENT_ROUNDS` | `10` | Max tool-loop rounds per agentic analysis (1–50). Per-severity overrides (`MAX_AGENT_ROUNDS_<SEVERITY>`) accept `0` for static-only mode — see [docs/cost-and-storm-protection.md](docs/cost-and-storm-protection.md) |
 
 ### K8s analyzer
 
@@ -269,14 +269,13 @@ The default denylist is defined in [`internal/checkmk/agent.go`](internal/checkm
 
 ### LLM provider
 
-The Claude client auto-detects the provider from `API_BASE_URL`:
+The client always uses the Anthropic Messages API format with `x-api-key` + `anthropic-version: 2023-06-01` headers. `API_BASE_URL` must point at an endpoint that accepts these headers — Anthropic directly, or an Anthropic-API-compatible relay. Providers that require `Authorization: Bearer` (e.g. OpenRouter standard endpoints) are not supported in this release; OpenRouter compatibility will return in a planned follow-up that migrates the client to [`anthropic-sdk-go`](https://github.com/anthropics/anthropic-sdk-go) (which honors `ANTHROPIC_AUTH_TOKEN` natively). Response tokens are capped at 2048 (`Analyze`) / 4096 (tool-loop rounds).
 
-| Provider | Detection | Auth header |
-|----------|-----------|-------------|
-| Anthropic | URL contains `anthropic.com` | `x-api-key` + `anthropic-version: 2023-06-01` |
-| OpenRouter / other | Everything else | `Authorization: Bearer` |
+### Cost & storm protection
 
-Response tokens are capped at 2048.
+The analyzers ship with prompt caching (always on), severity-based model routing, and severity-based tool-round budgets — all driven by optional environment variables. Token-cost Prometheus counters expose cache-hit rate and per-model spend.
+
+Operator-facing details: setup recommendations, PromQL queries for cache-hit-rate and cost dashboards, alerting examples, rollout playbook, and troubleshooting live in [docs/cost-and-storm-protection.md](docs/cost-and-storm-protection.md).
 
 ## API Endpoints
 
@@ -319,8 +318,12 @@ The `/metrics` endpoint exposes Prometheus-format data in two sections.
 | `claude_api_duration_seconds` | histogram | — | Claude API call latency |
 | `claude_api_errors_total` | counter | `source` | Claude API errors |
 | `ntfy_publish_errors_total` | counter | `source` | ntfy publish failures |
+| `claude_input_tokens_total` | counter | `source`, `severity`, `model` | Claude API input tokens (excluding cache hits) |
+| `claude_output_tokens_total` | counter | `source`, `severity`, `model` | Claude API output tokens |
+| `claude_cache_creation_tokens_total` | counter | `source`, `severity`, `model` | Tokens that created cache entries (~25% surcharge) |
+| `claude_cache_read_tokens_total` | counter | `source`, `severity`, `model` | Tokens served from cache (~10% of regular input cost) |
 
-`source` is `k8s` or `checkmk`.
+`source` is `k8s` or `checkmk`. The four `claude_*_tokens_total` counters drive cache-hit-rate and cost dashboards — see [docs/cost-and-storm-protection.md](docs/cost-and-storm-protection.md) for ready-made PromQL queries.
 
 Example scrape config:
 
@@ -427,7 +430,8 @@ go test -race -count=1 ./...
 - **Context gathering** — each analyzer exposes `GatherContext(...)` returning `shared.AnalysisContext` (a list of named sections rendered into the prompt). Data collection runs concurrently: k8s fans out Prometheus + kube context; checkmk fans out host services + SSH.
 - **Agentic loops** — after static context gathering, both analyzers run `RunAgenticDiagnostics` which drives a multi-turn Claude tool-use loop. k8s exposes `kubectl_exec` and `promql_query`; checkmk exposes SSH command execution. Round budget is capped by `MAX_AGENT_ROUNDS`.
 - **Cooldown dedup** — `CooldownManager` prevents re-analyzing the same alert within the configured TTL. The cooldown is cleared on analysis failure so retries work.
-- **Provider flexibility** — the Claude client auto-detects Anthropic vs OpenRouter based on `API_BASE_URL`.
+- **Provider flexibility** — the Claude client always uses Anthropic's `x-api-key` auth. Compatible alternative providers must accept the same header.
+- **Cost routing** — `internal/shared/policy.go` (`AnalysisPolicy`) maps `Severity` → model + tool-loop rounds. Pipelines branch on `MaxRoundsFor() == 0` to call `Analyze` instead of `RunToolLoop`. Prompt caching is set at three breakpoints in `internal/shared/claude.go` (system, last tool, last `tool_result` per round).
 
 ## Pre-commit
 
@@ -442,6 +446,7 @@ GitHub Actions (`.github/workflows/build.yaml`) runs tests and lint, then builds
 
 Further docs:
 
+- [docs/cost-and-storm-protection.md](docs/cost-and-storm-protection.md) — operator guide for prompt caching, severity-based routing, token-cost dashboards, and rollout playbook
 - [docs/pre-commit.md](docs/pre-commit.md) — pre-commit hook configuration
 - [docs/renovate.md](docs/renovate.md) — dependency update automation
 - [docs/cleanup-ghcr.md](docs/cleanup-ghcr.md) — GHCR tag retention

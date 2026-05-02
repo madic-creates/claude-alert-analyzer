@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -56,7 +57,7 @@ func TestAnalyze_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
-	result, err := client.Analyze(context.Background(), "sys prompt", "user prompt")
+	result, err := client.Analyze(context.Background(), "test-model", "sys prompt", "user prompt")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -79,7 +80,7 @@ func TestAnalyze_MultipleTextBlocks(t *testing.T) {
 	defer srv.Close()
 
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
-	result, err := client.Analyze(context.Background(), "sys", "user")
+	result, err := client.Analyze(context.Background(), "test-model", "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -99,7 +100,7 @@ func TestAnalyze_EmptyContent(t *testing.T) {
 	defer srv.Close()
 
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
-	result, err := client.Analyze(context.Background(), "sys", "user")
+	result, err := client.Analyze(context.Background(), "test-model", "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -123,7 +124,7 @@ func TestAnalyze_NonTextBlocksIgnored(t *testing.T) {
 	defer srv.Close()
 
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
-	result, err := client.Analyze(context.Background(), "sys", "user")
+	result, err := client.Analyze(context.Background(), "test-model", "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -143,7 +144,7 @@ func TestAnalyze_APIErrorInBody(t *testing.T) {
 	defer srv.Close()
 
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "bad-model"}
-	_, err := client.Analyze(context.Background(), "sys", "user")
+	_, err := client.Analyze(context.Background(), "test-model", "sys", "user")
 	if err == nil {
 		t.Fatal("expected error for API error body")
 	}
@@ -172,7 +173,7 @@ func TestAnalyze_MaxTokensStopReason(t *testing.T) {
 	defer srv.Close()
 
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
-	result, err := client.Analyze(context.Background(), "sys", "user")
+	result, err := client.Analyze(context.Background(), "test-model", "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error for max_tokens stop reason: %v", err)
 	}
@@ -189,7 +190,7 @@ func TestAnalyze_HTTPError(t *testing.T) {
 	defer srv.Close()
 
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3", retryDelays: []time.Duration{}}
-	_, err := client.Analyze(context.Background(), "sys", "user")
+	_, err := client.Analyze(context.Background(), "test-model", "sys", "user")
 	if err == nil {
 		t.Fatal("expected error for non-200 response")
 	}
@@ -198,88 +199,42 @@ func TestAnalyze_HTTPError(t *testing.T) {
 	}
 }
 
-func TestAnalyze_AnthropicAuthHeader(t *testing.T) {
-	var capturedAPIKey, capturedVersion, capturedAuthHeader string
-	srvAnthropic := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedAPIKey = r.Header.Get("x-api-key")
-		capturedVersion = r.Header.Get("anthropic-version")
-		capturedAuthHeader = r.Header.Get("Authorization")
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"content": [{"type": "text", "text": "ok"}], "usage": {}}`)
-	}))
-	defer srvAnthropic.Close()
+// TestSendRequest_AlwaysUsesXAPIKey verifies that x-api-key and anthropic-version
+// are always sent regardless of the configured BaseURL. The URL-conditional
+// Bearer-auth branch was removed as a breaking change; operators using OpenRouter
+// must front-end with an auth-translating proxy.
+func TestSendRequest_AlwaysUsesXAPIKey(t *testing.T) {
+	for _, baseURL := range []string{
+		"https://api.anthropic.com/v1/messages",
+		"https://openrouter.ai/api/v1/messages",
+		"https://example.com/proxy",
+	} {
+		t.Run(baseURL, func(t *testing.T) {
+			var gotKey, gotAuth, gotVersion string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotKey = r.Header.Get("x-api-key")
+				gotAuth = r.Header.Get("Authorization")
+				gotVersion = r.Header.Get("anthropic-version")
+				w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`))
+			}))
+			defer srv.Close()
 
-	// Use a custom transport that redirects to the test server while keeping
-	// the Anthropic URL for header detection.
-	client := &ClaudeClient{
-		HTTP:    &http.Client{Transport: rewriteHostTransport{target: srvAnthropic.URL}, Timeout: 5 * time.Second},
-		BaseURL: "https://api.anthropic.com/v1/messages",
-		APIKey:  "anthropic-secret",
-		Model:   "claude-3",
-	}
-	_, err := client.Analyze(context.Background(), "sys", "user")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if capturedAPIKey != "anthropic-secret" {
-		t.Errorf("expected x-api-key header, got %q", capturedAPIKey)
-	}
-	if capturedVersion != anthropicVersion {
-		t.Errorf("expected anthropic-version header %q, got %q", anthropicVersion, capturedVersion)
-	}
-	if capturedAuthHeader != "" {
-		t.Errorf("Authorization header should not be set for Anthropic, got %q", capturedAuthHeader)
-	}
-}
-
-func TestAnalyze_OpenRouterAuthHeader(t *testing.T) {
-	var capturedAuth, capturedAPIKey string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedAuth = r.Header.Get("Authorization")
-		capturedAPIKey = r.Header.Get("x-api-key")
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"content": [{"type": "text", "text": "ok"}], "usage": {}}`)
-	}))
-	defer srv.Close()
-
-	// srv.URL does not contain "anthropic.com" so OpenRouter branch fires.
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "openrouter-key", Model: "claude-3"}
-	_, err := client.Analyze(context.Background(), "sys", "user")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if capturedAuth != "Bearer openrouter-key" {
-		t.Errorf("expected Bearer auth, got %q", capturedAuth)
-	}
-	if capturedAPIKey != "" {
-		t.Errorf("x-api-key should not be set for OpenRouter, got %q", capturedAPIKey)
-	}
-}
-
-// TestIsAnthropicURL verifies that the helper correctly distinguishes genuine
-// Anthropic API URLs from URLs that merely contain "anthropic.com" as a
-// substring (which the old strings.Contains check would have misidentified).
-func TestIsAnthropicURL(t *testing.T) {
-	cases := []struct {
-		rawURL string
-		want   bool
-	}{
-		{"https://api.anthropic.com/v1/messages", true},
-		{"https://anthropic.com/v1/messages", true},
-		{"https://ANTHROPIC.COM/v1/messages", true},         // case-insensitive
-		{"https://api.anthropic.com:443/v1/messages", true}, // explicit port
-		{"https://anthropic.com.proxy.example.com", false},  // subdomain-prefix false positive
-		{"https://notanthropic.com/v1/messages", false},
-		{"http://localhost:8080", false},
-		{"https://openrouter.ai/api/v1/chat/completions", false},
-		{"not-a-url", false},              // no host → false (url.Parse succeeds but host is empty)
-		{"http://example.com\x00", false}, // url.Parse fails on control characters → false
-	}
-	for _, tc := range cases {
-		got := isAnthropicURL(tc.rawURL)
-		if got != tc.want {
-			t.Errorf("isAnthropicURL(%q) = %v, want %v", tc.rawURL, got, tc.want)
-		}
+			c := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "tok", Model: "m"}
+			c.retryDelays = []time.Duration{}
+			_, err := c.Analyze(context.Background(), "m", "s", "u")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if gotKey != "tok" {
+				t.Errorf("x-api-key: got %q, want tok", gotKey)
+			}
+			if gotAuth != "" {
+				t.Errorf("Authorization should be empty, got %q", gotAuth)
+			}
+			if gotVersion != "2023-06-01" {
+				t.Errorf("anthropic-version: got %q, want 2023-06-01", gotVersion)
+			}
+		})
 	}
 }
 
@@ -294,28 +249,10 @@ func TestAnalyze_ContextCancellation(t *testing.T) {
 	cancel() // cancel immediately
 
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
-	_, err := client.Analyze(ctx, "sys", "user")
+	_, err := client.Analyze(ctx, "test-model", "sys", "user")
 	if err == nil {
 		t.Fatal("expected error for cancelled context")
 	}
-}
-
-// rewriteHostTransport redirects all requests to a fixed target URL, allowing
-// test servers to intercept requests nominally sent to external URLs
-// (e.g., api.anthropic.com).
-type rewriteHostTransport struct {
-	target string // e.g. "http://127.0.0.1:PORT"
-}
-
-func (t rewriteHostTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	targetURL := t.target + req.URL.Path
-	if req.URL.RawQuery != "" {
-		targetURL += "?" + req.URL.RawQuery
-	}
-	newReq := req.Clone(req.Context())
-	newReq.URL, _ = req.URL.Parse(targetURL)
-	newReq.Host = newReq.URL.Host
-	return http.DefaultTransport.RoundTrip(newReq)
 }
 
 func TestRunToolLoop_EndTurnImmediately(t *testing.T) {
@@ -333,7 +270,7 @@ func TestRunToolLoop_EndTurnImmediately(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	result, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
+	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) {
 			t.Fatal("tool handler should not be called")
 			return "", nil
@@ -377,7 +314,7 @@ func TestRunToolLoop_OneToolRoundThenEnd(t *testing.T) {
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
 	var toolCalls int
-	result, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
+	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) {
 			toolCalls++
 			if name != "execute_command" {
@@ -429,7 +366,7 @@ func TestRunToolLoop_MaxRoundsForcesSummary(t *testing.T) {
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
 	var toolCalls int
-	result, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 2,
+	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 2,
 		func(name string, input json.RawMessage) (string, error) {
 			toolCalls++
 			return "up 5 days", nil
@@ -456,7 +393,7 @@ func TestRunToolLoop_APIError(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test", retryDelays: []time.Duration{}}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	_, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
+	_, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) { return "", nil })
 
 	if err == nil {
@@ -477,7 +414,7 @@ func TestRunToolLoop_APIErrorInBody(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	_, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
+	_, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) { return "", nil })
 
 	if err == nil {
@@ -535,7 +472,7 @@ func TestRunToolLoop_ToolHandlerError(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	result, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 5,
+	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 5,
 		func(name string, input json.RawMessage) (string, error) {
 			return "", fmt.Errorf("command not allowed")
 		})
@@ -582,7 +519,7 @@ func TestRunToolLoop_MultipleToolsInOneRound(t *testing.T) {
 	}
 
 	var calledTools []string
-	result, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 5,
+	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 5,
 		func(name string, input json.RawMessage) (string, error) {
 			calledTools = append(calledTools, name)
 			return "ok", nil
@@ -631,7 +568,7 @@ func TestRunToolLoop_MaxTokensStopReason(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	result, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 10,
+	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) {
 			t.Fatal("tool handler should not be called on max_tokens response")
 			return "", nil
@@ -695,7 +632,7 @@ func TestRunToolLoop_MaxRounds_NoConsecutiveUserMessages(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	result, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
+	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil })
 
 	if err != nil {
@@ -767,7 +704,7 @@ func TestRunToolLoop_SummaryRequestFails(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test", retryDelays: []time.Duration{}}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	_, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
+	_, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "ok", nil })
 
 	if err == nil {
@@ -820,7 +757,7 @@ func TestRunToolLoop_SummaryRequestHasToolChoiceNone(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	result, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
+	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil })
 
 	if err != nil {
@@ -870,7 +807,7 @@ func TestRunToolLoop_SummaryAPIErrorInBody(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	_, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
+	_, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil })
 
 	if err == nil {
@@ -901,7 +838,7 @@ func TestAnalyze_ParseResponseError(t *testing.T) {
 	defer srv.Close()
 
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "claude-3"}
-	_, err := client.Analyze(context.Background(), "sys", "user")
+	_, err := client.Analyze(context.Background(), "test-model", "sys", "user")
 	if err == nil {
 		t.Fatal("expected error when API returns non-JSON body, got nil")
 	}
@@ -1018,7 +955,7 @@ func TestSendRequest_RetriesOnTransientError(t *testing.T) {
 		Model:       "test",
 		retryDelays: []time.Duration{0, 0}, // zero-delay retries to keep test fast
 	}
-	result, err := client.Analyze(context.Background(), "sys", "user")
+	result, err := client.Analyze(context.Background(), "test-model", "sys", "user")
 	if err != nil {
 		t.Fatalf("expected success after retries, got error: %v", err)
 	}
@@ -1112,7 +1049,7 @@ func TestRunToolLoop_SummaryParseFailure(t *testing.T) {
 	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
 	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
 
-	_, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 1,
+	_, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil })
 
 	if err == nil {
@@ -1136,7 +1073,7 @@ func TestRunToolLoop_FallbackWhenNoToolRoundsOccurred(t *testing.T) {
 	// any API calls. Previously the for loop silently skipped and the
 	// forced-summary path appended a second consecutive user message, which the
 	// Anthropic API rejects with 400 "roles must alternate".
-	_, _, _, err := client.RunToolLoop(context.Background(), "system", "user prompt", tools, 0,
+	_, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 0,
 		func(_ string, _ json.RawMessage) (string, error) {
 			t.Fatal("tool handler must not be called when maxRounds=0")
 			return "", nil
@@ -1147,5 +1084,162 @@ func TestRunToolLoop_FallbackWhenNoToolRoundsOccurred(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "maxRounds") {
 		t.Errorf("error should mention 'maxRounds', got: %v", err)
+	}
+}
+
+func TestRunToolLoop_LastToolHasCacheControl(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		w.Write([]byte(`{"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}`))
+	}))
+	defer srv.Close()
+
+	c := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "x", Model: "m"}
+	c.retryDelays = []time.Duration{}
+
+	tools := []Tool{
+		{Name: "a", Description: "first", InputSchema: InputSchema{Type: "object"}},
+		{Name: "b", Description: "second", InputSchema: InputSchema{Type: "object"}},
+	}
+	_, _, _, err := c.RunToolLoop(context.Background(), "m", "sys", "user", tools, 1, func(string, json.RawMessage) (string, error) { return "", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	toolsArr := captured["tools"].([]any)
+	first := toolsArr[0].(map[string]any)
+	last := toolsArr[len(toolsArr)-1].(map[string]any)
+	if _, has := first["cache_control"]; has {
+		t.Error("first tool must not carry cache_control")
+	}
+	cc, ok := last["cache_control"].(map[string]any)
+	if !ok || cc["type"] != "ephemeral" {
+		t.Errorf("last tool cache_control: got %v", last["cache_control"])
+	}
+}
+
+func TestAnalyze_UsesProvidedModel(t *testing.T) {
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`))
+	}))
+	defer srv.Close()
+
+	c := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "x", Model: "default-model"}
+	c.retryDelays = []time.Duration{}
+
+	if _, err := c.Analyze(context.Background(), "override-model", "sys", "usr"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(capturedBody), `"model":"override-model"`) {
+		t.Errorf("expected override-model in request, got: %s", capturedBody)
+	}
+}
+
+func TestAnalyze_SystemPromptHasCacheControl(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`))
+	}))
+	defer srv.Close()
+
+	c := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "x", Model: "m"}
+	c.retryDelays = []time.Duration{}
+	if _, err := c.Analyze(context.Background(), "m", "system", "user"); err != nil {
+		t.Fatal(err)
+	}
+
+	system, ok := captured["system"].([]any)
+	if !ok || len(system) == 0 {
+		t.Fatalf("system field is not an array: %v", captured["system"])
+	}
+	last := system[len(system)-1].(map[string]any)
+	cc, ok := last["cache_control"].(map[string]any)
+	if !ok {
+		t.Fatalf("last system block has no cache_control: %v", last)
+	}
+	if cc["type"] != "ephemeral" {
+		t.Errorf("cache_control type: got %v, want ephemeral", cc["type"])
+	}
+}
+
+func TestRunToolLoop_LastToolResultHasCacheControl(t *testing.T) {
+	round := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		round++
+		body, _ := io.ReadAll(r.Body)
+		// On round 2, the inbound request must contain a user message whose
+		// LAST content block (= the previous tool_result) has cache_control.
+		if round == 2 {
+			var req map[string]any
+			_ = json.Unmarshal(body, &req)
+			messages := req["messages"].([]any)
+			lastUserMsg := messages[len(messages)-1].(map[string]any)
+			content := lastUserMsg["content"].([]any)
+			lastBlock := content[len(content)-1].(map[string]any)
+			if _, has := lastBlock["cache_control"]; !has {
+				t.Errorf("round 2: last tool_result block missing cache_control: %v", lastBlock)
+			}
+		}
+		// Round 1 returns tool_use, round 2 returns end_turn.
+		if round == 1 {
+			w.Write([]byte(`{"content":[{"type":"tool_use","id":"t1","name":"a","input":{}}],"stop_reason":"tool_use"}`))
+		} else {
+			w.Write([]byte(`{"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}`))
+		}
+	}))
+	defer srv.Close()
+
+	c := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "x", Model: "m"}
+	c.retryDelays = []time.Duration{}
+
+	tools := []Tool{{Name: "a", Description: "x", InputSchema: InputSchema{Type: "object"}}}
+	_, rounds, _, err := c.RunToolLoop(context.Background(), "m", "sys", "user", tools, 5,
+		func(string, json.RawMessage) (string, error) { return "tool-output-data", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rounds != 2 {
+		t.Fatalf("expected 2 rounds, got %d", rounds)
+	}
+}
+
+func TestRunToolLoop_UsesProvidedModel(t *testing.T) {
+	var bodies [][]byte
+	round := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, body)
+		round++
+		// First call returns a tool_use, second call returns end_turn forced summary.
+		if round == 1 {
+			w.Write([]byte(`{"content":[{"type":"tool_use","id":"t1","name":"a","input":{}}],"stop_reason":"tool_use"}`))
+		} else {
+			w.Write([]byte(`{"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}`))
+		}
+	}))
+	defer srv.Close()
+
+	c := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "x", Model: "default-model"}
+	c.retryDelays = []time.Duration{}
+
+	tools := []Tool{{Name: "a", Description: "x", InputSchema: InputSchema{Type: "object"}}}
+	_, _, _, err := c.RunToolLoop(context.Background(), "override-model", "sys", "usr", tools, 1,
+		func(string, json.RawMessage) (string, error) { return "out", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) < 2 {
+		t.Fatalf("expected at least 2 request bodies (loop + forced summary), got %d", len(bodies))
+	}
+	for i, b := range bodies {
+		if !strings.Contains(string(b), `"model":"override-model"`) {
+			t.Errorf("request %d missing override-model: %s", i, b)
+		}
 	}
 }

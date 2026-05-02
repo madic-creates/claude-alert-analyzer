@@ -107,13 +107,3 @@ func TestK8sConfig_BaseConfig_ZeroValue(t *testing.T) {
 		t.Errorf("zero Config.BaseConfig() = %+v, want zero value", bc)
 	}
 }
-
-// TestConfig_MaxAgentRounds is a compile-time shape check: it fails to build
-// if MaxAgentRounds is absent from Config, and fails at runtime if the field
-// does not round-trip the assigned value.
-func TestConfig_MaxAgentRounds(t *testing.T) {
-	cfg := Config{MaxAgentRounds: 7}
-	if cfg.MaxAgentRounds != 7 {
-		t.Fatalf("expected 7, got %d", cfg.MaxAgentRounds)
-	}
-}

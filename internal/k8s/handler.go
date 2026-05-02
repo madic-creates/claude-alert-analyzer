@@ -93,11 +93,12 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 			}
 
 			ap := shared.AlertPayload{
-				Fingerprint: alert.Fingerprint,
-				Title:       alert.Labels["alertname"],
-				Severity:    alert.Labels["severity"],
-				Source:      "k8s",
-				Fields:      make(map[string]string),
+				Fingerprint:   alert.Fingerprint,
+				Title:         alert.Labels["alertname"],
+				Severity:      alert.Labels["severity"],
+				SeverityLevel: shared.SeverityFromAlertmanager(alert.Labels),
+				Source:        "k8s",
+				Fields:        make(map[string]string),
 			}
 			// Copy all labels and annotations into Fields
 			for k, v := range alert.Labels {

@@ -111,10 +111,11 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 		}
 
 		ap := shared.AlertPayload{
-			Fingerprint: fp,
-			Title:       title,
-			Severity:    severity,
-			Source:      "checkmk",
+			Fingerprint:   fp,
+			Title:         title,
+			Severity:      severity,
+			SeverityLevel: shared.SeverityFromCheckMK(notif.ServiceState, notif.HostState),
+			Source:        "checkmk",
 			Fields: map[string]string{
 				"hostname":            notif.Hostname,
 				"host_address":        notif.HostAddress,

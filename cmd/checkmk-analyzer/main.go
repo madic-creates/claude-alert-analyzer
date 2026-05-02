@@ -17,11 +17,6 @@ func loadConfig() checkmk.Config {
 		slog.Error("invalid config", "error", err)
 		os.Exit(1)
 	}
-	maxAgentRounds, err := shared.ParseIntEnv("MAX_AGENT_ROUNDS", "10", 1, 50)
-	if err != nil {
-		slog.Error("invalid config", "error", err)
-		os.Exit(1)
-	}
 
 	webhookSecret, err := shared.RequireEnv("WEBHOOK_SECRET")
 	if err != nil {
@@ -75,7 +70,6 @@ func loadConfig() checkmk.Config {
 		SSHKeyPath:        shared.EnvOrDefault("SSH_KEY_PATH", "/ssh/id_ed25519"),
 		SSHKnownHostsPath: shared.EnvOrDefault("SSH_KNOWN_HOSTS_PATH", "/ssh/known_hosts"),
 		SSHDeniedCommands: sshDeniedCommands,
-		MaxAgentRounds:    maxAgentRounds,
 	}
 }
 
@@ -95,6 +89,12 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})))
 
 	cfg := loadConfig()
+
+	policy, err := shared.LoadPolicy(cfg.BaseConfig())
+	if err != nil {
+		slog.Error("policy config", "error", err)
+		os.Exit(1)
+	}
 
 	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
 	claudeClient := shared.NewClaudeClient(cfg.BaseConfig()).WithPrometheusMetrics(metrics, "checkmk")
@@ -127,12 +127,20 @@ func main() {
 		SSHEnabled: cfg.SSHEnabled,
 		SSHDialer:  sshDialer,
 		SSHConfig:  cfg,
+		Policy:     policy,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload, hostInfo *checkmk.HostInfo) shared.AnalysisContext {
 			return checkmk.GatherContext(ctx, apiClient, alert, hostInfo)
 		},
 		ValidateHost: func(ctx context.Context, hostname, hostAddress string) (*checkmk.HostInfo, error) {
 			return apiClient.ValidateAndDescribeHost(ctx, hostname, hostAddress)
 		},
+	}
+
+	if deps.Analyzer == nil || deps.ToolRunner == nil || deps.Policy == nil ||
+		deps.Cooldown == nil || deps.Metrics == nil || deps.GatherContext == nil ||
+		deps.ValidateHost == nil || (deps.SSHEnabled && deps.SSHDialer == nil) {
+		slog.Error("checkmk pipeline deps incomplete — refusing to start")
+		os.Exit(1)
 	}
 
 	srv := shared.NewServer(shared.ServerConfig{
@@ -151,7 +159,9 @@ func main() {
 		"apiBaseURL", cfg.APIBaseURL,
 		"checkmkAPI", cfg.CheckMKAPIURL,
 		"sshEnabled", cfg.SSHEnabled,
-		"maxAgentRounds", cfg.MaxAgentRounds)
+		"defaultRounds", policy.DefaultMaxRounds,
+		"modelOverrides", len(policy.ModelOverrides),
+		"roundsOverrides", len(policy.RoundsOverrides))
 
 	handler := checkmk.HandleWebhook(cfg, cooldownMgr, srv.Enqueue, metrics)
 	srv.Run(handler)

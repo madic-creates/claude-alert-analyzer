@@ -57,7 +57,6 @@ type Config struct {
 	MetricsPort     string
 	WebhookSecret   string
 	MaxLogBytes     int           // Per-pod log truncation limit
-	MaxAgentRounds  int           // Maximum rounds for the agentic tool loop
 	APIBaseURL      string        // Claude API endpoint (supports Anthropic and OpenRouter)
 	APIKey          string        // API key for authentication
 	KubeAPITimeout  time.Duration // Timeout for Kubernetes API context gathering (0 = default 30s)
