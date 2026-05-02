@@ -24,12 +24,6 @@ func loadConfig() k8s.Config {
 		slog.Error("invalid config", "error", err)
 		os.Exit(1)
 	}
-	maxAgentRounds, err := shared.ParseIntEnv("MAX_AGENT_ROUNDS", "10", 1, 50)
-	if err != nil {
-		slog.Error("invalid config", "error", err)
-		os.Exit(1)
-	}
-
 	webhookSecret, err := shared.RequireEnv("WEBHOOK_SECRET")
 	if err != nil {
 		slog.Error("config error", "error", err)
@@ -52,7 +46,6 @@ func loadConfig() k8s.Config {
 		MaxLogBytes:     maxLogBytes,
 		APIBaseURL:      shared.EnvOrDefault("API_BASE_URL", "https://api.anthropic.com/v1/messages"),
 		APIKey:          apiKey,
-		MaxAgentRounds:  maxAgentRounds,
 	}
 }
 
@@ -72,6 +65,12 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})))
 
 	cfg := loadConfig()
+
+	policy, err := shared.LoadPolicy(cfg.BaseConfig())
+	if err != nil {
+		slog.Error("policy config", "error", err)
+		os.Exit(1)
+	}
 
 	k8sConfig, err := rest.InClusterConfig()
 	if err != nil {
@@ -96,9 +95,6 @@ func main() {
 		),
 	}
 
-	// Temporary inline AnalysisPolicy construction. Task 15 will replace this
-	// with shared.LoadPolicy(cfg.BaseConfig()) so per-severity overrides via
-	// CLAUDE_MODEL_* / MAX_AGENT_ROUNDS_* environment variables take effect.
 	deps := k8s.PipelineDeps{
 		Analyzer:      claudeClient,
 		ToolRunner:    claudeClient,
@@ -107,10 +103,7 @@ func main() {
 		Publishers:    publishers,
 		Cooldown:      cooldownMgr,
 		Metrics:       metrics,
-		Policy: &shared.AnalysisPolicy{
-			DefaultModel:     cfg.ClaudeModel,
-			DefaultMaxRounds: cfg.MaxAgentRounds,
-		},
+		Policy:        policy,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return k8s.GatherContext(ctx, promClient, clientset, k8s.AlertPayloadToAlert(alert), cfg)
 		},
@@ -137,7 +130,9 @@ func main() {
 	slog.Info("K8s Alert Analyzer started",
 		"port", cfg.Port, "metricsPort", cfg.MetricsPort, "model", cfg.ClaudeModel,
 		"apiBaseURL", cfg.APIBaseURL,
-		"maxAgentRounds", cfg.MaxAgentRounds)
+		"defaultRounds", policy.DefaultMaxRounds,
+		"modelOverrides", len(policy.ModelOverrides),
+		"roundsOverrides", len(policy.RoundsOverrides))
 
 	handler := k8s.HandleWebhook(cfg, cooldownMgr, srv.Enqueue, metrics)
 	srv.Run(handler)
