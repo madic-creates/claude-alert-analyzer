@@ -54,18 +54,68 @@ Webhook → Auth check → Cooldown dedup → Work queue (buffered chan, 5 worke
 - **Agentic diagnostics (k8s)**: After static context gathering, `RunAgenticDiagnostics` drives a multi-turn Claude tool-use loop (via `ToolLoopRunner`) where Claude iteratively requests `kubectl_exec` (argv-based subprocess) and `promql_query` calls. kubectl is invoked at a fixed path (`/usr/local/bin/kubectl`) with a scrubbed environment (only `HOME`/`USER`); a verb allowlist + global-flag denylist gate the call before subprocess invocation; RBAC is the authoritative server-side enforcement.
 - **Cooldown dedup**: `CooldownManager` prevents re-analyzing the same alert within a configurable TTL. Cooldown is cleared on analysis failure so retries work.
 - **Security**: All gathered output passes through `RedactSecrets()`. SSH commands use strict known_hosts and input validation. kubectl is invoked via argv at a fixed path with a scrubbed environment; RBAC is the authoritative enforcement layer.
-- **API flexibility**: Claude API client auto-detects Anthropic vs OpenRouter based on URL (sets `x-api-key` vs `Authorization: Bearer`).
-- **Metrics**: Counters/gauges/histogram (`alerts_analyzed_total`, `alerts_cooldown_total`, `queue_depth`, `claude_api_duration_seconds`, `claude_api_errors_total`, `ntfy_publish_errors_total`) live in a private Prometheus registry and are served on `METRICS_PORT` (separate from the webhook port).
+- **API flexibility**: Claude API client always uses Anthropic Messages API format with `x-api-key` auth. Compatible alternative providers must accept `x-api-key` (e.g. via an auth-translating proxy).
+- **Metrics**: Counters/gauges/histogram (`alerts_analyzed_total`, `alerts_cooldown_total`, `queue_depth`, `claude_api_duration_seconds`, `claude_api_errors_total`, `ntfy_publish_errors_total`, `claude_input_tokens_total`, `claude_output_tokens_total`, `claude_cache_creation_tokens_total`, `claude_cache_read_tokens_total`) live in a private Prometheus registry and are served on `METRICS_PORT` (separate from the webhook port).
 
 ## Environment Variables
 
 Both analyzers require: `WEBHOOK_SECRET`, `API_KEY`
 CheckMK additionally requires: `CHECKMK_API_USER`, `CHECKMK_API_SECRET`
 
-Common optional: `PORT` (default `8080`), `METRICS_PORT` (default `9101`), `NTFY_PUBLISH_URL`, `NTFY_PUBLISH_TOPIC`, `NTFY_PUBLISH_TOKEN`, `CLAUDE_MODEL`, `API_BASE_URL`, `COOLDOWN_SECONDS`, `LOG_LEVEL`, `MAX_AGENT_ROUNDS` (default `10`, tool-loop budget).
+Common optional: `PORT` (default `8080`), `METRICS_PORT` (default `9101`), `NTFY_PUBLISH_URL`, `NTFY_PUBLISH_TOPIC`, `NTFY_PUBLISH_TOKEN`, `CLAUDE_MODEL`, `API_BASE_URL`, `COOLDOWN_SECONDS`, `LOG_LEVEL`, `MAX_AGENT_ROUNDS` (default `10`, tool-loop budget). Severity-specific overrides for model and rounds are documented in the "Cost & Storm Protection" section below.
 k8s optional: `MAX_LOG_BYTES`, `PROMETHEUS_URL`, `SKIP_RESOLVED`.
 
 k8s-analyzer runs in-cluster only (`rest.InClusterConfig()`).
+
+## Cost & Storm Protection (Phase 1)
+
+The analyzers route Claude API calls based on alert severity to reduce cost. Defaults preserve current behavior — overrides are opt-in.
+
+### Severity-based model routing
+
+- `CLAUDE_MODEL_CRITICAL` (default: `$CLAUDE_MODEL`)
+- `CLAUDE_MODEL_WARNING` (default: `$CLAUDE_MODEL`)
+- `CLAUDE_MODEL_INFO` (default: `$CLAUDE_MODEL`)
+
+Suggested setup: `critical` → Opus, `warning`/`info` → Haiku. Reduces cost ~12× for non-critical alerts.
+
+### Severity-based agent rounds (range 0-50, optional)
+
+- `MAX_AGENT_ROUNDS_CRITICAL` (default: `$MAX_AGENT_ROUNDS`)
+- `MAX_AGENT_ROUNDS_WARNING` (default: `$MAX_AGENT_ROUNDS`)
+- `MAX_AGENT_ROUNDS_INFO` (default: `$MAX_AGENT_ROUNDS`)
+
+Special value `0` skips the tool-loop entirely and runs a static `Analyze` only — best for noisy info alerts. The static path uses pre-fetched context (Prometheus metrics, kube events, pod status, logs for k8s; host services + alert payload for checkmk) without giving Claude tools to call.
+
+### Prompt caching
+
+Enabled automatically. Anthropic prompt caching is applied at three breakpoints per request:
+
+1. System prompt (last block) — cached across all alerts of the same source
+2. Tool definitions (last tool) — cached across rounds within a tool-loop
+3. Tool-loop conversation history (last `tool_result` per round) — sliding cache that pays off in multi-round analyses
+
+Hit-rate is visible via Prometheus metrics:
+
+- `claude_input_tokens_total{source,severity,model}`
+- `claude_output_tokens_total{source,severity,model}`
+- `claude_cache_creation_tokens_total{source,severity,model}`
+- `claude_cache_read_tokens_total{source,severity,model}`
+
+Anthropic only caches blocks larger than ~1024 tokens (Sonnet/Opus, ~2048 for Haiku). For small system prompts, expect cache benefit only on the tool-loop history breakpoint.
+
+A useful Grafana cache-hit-rate query:
+
+```
+sum(rate(claude_cache_read_tokens_total[5m]))
+  / sum(rate(claude_cache_read_tokens_total[5m]) + rate(claude_cache_creation_tokens_total[5m]) + rate(claude_input_tokens_total[5m]))
+```
+
+## ⚠️ Breaking Change in Phase 1: OpenRouter Bearer auth removed
+
+`API_BASE_URL` must accept `x-api-key` authentication. Until this version, the client auto-detected `anthropic.com` URLs and switched to `Authorization: Bearer` for everything else (typically OpenRouter). That URL-conditional code is gone — both headers are no longer set together; only `x-api-key` is sent.
+
+If you run against OpenRouter via `Authorization: Bearer`, you must put a header-translating proxy in front, or migrate to a different Anthropic-API-compatible provider that accepts `x-api-key`.
 
 ## CI & Deployment
 
