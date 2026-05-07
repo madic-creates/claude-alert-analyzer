@@ -115,9 +115,30 @@ func (c *ClaudeClient) Analyze(ctx context.Context, model, systemPrompt, userPro
 
 // appendToolResultsAndCacheTail appends a user message of tool_result blocks
 // with cache_control on the last one (sliding breakpoint #3).
+//
+// Before marking the new tail, all cache_control breakpoints from prior
+// tool_result blocks in the conversation are cleared. Anthropic's hosted API
+// silently ages out older breakpoints (budget: 4), but some providers —
+// notably Amazon Bedrock via OpenRouter — enforce a hard limit and return
+// HTTP 400 when more than 4 blocks carry cache_control. Clearing stale
+// breakpoints keeps the total at system(1) + tools(1) + current(1) = 3,
+// compatible with all providers and semantically equivalent (the latest
+// breakpoint always covers the full conversation prefix).
 func appendToolResultsAndCacheTail(messages []anthropic.MessageParam, results []anthropic.ContentBlockParamUnion) []anthropic.MessageParam {
 	if len(results) == 0 {
 		return messages
+	}
+	for i := range messages {
+		if messages[i].Role != anthropic.MessageParamRoleUser {
+			continue
+		}
+		for j := range messages[i].Content {
+			if messages[i].Content[j].OfToolResult != nil {
+				trCopy := *messages[i].Content[j].OfToolResult
+				trCopy.CacheControl = anthropic.CacheControlEphemeralParam{} // zero = omitzero → not serialised
+				messages[i].Content[j].OfToolResult = &trCopy
+			}
+		}
 	}
 	last := &results[len(results)-1]
 	if last.OfToolResult != nil {
