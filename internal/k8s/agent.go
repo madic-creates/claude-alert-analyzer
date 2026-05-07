@@ -528,7 +528,7 @@ func handleKubectlTool(ctx context.Context, kc KubectlRunner, metrics *shared.Al
 		if out != "" {
 			return fmt.Sprintf("$ %s\n```\n%s\n```\n[exited: %v]", cmdLine, out, err), nil
 		}
-		return fmt.Sprintf("Command failed: %v", err), nil
+		return fmt.Sprintf("$ %s\n[exited: %v]", cmdLine, err), nil
 	}
 	recordToolCall(metrics, "kubectl_exec", outcomeOK, time.Since(start), argv)
 	return fmt.Sprintf("$ %s\n```\n%s\n```", cmdLine, out), nil

@@ -913,6 +913,45 @@ func TestNewKubectlSubprocess_EnvAllowlist(t *testing.T) {
 	}
 }
 
+// TestRunAgenticDiagnostics_EmptyOutputError verifies that when kubectl exits
+// with an error but produces no output (e.g. binary not found, or timeout with
+// no partial output), the tool result still includes the command line so Claude
+// can understand which command failed and self-correct. Without the fix, the
+// response was "Command failed: exit status 1" — no command name, no context.
+func TestRunAgenticDiagnostics_EmptyOutputError(t *testing.T) {
+	kc := &fakeKubectlRunner{
+		response: "", // no output at all
+		err:      fmt.Errorf("exit status 1"),
+	}
+	pq := &fakePromQLQuerier{}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+
+	var toolResult string
+	runner := &fakeToolLoopRunner{
+		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
+			result, err := handleTool("kubectl_exec", json.RawMessage(`{"command":["get","pods","-n","kube-system"]}`))
+			if err != nil {
+				t.Errorf("expected nil Go error for non-zero exit, got: %v", err)
+			}
+			toolResult = result
+			return "done", nil
+		},
+	}
+
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10, "test-model"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The command line must appear in the tool result so Claude knows what failed.
+	if !strings.Contains(toolResult, "kubectl get pods") {
+		t.Errorf("tool result missing command line; got: %q", toolResult)
+	}
+	// The exit error must also appear.
+	if !strings.Contains(toolResult, "exited:") {
+		t.Errorf("tool result missing exit annotation; got: %q", toolResult)
+	}
+}
+
 func TestNewKubectlSubprocess_NonExecutableBinary(t *testing.T) {
 	// Create a non-executable temp file and verify that NewKubectlSubprocess
 	// does not panic or exit — it only logs a warning.
