@@ -872,7 +872,13 @@ func RunAgenticDiagnostics(
 
 		argv, err := parseCommandInput(input)
 		if err != nil {
-			return "", err
+			// Return as a tool result string (not a Go error) so Claude can
+			// self-correct, consistent with the k8s agent's handling of
+			// parseKubectlInput failures. A Go error causes RunToolLoop to
+			// mark the result is_error=true and records an exec_error metric,
+			// conflating validation rejections with actual execution failures
+			// (SSH errors, missing binary).
+			return "Invalid command: " + err.Error(), nil
 		}
 
 		if isDenied(denied, argv) {
@@ -914,6 +920,8 @@ func RunAgenticDiagnostics(
 		switch {
 		case err != nil:
 			outcome = "exec_error"
+		case strings.HasPrefix(out, "Invalid command: "):
+			outcome = "rejected_validation"
 		case strings.HasPrefix(out, "Command denied"), strings.HasPrefix(out, "command denied"):
 			outcome = "rejected_verb"
 		case strings.HasPrefix(out, "Command failed:"), strings.Contains(out, "[exited: "):

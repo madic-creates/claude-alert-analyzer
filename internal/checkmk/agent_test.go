@@ -418,12 +418,13 @@ func TestRunAgenticDiagnostics_NonZeroExitNoOutput(t *testing.T) {
 	}
 }
 
-// TestRunAgenticDiagnostics_InvalidCommandInputReturnsError verifies that when
-// Claude sends an execute_command tool call with an invalid command array (e.g.
-// empty slice), parseCommandInput returns an error and handleTool propagates it
-// rather than panicking or passing the bad argv to the SSH session. This covers
-// the return "", err path in the handleTool closure.
-func TestRunAgenticDiagnostics_InvalidCommandInputReturnsError(t *testing.T) {
+// TestRunAgenticDiagnostics_InvalidCommandInputReturnsToolResult verifies that
+// when Claude sends an execute_command tool call with an invalid command array
+// (e.g. empty slice), parseCommandInput failures are surfaced as plain tool
+// result strings (not Go errors) so Claude can self-correct, consistent with
+// the k8s agent's handling of parseKubectlInput failures. The SSH session must
+// not be reached for invalid input.
+func TestRunAgenticDiagnostics_InvalidCommandInputReturnsToolResult(t *testing.T) {
 	sshCalled := false
 	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
 		sshCalled = true
@@ -447,15 +448,24 @@ func TestRunAgenticDiagnostics_InvalidCommandInputReturnsError(t *testing.T) {
 	if sshCalled {
 		t.Error("SSH server should not be reached for invalid command input")
 	}
+	if len(runner.toolOutputs) != 1 {
+		t.Fatalf("expected 1 tool output captured, got %d", len(runner.toolOutputs))
+	}
+	// Parse errors are now returned as tool result strings (not Go errors) so
+	// Claude can self-correct. The output must start with "Invalid command: "
+	// and contain the specific validation message.
+	if !strings.HasPrefix(runner.toolOutputs[0], "Invalid command: ") {
+		t.Errorf("expected tool output to start with 'Invalid command: ', got: %q", runner.toolOutputs[0])
+	}
+	if !strings.Contains(runner.toolOutputs[0], "empty command") {
+		t.Errorf("expected tool output to contain 'empty command', got: %q", runner.toolOutputs[0])
+	}
+	// No Go error should be returned from handleTool for a validation failure.
 	if len(runner.toolErrors) != 1 {
-		t.Fatalf("expected 1 tool error captured, got %d", len(runner.toolErrors))
-		return
+		t.Fatalf("expected 1 tool error slot captured, got %d", len(runner.toolErrors))
 	}
-	if runner.toolErrors[0] == nil {
-		t.Error("expected error for empty command array, got nil")
-	}
-	if !strings.Contains(runner.toolErrors[0].Error(), "empty command") {
-		t.Errorf("unexpected error message: %v", runner.toolErrors[0])
+	if runner.toolErrors[0] != nil {
+		t.Errorf("expected nil Go error for parse validation failure, got: %v", runner.toolErrors[0])
 	}
 }
 
