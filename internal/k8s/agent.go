@@ -546,7 +546,16 @@ func handlePromQLTool(ctx context.Context, prom PromQLQuerier, metrics *shared.A
 	out = shared.SanitizeOutput(out)
 	out = shared.RedactSecrets(out)
 	out = shared.Truncate(out, 4096)
-	recordToolCall(metrics, "promql_query", outcomeOK, time.Since(start), nil)
+	// Detect timeout: if queryCtx expired (or its parent was cancelled) while
+	// prom.Query was running, record the outcome as "timeout" rather than "ok"
+	// so operators can distinguish slow/unreachable Prometheus from successful
+	// queries in the agent_tool_calls_total metric. Without this check every
+	// PromQL call — including timed-out ones — was recorded as outcome="ok".
+	outcome := outcomeOK
+	if queryCtx.Err() != nil {
+		outcome = outcomeTimeout
+	}
+	recordToolCall(metrics, "promql_query", outcome, time.Since(start), nil)
 	return fmt.Sprintf("# PromQL: %s\n```\n%s\n```", q, out), nil
 }
 

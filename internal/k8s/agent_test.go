@@ -605,6 +605,39 @@ func TestRunAgenticDiagnostics_PromQLDispatch(t *testing.T) {
 	}
 }
 
+// TestHandlePromQLTool_TimeoutOutcome verifies that when the PromQL query
+// context expires, handlePromQLTool records outcome="timeout" rather than
+// outcome="ok" in the agent_tool_calls_total metric. Before the fix, the
+// outcome variable was hard-coded to outcomeOK and queryCtx.Err() was never
+// checked, making Prometheus timeouts invisible in the metric.
+func TestHandlePromQLTool_TimeoutOutcome(t *testing.T) {
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+
+	// Pre-cancel the parent context so that the queryCtx created inside
+	// handlePromQLTool (via context.WithTimeout) inherits the cancellation
+	// immediately. fakePromQLQuerier ignores context, so it returns right away;
+	// queryCtx.Err() will be non-nil because the parent was already done.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	pq := &fakePromQLQuerier{response: "(query failed: context canceled)"}
+	out, err := handlePromQLTool(ctx, pq, metrics, json.RawMessage(`{"query":"up"}`), time.Now())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "up") {
+		t.Errorf("expected query name in output, got %q", out)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	metrics.MetricsHandler()(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `agent_tool_calls_total{outcome="timeout",source="k8s",tool="promql_query"} 1`) {
+		t.Errorf("expected timeout outcome metric for cancelled context; body:\n%s", body)
+	}
+}
+
 func TestRunAgenticDiagnostics_ValidationRejected(t *testing.T) {
 	kc := &fakeKubectlRunner{}
 	pq := &fakePromQLQuerier{}
