@@ -385,9 +385,9 @@ func TestRunAgenticDiagnostics_NonZeroExitIncludesOutput(t *testing.T) {
 // TestRunAgenticDiagnostics_NonZeroExitNoOutput verifies that when a command
 // fails with a non-zero exit status AND produces no output at all (e.g. a
 // binary that exits immediately with an error code but writes nothing to
-// stdout or stderr), the tool result is the "Command failed: ..." string
-// rather than an empty string or the output-inclusive format used when there
-// is output to preserve.
+// stdout or stderr), the tool result still includes the command line so Claude
+// knows which command failed and can self-correct. Without the command line,
+// Claude only sees "exit status 1" with no context about what was run.
 func TestRunAgenticDiagnostics_NonZeroExitNoOutput(t *testing.T) {
 	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
 		// Send a non-zero exit status without writing anything to the channel.
@@ -411,10 +411,14 @@ func TestRunAgenticDiagnostics_NonZeroExitNoOutput(t *testing.T) {
 		t.Fatalf("expected 1 tool output, got %d", len(runner.toolOutputs))
 		return
 	}
-	// When there is no output the result must be the simple "Command failed: ..."
-	// message rather than the output-inclusive "$ cmd\n...\n[exited: ...]" format.
-	if !strings.HasPrefix(runner.toolOutputs[0], "Command failed:") {
-		t.Errorf("expected 'Command failed:' prefix for no-output failure, got: %q", runner.toolOutputs[0])
+	// The command line must appear in the tool result so Claude knows what failed
+	// and can choose a different diagnostic approach.
+	if !strings.Contains(runner.toolOutputs[0], "false") {
+		t.Errorf("tool result missing command line; got: %q", runner.toolOutputs[0])
+	}
+	// The exit annotation must also appear.
+	if !strings.Contains(runner.toolOutputs[0], "[exited:") {
+		t.Errorf("tool result missing exit annotation; got: %q", runner.toolOutputs[0])
 	}
 }
 
