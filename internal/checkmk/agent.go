@@ -924,6 +924,22 @@ func RunAgenticDiagnostics(
 			outcome = "rejected_validation"
 		case strings.HasPrefix(out, "Command denied"), strings.HasPrefix(out, "command denied"):
 			outcome = "rejected_verb"
+		// Distinguish SSH timeout and context-cancellation from ordinary non-zero
+		// exits. runSSHCommand encodes timeouts as "timeout after <d>" and context
+		// cancellation as "context cancelled: ..." in the error message; handleTool
+		// converts these into the tool-result strings below. Matching them before
+		// the broader nonzero_exit case ensures operators can tell from metrics
+		// whether commands are slow/hanging (timeout) versus merely failing
+		// (nonzero_exit, e.g. grep no-match, systemctl status on a stopped unit).
+		//
+		// Three patterns cover all timeout paths from runSSHCommand:
+		//   1. Timer fires, no partial output → "Command failed: timeout after <d>"
+		//   2. Timer fires, partial output    → "...\n[exited: timeout after <d>]"
+		//   3. ctx.Done()                    → "Command failed: context cancelled: ..."
+		case strings.HasPrefix(out, "Command failed: timeout after"),
+			strings.HasPrefix(out, "Command failed: context cancelled"),
+			strings.Contains(out, "[exited: timeout after"):
+			outcome = "timeout"
 		case strings.HasPrefix(out, "Command failed:"), strings.Contains(out, "[exited: "):
 			outcome = "nonzero_exit"
 		}

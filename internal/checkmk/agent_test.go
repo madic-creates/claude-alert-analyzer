@@ -3251,3 +3251,48 @@ func TestRunAgenticDiagnostics_NonZeroExitMetricClassification(t *testing.T) {
 		t.Errorf("expected nonzero_exit metric for non-zero exit with output; body:\n%s", body)
 	}
 }
+
+// TestRunAgenticDiagnostics_TimeoutMetricClassification verifies that when an
+// SSH command is cancelled via context (simulating a timeout or shutdown), the
+// wrappedHandleTool closure records the metric outcome as "timeout" rather than
+// "nonzero_exit". Before the fix, the context-cancelled error returned by
+// runSSHCommand was formatted as "Command failed: context cancelled: ..." which
+// matched the generic strings.HasPrefix(out, "Command failed:") nonzero_exit
+// case instead of the more specific timeout case.
+func TestRunAgenticDiagnostics_TimeoutMetricClassification(t *testing.T) {
+	// SSH server blocks indefinitely so that runSSHCommand cannot complete
+	// the command before ctx.Done() fires. The unblockCh channel is closed
+	// by t.Cleanup once all assertions are done so the goroutine can exit
+	// cleanly without writing to a closed channel.
+	unblockCh := make(chan struct{})
+	t.Cleanup(func() { close(unblockCh) })
+	client := startTestSSHServer(t, func(_ string, _ ssh.Channel) {
+		<-unblockCh // block until test cleanup
+	})
+
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	runner := &capturingToolRunner{
+		calls:  []agentToolCall{{name: "execute_command", input: `{"command": ["df", "-h"]}`}},
+		result: "analysis",
+	}
+	dialer := &fixedDialer{client: client}
+
+	// Pre-cancel the context so that runSSHCommand's select immediately picks
+	// ctx.Done() and returns "context cancelled: ..." rather than waiting for
+	// the blocked SSH server to respond.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, _ = RunAgenticDiagnostics(
+		ctx, Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, dialer, metrics, "host1", "10.0.0.1", "ctx", 3, "test-model",
+	)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	metrics.MetricsHandler()(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `agent_tool_calls_total{outcome="timeout",source="checkmk",tool="execute_command"} 1`) {
+		t.Errorf("expected timeout metric for context-cancelled SSH command; body:\n%s", body)
+	}
+}
