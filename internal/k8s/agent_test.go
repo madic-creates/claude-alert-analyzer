@@ -864,6 +864,55 @@ func TestSummarizeKubectlArgv(t *testing.T) {
 	}
 }
 
+func TestNewKubectlSubprocess_EnvAllowlist(t *testing.T) {
+	// Regression: client-go's rest.InClusterConfig() needs
+	// KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT in the env to
+	// detect in-cluster execution. If they are stripped, every kubectl
+	// call falls back to http://localhost:8080 and fails with
+	// "couldn't get current server API group list". At the same time
+	// secret-backed env vars (envFrom) and KUBECONFIG must not leak —
+	// kubectl's stderr is fed to the LLM, so anything in env that could
+	// surface there is an exfiltration risk.
+	t.Setenv("HOME", "/tmp")
+	t.Setenv("USER", "analyzer")
+	t.Setenv("KUBERNETES_SERVICE_HOST", "10.43.0.1")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "443")
+	t.Setenv("KUBECONFIG", "/should/not/leak")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "secret-must-not-leak")
+	t.Setenv("HTTPS_PROXY", "http://attacker.example/")
+	t.Setenv("LD_PRELOAD", "/tmp/evil.so")
+
+	runner := NewKubectlSubprocess("/usr/local/bin/kubectl")
+
+	want := []string{
+		"HOME=/tmp",
+		"USER=analyzer",
+		"KUBERNETES_SERVICE_HOST=10.43.0.1",
+		"KUBERNETES_SERVICE_PORT=443",
+	}
+	got := map[string]bool{}
+	for _, e := range runner.Env {
+		got[e] = true
+	}
+	for _, w := range want {
+		if !got[w] {
+			t.Errorf("missing required env entry %q; runner.Env=%v", w, runner.Env)
+		}
+	}
+	denied := []string{"KUBECONFIG", "ANTHROPIC_AUTH_TOKEN", "HTTPS_PROXY", "LD_PRELOAD"}
+	for _, e := range runner.Env {
+		for _, d := range denied {
+			if strings.HasPrefix(e, d+"=") {
+				t.Errorf("denied env var %q leaked into runner.Env: %q", d, e)
+			}
+		}
+	}
+	if len(runner.Env) != len(want) {
+		t.Errorf("runner.Env has %d entries, want exactly %d (allowlist only); got %v",
+			len(runner.Env), len(want), runner.Env)
+	}
+}
+
 func TestNewKubectlSubprocess_NonExecutableBinary(t *testing.T) {
 	// Create a non-executable temp file and verify that NewKubectlSubprocess
 	// does not panic or exit — it only logs a warning.

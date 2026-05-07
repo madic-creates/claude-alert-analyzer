@@ -338,10 +338,20 @@ type kubectlSubprocess struct {
 const defaultKubectlPath = "/usr/local/bin/kubectl"
 
 // NewKubectlSubprocess constructs a runner that invokes the kubectl binary
-// at path (default: /usr/local/bin/kubectl). The env slice contains only
-// HOME and USER taken from the runtime environment; everything else
-// (KUBECONFIG, PATH, proxy vars, LD_PRELOAD) is dropped so that no
-// inherited variable can redirect kubectl's auth or behavior.
+// at path (default: /usr/local/bin/kubectl). The env is an allowlist
+// containing only the entries kubectl genuinely needs:
+//   - HOME / USER: kubectl's discovery cache lives under $HOME/.kube/cache.
+//   - KUBERNETES_SERVICE_HOST / KUBERNETES_SERVICE_PORT: client-go's
+//     rest.InClusterConfig() reads these to detect in-cluster execution.
+//     Without them every API call falls back to http://localhost:8080 and
+//     fails with "couldn't get current server API group list".
+//
+// Everything else (KUBECONFIG, PATH, proxy vars, LD_PRELOAD, the secret-
+// backed env vars from envFrom) is dropped so that no inherited variable
+// can redirect kubectl's auth/behavior or leak secrets via stderr into the
+// LLM context. The CA cert and service-account token are read from
+// /var/run/secrets/kubernetes.io/serviceaccount/, not from env, so no
+// further forwarding is needed for in-cluster auth.
 func NewKubectlSubprocess(path string) *kubectlSubprocess {
 	if path == "" {
 		path = defaultKubectlPath
@@ -354,6 +364,8 @@ func NewKubectlSubprocess(path string) *kubectlSubprocess {
 	env := []string{
 		"HOME=" + os.Getenv("HOME"),
 		"USER=" + os.Getenv("USER"),
+		"KUBERNETES_SERVICE_HOST=" + os.Getenv("KUBERNETES_SERVICE_HOST"),
+		"KUBERNETES_SERVICE_PORT=" + os.Getenv("KUBERNETES_SERVICE_PORT"),
 	}
 	return &kubectlSubprocess{Path: path, Env: env}
 }
