@@ -21,8 +21,9 @@ type Config struct {
 	Port              string
 	MetricsPort       string
 	WebhookSecret     string
-	APIBaseURL        string
-	APIKey            string
+	APIBaseURL        string // ANTHROPIC_BASE_URL
+	APIKey            string // ANTHROPIC_API_KEY (sets x-api-key)
+	AuthToken         string // ANTHROPIC_AUTH_TOKEN (sets Authorization: Bearer)
 	CheckMKAPIURL     string
 	CheckMKAPIUser    string
 	CheckMKAPISecret  string
@@ -43,5 +44,6 @@ func (c Config) BaseConfig() shared.BaseConfig {
 		WebhookSecret:   c.WebhookSecret,
 		APIBaseURL:      c.APIBaseURL,
 		APIKey:          c.APIKey,
+		AuthToken:       c.AuthToken,
 	}
 }

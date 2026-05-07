@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 )
 
@@ -229,36 +230,38 @@ func validateKubectlFlags(argv []string) error {
 
 // kubectlTool is the Claude tool definition for argv-based kubectl execution.
 // The schema mirrors checkmk's execute_command tool — one argv array, no shell.
-var kubectlTool = shared.Tool{
-	Name:        "kubectl_exec",
-	Description: "Run a read-only kubectl command. The command is passed as an argv array (no shell). Examples: [\"get\",\"pods\",\"-n\",\"monitoring\",\"-o\",\"wide\"], [\"describe\",\"pod\",\"prom-0\",\"-n\",\"monitoring\"], [\"logs\",\"pod-x\",\"-n\",\"db\",\"--tail=100\"], [\"top\",\"nodes\"]. Allowed verbs: get, describe, logs, top, events, explain, version, api-resources, api-versions, cluster-info, auth can-i, rollout history.",
-	InputSchema: shared.InputSchema{
-		Type: "object",
-		Properties: map[string]shared.Property{
-			"command": {
-				Type:        "array",
-				Description: "kubectl arguments as argv array, without the leading 'kubectl'",
-				Items:       &shared.Items{Type: "string"},
+var kubectlTool = anthropic.ToolUnionParam{
+	OfTool: &anthropic.ToolParam{
+		Name:        "kubectl_exec",
+		Description: anthropic.String("Run a read-only kubectl command. The command is passed as an argv array (no shell). Examples: [\"get\",\"pods\",\"-n\",\"monitoring\",\"-o\",\"wide\"], [\"describe\",\"pod\",\"prom-0\",\"-n\",\"monitoring\"], [\"logs\",\"pod-x\",\"-n\",\"db\",\"--tail=100\"], [\"top\",\"nodes\"]. Allowed verbs: get, describe, logs, top, events, explain, version, api-resources, api-versions, cluster-info, auth can-i, rollout history."),
+		InputSchema: anthropic.ToolInputSchemaParam{
+			Properties: map[string]any{
+				"command": map[string]any{
+					"type":        "array",
+					"description": "kubectl arguments as argv array, without the leading 'kubectl'",
+					"items":       map[string]any{"type": "string"},
+				},
 			},
+			Required: []string{"command"},
 		},
-		Required: []string{"command"},
 	},
 }
 
 // promqlTool is the Claude tool definition for arbitrary PromQL queries
 // against the configured Prometheus instance.
-var promqlTool = shared.Tool{
-	Name:        "promql_query",
-	Description: "Run a PromQL query against Prometheus. Returns time-series results. Example: 'rate(http_requests_total[5m])'.",
-	InputSchema: shared.InputSchema{
-		Type: "object",
-		Properties: map[string]shared.Property{
-			"query": {
-				Type:        "string",
-				Description: "PromQL expression",
+var promqlTool = anthropic.ToolUnionParam{
+	OfTool: &anthropic.ToolParam{
+		Name:        "promql_query",
+		Description: anthropic.String("Run a PromQL query against Prometheus. Returns time-series results. Example: 'rate(http_requests_total[5m])'."),
+		InputSchema: anthropic.ToolInputSchemaParam{
+			Properties: map[string]any{
+				"query": map[string]any{
+					"type":        "string",
+					"description": "PromQL expression",
+				},
 			},
+			Required: []string{"query"},
 		},
-		Required: []string{"query"},
 	},
 }
 
@@ -466,7 +469,7 @@ func RunAgenticDiagnostics(
 		model,
 		agentSystemPromptForRounds(maxRounds),
 		userPrompt,
-		[]shared.Tool{kubectlTool, promqlTool},
+		[]anthropic.ToolUnionParam{kubectlTool, promqlTool},
 		maxRounds,
 		safeHandleTool,
 	)

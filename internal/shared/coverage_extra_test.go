@@ -18,113 +18,15 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/anthropics/anthropic-sdk-go"
 )
-
-// TestRunToolLoop_RoundParseError verifies that when the Claude API returns a
-// 200 OK with a non-JSON body during a mid-conversation tool round (e.g. a CDN
-// maintenance page or a truncated response), RunToolLoop propagates a clear
-// "round N parse:" error rather than panicking or silently returning empty
-// output. This covers line 177 (the round parse error path) which was
-// previously untested — the analogous path in Analyze is covered by
-// TestAnalyze_ParseResponseError but RunToolLoop had no equivalent.
-func TestRunToolLoop_RoundParseError(t *testing.T) {
-	var callCount atomic.Int32
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		call := callCount.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-
-		if call == 1 {
-			// Round 1: return a valid tool call so the loop advances to round 2.
-			fmt.Fprint(w, `{
-				"content": [
-					{"type": "tool_use", "id": "toolu_1", "name": "execute_command", "input": {"command": ["uptime"]}}
-				],
-				"stop_reason": "tool_use",
-				"usage": {"input_tokens": 20, "output_tokens": 10}
-			}`)
-		} else {
-			// Round 2: simulate a CDN maintenance page — 200 OK but non-JSON.
-			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, `<!DOCTYPE html><html><body>Maintenance</body></html>`)
-		}
-	}))
-	defer srv.Close()
-
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
-	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
-
-	_, _, _, err := client.RunToolLoop(
-		// context.Background is fine — the request will complete, just with bad JSON
-		t.Context(),
-		"test-model", "system", "user prompt", tools, 10,
-		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil },
-	)
-
-	if err == nil {
-		t.Fatal("expected error when tool round returns non-JSON body, got nil")
-	}
-	if !strings.Contains(err.Error(), "parse") {
-		t.Errorf("error should mention 'parse', got: %v", err)
-	}
-}
-
-// TestRunToolLoop_SummaryParseError verifies that when the forced-summary
-// request (sent after maxRounds is exhausted) returns a 200 OK with a
-// non-JSON body, RunToolLoop returns a "summary parse:" error rather than
-// panicking or silently producing empty output. This covers lines 267-269
-// (the summary JSON unmarshal error path), which is the summary-turn analogue
-// of the per-round parse error tested above.
-func TestRunToolLoop_SummaryParseError(t *testing.T) {
-	var callCount atomic.Int32
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		call := callCount.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-
-		if call == 1 {
-			// Only round (maxRounds=1): request a tool call to exhaust the budget.
-			fmt.Fprint(w, `{
-				"content": [
-					{"type": "tool_use", "id": "toolu_1", "name": "execute_command", "input": {"command": ["df", "-h"]}}
-				],
-				"stop_reason": "tool_use",
-				"usage": {"input_tokens": 30, "output_tokens": 10}
-			}`)
-		} else {
-			// Forced-summary call: simulate a non-JSON 200 OK.
-			w.Header().Set("Content-Type", "text/plain")
-			fmt.Fprint(w, "unexpected plain-text response from proxy")
-		}
-	}))
-	defer srv.Close()
-
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
-	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
-
-	_, _, _, err := client.RunToolLoop(
-		t.Context(),
-		"test-model", "system", "user prompt", tools, 1,
-		func(name string, input json.RawMessage) (string, error) { return "ok", nil },
-	)
-
-	if err == nil {
-		t.Fatal("expected error when summary round returns non-JSON body, got nil")
-	}
-	if !strings.Contains(err.Error(), "summary") {
-		t.Errorf("error should mention 'summary', got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "parse") {
-		t.Errorf("error should mention 'parse', got: %v", err)
-	}
-}
 
 // TestRunToolLoop_ForcedSummaryEmptyContent verifies that when the forced-summary
 // turn returns a 200 OK with an empty content array (e.g. Claude returned no text
 // blocks), RunToolLoop returns ("", nil) rather than an error. The empty result
 // is then caught by the pipeline's empty-analysis guard which fires a failure
-// notification. This covers lines 286-288 (the slog.Warn path for an empty
-// forced-summary analysis) which was previously untested.
+// notification.
 func TestRunToolLoop_ForcedSummaryEmptyContent(t *testing.T) {
 	var callCount atomic.Int32
 
@@ -152,8 +54,10 @@ func TestRunToolLoop_ForcedSummaryEmptyContent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &ClaudeClient{HTTP: srv.Client(), BaseURL: srv.URL, APIKey: "test-key", Model: "test"}
-	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+	client := newTestClient(t, srv, "test", "test-key", 0)
+	tools := []anthropic.ToolUnionParam{{
+		OfTool: &anthropic.ToolParam{Name: "execute_command"},
+	}}
 
 	result, _, _, err := client.RunToolLoop(
 		t.Context(),
@@ -170,16 +74,17 @@ func TestRunToolLoop_ForcedSummaryEmptyContent(t *testing.T) {
 }
 
 // TestRunToolLoop_ZeroMaxRounds verifies that RunToolLoop returns an error
-// immediately when maxRounds <= 0, rather than silently skipping the tool loop
-// and falling into the forced-summary path with only the initial string-content
-// user message. Without this guard the type assertion
-// messages[lastIdx].Content.([]ContentBlock) fails for the string initial
-// prompt and the else-fallback appends a second consecutive user message,
-// which the Anthropic API rejects with 400 "roles must alternate". The guard
-// fails fast and prevents that invalid API request.
+// immediately when maxRounds <= 0, without making any API calls.
 func TestRunToolLoop_ZeroMaxRounds(t *testing.T) {
-	client := &ClaudeClient{HTTP: http.DefaultClient, BaseURL: "http://unused", APIKey: "test", Model: "test"}
-	tools := []Tool{{Name: "execute_command", Description: "test", InputSchema: InputSchema{Type: "object"}}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("API must not be called when maxRounds <= 0")
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv, "test", "test", 0)
+	tools := []anthropic.ToolUnionParam{{
+		OfTool: &anthropic.ToolParam{Name: "execute_command"},
+	}}
 
 	for _, rounds := range []int{0, -1, -100} {
 		_, _, _, err := client.RunToolLoop(
@@ -194,315 +99,6 @@ func TestRunToolLoop_ZeroMaxRounds(t *testing.T) {
 		if !strings.Contains(err.Error(), "maxRounds") {
 			t.Errorf("maxRounds=%d: error should mention 'maxRounds', got: %v", rounds, err)
 		}
-	}
-}
-
-// TestSendRequest_CreateRequestError verifies that sendRequest returns a "create
-// request: ..." error when http.NewRequestWithContext fails due to an invalid
-// BaseURL (e.g. a null byte injected by a misconfigured environment variable).
-// This covers lines 68-70 of claude.go, which were previously untested because
-// all existing tests use valid http/https URLs constructed by httptest.NewServer.
-func TestSendRequest_CreateRequestError(t *testing.T) {
-	// A null byte in the URL makes http.NewRequestWithContext fail with
-	// "invalid URL" before any network I/O takes place.
-	client := &ClaudeClient{
-		HTTP:    http.DefaultClient,
-		BaseURL: "http://host\x00invalid/v1/messages",
-		APIKey:  "test-key",
-		Model:   "test",
-	}
-	_, err := client.sendRequest(context.Background(), map[string]string{"k": "v"})
-	if err == nil {
-		t.Fatal("expected error for invalid URL, got nil")
-	}
-	if !strings.Contains(err.Error(), "create request") {
-		t.Errorf("error should mention 'create request', got: %v", err)
-	}
-}
-
-// TestSendRequest_ReadBodyError verifies that sendRequest returns a "read response: ..."
-// error when the server sends a valid HTTP 200 header but then drops the TCP connection
-// before delivering the full body. This is a real production failure mode (e.g. a
-// load-balancer reset mid-stream) and covers the io.ReadAll error path in sendRequest.
-func TestSendRequest_ReadBodyError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Hijack the connection so we can write raw bytes and then close it
-		// before the response body is complete, causing the client's io.ReadAll
-		// to receive an unexpected EOF.
-		hj, ok := w.(http.Hijacker)
-		if !ok {
-			t.Error("server does not support hijacking")
-			http.Error(w, "no hijack", 500)
-			return
-		}
-		conn, bufrw, err := hj.Hijack()
-		if err != nil {
-			t.Errorf("hijack failed: %v", err)
-			return
-		}
-		// Write a valid HTTP 200 response with Content-Length larger than what
-		// we actually send, then close the connection. The client will read the
-		// headers successfully (200 OK) and then fail on io.ReadAll because the
-		// connection is closed before the promised bytes arrive.
-		_, _ = bufrw.WriteString("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10000\r\n\r\n{")
-		_ = bufrw.Flush()
-		_ = conn.Close()
-	}))
-	defer srv.Close()
-
-	client := &ClaudeClient{
-		HTTP:        srv.Client(),
-		BaseURL:     srv.URL,
-		APIKey:      "test-key",
-		Model:       "test",
-		retryDelays: []time.Duration{0, 0}, // zero-delay retries to keep test fast
-	}
-
-	_, err := client.sendRequest(context.Background(), map[string]string{"k": "v"})
-	if err == nil {
-		t.Fatal("expected error when server drops connection mid-response, got nil")
-	}
-	if !strings.Contains(err.Error(), "read response") {
-		t.Errorf("error should mention 'read response', got: %v", err)
-	}
-}
-
-// TestSendRequest_ContextCancelledDuringBodyRead verifies that sendRequest
-// returns immediately when the context is cancelled during the response body
-// read (io.ReadAll), rather than continuing to retry after the unnecessary
-// delay. This covers the ctx.Err() guard added to the readErr path (mirroring
-// the same guard already present on the doErr / network-error path).
-func TestSendRequest_ContextCancelledDuringBodyRead(t *testing.T) {
-	// bodyStarted is closed when the server has started writing the response
-	// body so we can cancel the context at the right moment.
-	bodyStarted := make(chan struct{})
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hj, ok := w.(http.Hijacker)
-		if !ok {
-			t.Error("server does not support hijacking")
-			http.Error(w, "no hijack", 500)
-			return
-		}
-		conn, bufrw, err := hj.Hijack()
-		if err != nil {
-			t.Errorf("hijack failed: %v", err)
-			return
-		}
-		// Write headers and a partial body so the client starts reading,
-		// then signal that the body has started and wait before closing.
-		_, _ = bufrw.WriteString("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10000\r\n\r\n{")
-		_ = bufrw.Flush()
-		close(bodyStarted) // signal: context can now be cancelled
-		// Hold the connection open briefly so the client is actually blocked
-		// inside io.ReadAll when the context is cancelled.
-		<-r.Context().Done()
-		_ = conn.Close()
-	}))
-	defer srv.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Cancel the context as soon as the server signals it has started sending
-	// the body — this ensures cancellation happens while io.ReadAll is blocked.
-	go func() {
-		<-bodyStarted
-		cancel()
-	}()
-
-	client := &ClaudeClient{
-		HTTP:        srv.Client(),
-		BaseURL:     srv.URL,
-		APIKey:      "test-key",
-		Model:       "test",
-		retryDelays: []time.Duration{10 * time.Second}, // long enough to detect if a retry is attempted
-	}
-
-	start := time.Now()
-	_, err := client.sendRequest(ctx, map[string]string{"k": "v"})
-	elapsed := time.Since(start)
-
-	if err == nil {
-		t.Fatal("expected error when context is cancelled mid-body-read, got nil")
-	}
-	// The function must return well before the retry delay (10 s). A generous
-	// upper bound of 5 s is still well below the 10 s retry delay, so any
-	// spurious retry would be caught even on a slow CI machine.
-	if elapsed > 5*time.Second {
-		t.Errorf("sendRequest took %v — looks like it waited for the retry delay instead of returning immediately on ctx cancellation", elapsed)
-	}
-	// The error should mention either "read response" (body read failed) or
-	// the context cancellation, depending on which path was taken.
-	if !strings.Contains(err.Error(), "read response") && !strings.Contains(err.Error(), "context") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-// TestSendRequest_ContextCancelledDuringRetry verifies that when the context is
-// cancelled while sendRequest is waiting inside the retry-delay timer select,
-// the function returns immediately with a "context cancelled awaiting retry"
-// error rather than blocking for the full delay duration. This covers the
-// ctx.Done() case in the retry timer select (claude.go lines ~100-103), which
-// is not reached by tests that use zero-duration retryDelays (the "if delay > 0"
-// guard is false) or that cancel the context before the first HTTP attempt (no
-// retry is ever started). The path is production-relevant: during graceful
-// shutdown a cancelled context must unblock the 2–4 s default backoff
-// immediately.
-func TestSendRequest_ContextCancelledDuringRetry(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Always return 429 so sendRequest classifies the response as transient
-		// and enters the retry path with a delay.
-		w.WriteHeader(http.StatusTooManyRequests)
-		fmt.Fprint(w, "rate limited")
-	}))
-	defer srv.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	client := &ClaudeClient{
-		HTTP:    srv.Client(),
-		BaseURL: srv.URL,
-		APIKey:  "test-key",
-		Model:   "test",
-		// Use a non-zero delay so the "if delay > 0" guard is true and the
-		// timer select block is entered. 500 ms is long enough that the
-		// goroutine below can cancel reliably before the timer fires.
-		retryDelays: []time.Duration{500 * time.Millisecond},
-	}
-
-	// Cancel the context 50 ms after the first 429 response is received and
-	// the retry timer has started, so the ctx.Done() case fires mid-wait.
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-	}()
-
-	start := time.Now()
-	_, err := client.sendRequest(ctx, map[string]string{"k": "v"})
-	elapsed := time.Since(start)
-
-	if err == nil {
-		t.Fatal("expected error when context is cancelled during retry wait, got nil")
-	}
-	if !strings.Contains(err.Error(), "context cancelled awaiting retry") {
-		t.Errorf("expected 'context cancelled awaiting retry' in error, got: %v", err)
-	}
-	// The function should have returned well before the 500 ms delay expired.
-	// Allow 300 ms headroom for slow CI environments.
-	if elapsed >= 400*time.Millisecond {
-		t.Errorf("sendRequest took %v; expected early return on context cancellation", elapsed)
-	}
-}
-
-// TestSendRequest_RetryTimerFiresNaturally verifies that when a 429 response is
-// followed by a success on the next attempt, sendRequest lets the retry timer
-// fire naturally (the "case <-retryTimer.C:" case) and returns the successful
-// response. This covers the empty retryTimer.C case body at claude.go line 104
-// which is skipped by tests that use zero-duration delays (the "if delay > 0"
-// guard is false) and is not reached by the context-cancellation test (which
-// always hits ctx.Done() before the timer fires).
-func TestSendRequest_RetryTimerFiresNaturally(t *testing.T) {
-	var callCount atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := callCount.Add(1)
-		if n == 1 {
-			w.WriteHeader(http.StatusTooManyRequests)
-			fmt.Fprint(w, "rate limited")
-			return
-		}
-		// Second call: return a valid response so sendRequest succeeds.
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"content":[],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
-	}))
-	defer srv.Close()
-
-	client := &ClaudeClient{
-		HTTP:    srv.Client(),
-		BaseURL: srv.URL,
-		APIKey:  "test-key",
-		Model:   "test",
-		// 1 ms delay: enters the "if delay > 0" timer block and fires almost
-		// immediately so the test stays fast.
-		retryDelays: []time.Duration{1 * time.Millisecond},
-	}
-
-	resp, err := client.sendRequest(context.Background(), map[string]string{"k": "v"})
-	if err != nil {
-		t.Fatalf("expected success after retry, got: %v", err)
-	}
-	if len(resp) == 0 {
-		t.Error("expected non-empty response body")
-	}
-	if callCount.Load() != 2 {
-		t.Errorf("expected 2 server calls (initial + 1 retry), got %d", callCount.Load())
-	}
-}
-
-// TestSendRequest_NetworkError_Retried verifies that when HTTP.Do itself fails
-// (e.g. the server closes the connection before sending any headers) and the
-// context is still live, sendRequest records the error and continues to the
-// next retry attempt rather than returning immediately. This covers the
-// `continue` statement at claude.go line 131, which is only reached when
-// doErr != nil and ctx.Err() == nil. It is not covered by
-// TestSendRequest_ReadBodyError (which fails during body reading, after Do
-// succeeds) or by the context-cancellation tests (which return early via
-// ctx.Err() != nil or hit the timer, not the Do path).
-func TestSendRequest_NetworkError_Retried(t *testing.T) {
-	var callCount atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := callCount.Add(1)
-		if n == 1 {
-			// First call: return 429 to trigger the retry path.
-			w.WriteHeader(http.StatusTooManyRequests)
-			fmt.Fprint(w, "rate limited")
-			return
-		}
-		// Second call: hijack and immediately close the connection without
-		// writing any bytes. The HTTP client will see an EOF while reading the
-		// status line and return a non-nil error from Do(), exercising the
-		// doErr != nil / continue branch at claude.go line 131.
-		hj, ok := w.(http.Hijacker)
-		if !ok {
-			t.Error("server does not support hijacking")
-			return
-		}
-		conn, bufrw, hijackErr := hj.Hijack()
-		if hijackErr != nil {
-			t.Errorf("hijack failed: %v", hijackErr)
-			return
-		}
-		_ = bufrw.Flush()
-		_ = conn.Close()
-	}))
-	defer srv.Close()
-
-	client := &ClaudeClient{
-		// DisableKeepAlives ensures each attempt uses a fresh TCP connection so
-		// the hijacked close on attempt 2 cannot be "avoided" via conn reuse.
-		HTTP: &http.Client{
-			Transport: &http.Transport{DisableKeepAlives: true},
-			Timeout:   5 * time.Second,
-		},
-		BaseURL: srv.URL,
-		APIKey:  "test-key",
-		Model:   "test",
-		// Zero delay keeps the test fast; the "if delay > 0" guard is false so
-		// we skip the timer and reach the Do() call on attempt 2 immediately.
-		retryDelays: []time.Duration{0},
-	}
-
-	_, err := client.sendRequest(context.Background(), map[string]string{"k": "v"})
-	if err == nil {
-		t.Fatal("expected error from network failure on retry, got nil")
-	}
-	// The error must come from the Do() failure path (not a body-read error).
-	if !strings.Contains(err.Error(), "API request") {
-		t.Errorf("expected 'API request' error, got: %v", err)
-	}
-	if callCount.Load() != 2 {
-		t.Errorf("expected 2 server calls, got %d", callCount.Load())
 	}
 }
 
@@ -1037,82 +633,3 @@ func TestServer_Run_MetricsListenAndServeFails(t *testing.T) {
 		t.Errorf("subprocess exit code = %d, want 1\nstderr: %s", exitErr.ExitCode(), stderr.String())
 	}
 }
-
-// TestSendRequest_CtxCancelledAfterBodyReadBegins is a deterministic companion
-// to TestSendRequest_ContextCancelledDuringBodyRead. The hijack-based test has an
-// inherent race: context cancellation may fire before HTTP.Do() receives response
-// headers, hitting the doErr path instead of the readErr+ctx.Err() path. This
-// test eliminates the race by using a fake http.RoundTripper that returns a
-// response synchronously — so Do() always returns before the context is cancelled.
-// The response body blocks on its first Read() call until the context is cancelled,
-// deterministically covering the `return nil, lastErr` statement inside the
-// `if ctx.Err() != nil` guard of the readErr path in sendRequest.
-func TestSendRequest_CtxCancelledAfterBodyReadBegins(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// readStarted is closed the first time Read() is called, signalling that
-	// HTTP.Do() has returned and io.ReadAll is now blocked waiting for body data.
-	readStarted := make(chan struct{})
-
-	fakeTransport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       &ctxBlockBody{ctx: ctx, readStarted: readStarted},
-			Request:    req,
-		}, nil
-	})
-
-	// Cancel the context the moment the body Read() is first invoked.
-	go func() {
-		<-readStarted
-		cancel()
-	}()
-
-	client := &ClaudeClient{
-		HTTP:        &http.Client{Transport: fakeTransport},
-		BaseURL:     "http://fake.test/",
-		APIKey:      "test-key",
-		Model:       "test",
-		retryDelays: []time.Duration{10 * time.Second}, // long to detect any spurious retry
-	}
-
-	start := time.Now()
-	_, err := client.sendRequest(ctx, map[string]string{"k": "v"})
-	elapsed := time.Since(start)
-
-	if err == nil {
-		t.Fatal("expected error when context is cancelled during body read, got nil")
-	}
-	// Must return well before the 10 s retry delay — a spurious retry would block
-	// waiting for the timer or for the second Do() to complete.
-	if elapsed > 5*time.Second {
-		t.Errorf("sendRequest took %v — did not return immediately on context cancellation", elapsed)
-	}
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("expected errors.Is(err, context.Canceled), got: %v", err)
-	}
-}
-
-// roundTripperFunc is a functional http.RoundTripper used in tests.
-type roundTripperFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
-
-// ctxBlockBody is an io.ReadCloser whose Read blocks until its context is
-// cancelled. readStarted is closed the first time Read is called, allowing
-// tests to synchronize context cancellation with the start of body reading.
-type ctxBlockBody struct {
-	ctx         context.Context
-	readStarted chan struct{}
-	once        sync.Once
-}
-
-func (b *ctxBlockBody) Read(p []byte) (int, error) {
-	b.once.Do(func() { close(b.readStarted) })
-	<-b.ctx.Done()
-	return 0, b.ctx.Err()
-}
-
-func (b *ctxBlockBody) Close() error { return nil }

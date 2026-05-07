@@ -250,36 +250,17 @@ per-severity overrides (0 enables static-only mode); the global
 `MAX_AGENT_ROUNDS` is `[1, 50]` (cannot disable the tool loop globally —
 use the per-severity overrides for that).
 
-### Authentication suddenly broken after upgrade
+## OpenRouter Setup
 
-You probably ran against OpenRouter using `Authorization: Bearer`. The
-URL-conditional Bearer path was removed in this phase. OpenRouter
-compatibility will return in a follow-up that migrates the analyzer to the
-official `anthropic-sdk-go`, which honors the standard
-`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` env vars. Until then, point
-`API_BASE_URL` at `api.anthropic.com` directly or use a different
-`x-api-key`-compatible relay.
+The `anthropic-sdk-go` migration restored OpenRouter compatibility. To route via OpenRouter:
 
-## Breaking change in Phase 1: OpenRouter Bearer auth removed
+```sh
+export ANTHROPIC_BASE_URL=https://openrouter.ai/api
+export ANTHROPIC_AUTH_TOKEN=sk-or-v1-...
+unset ANTHROPIC_API_KEY  # only one of API_KEY / AUTH_TOKEN may be set
+```
 
-The client used to detect non-`anthropic.com` URLs and switch to
-`Authorization: Bearer`. That URL-conditional code is gone. The client now
-always sends `x-api-key` + `anthropic-version`.
-
-If you point `API_BASE_URL` at OpenRouter, you must currently:
-- Migrate to an Anthropic-compatible provider that accepts `x-api-key`
-  directly, or
-- Run against `api.anthropic.com` directly.
-
-A follow-up phase will migrate the analyzer to the official
-`anthropic-sdk-go`, which honors the standard `ANTHROPIC_AUTH_TOKEN` /
-`ANTHROPIC_BASE_URL` env vars used by Anthropic's other clients (Claude
-Code, Python/JS SDKs). That restores OpenRouter compatibility via env
-vars alone — no proxy.
-
-The change in this phase reduces the auth code path to one branch and
-unblocks the prompt-caching headers; keeping a divergent code path for
-one provider's auth was not justified inside a hand-rolled HTTP client.
+The SDK uses `Authorization: Bearer $ANTHROPIC_AUTH_TOKEN` against this base URL, which is OpenRouter's expected auth shape.
 
 ## Phase 2 (planned, not shipped)
 

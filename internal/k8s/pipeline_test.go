@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
@@ -66,7 +67,7 @@ func (m *mockToolRunnerAnalyzer) Analyze(_ context.Context, model, _, _ string) 
 
 func (m *mockToolRunnerAnalyzer) RunToolLoop(
 	_ context.Context, model, _, _ string,
-	_ []shared.Tool, rounds int,
+	_ []anthropic.ToolUnionParam, rounds int,
 	_ func(string, json.RawMessage) (string, error),
 ) (string, int, bool, error) {
 	m.gotModel = model

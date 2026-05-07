@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -23,11 +24,6 @@ func loadConfig() checkmk.Config {
 		slog.Error("config error", "error", err)
 		os.Exit(1)
 	}
-	apiKey, err := shared.RequireEnv("API_KEY")
-	if err != nil {
-		slog.Error("config error", "error", err)
-		os.Exit(1)
-	}
 	checkmkUser, err := shared.RequireEnv("CHECKMK_API_USER")
 	if err != nil {
 		slog.Error("config error", "error", err)
@@ -38,6 +34,25 @@ func loadConfig() checkmk.Config {
 		slog.Error("config error", "error", err)
 		os.Exit(1)
 	}
+
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	authToken := os.Getenv("ANTHROPIC_AUTH_TOKEN")
+	baseURL := os.Getenv("ANTHROPIC_BASE_URL")
+
+	switch {
+	case apiKey == "" && authToken == "":
+		slog.Error("config error", "error", "either ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN must be set")
+		os.Exit(1)
+	case apiKey != "" && authToken != "":
+		slog.Error("config error", "error", "set exactly one of ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN, not both")
+		os.Exit(1)
+	}
+
+	// Unset the three vars so the SDK never falls back to its own env-var
+	// lookups; main.go is the single source of truth.
+	_ = os.Unsetenv("ANTHROPIC_API_KEY")
+	_ = os.Unsetenv("ANTHROPIC_AUTH_TOKEN")
+	_ = os.Unsetenv("ANTHROPIC_BASE_URL")
 
 	// SSH_DENIED_COMMANDS: not set = default denylist, empty = no guardrails, value = custom list
 	var sshDeniedCommands map[string]bool
@@ -60,8 +75,9 @@ func loadConfig() checkmk.Config {
 		Port:              shared.EnvOrDefault("PORT", "8080"),
 		MetricsPort:       shared.EnvOrDefault("METRICS_PORT", "9101"),
 		WebhookSecret:     webhookSecret,
-		APIBaseURL:        shared.EnvOrDefault("API_BASE_URL", "https://api.anthropic.com/v1/messages"),
+		APIBaseURL:        baseURL,
 		APIKey:            apiKey,
+		AuthToken:         authToken,
 		CheckMKAPIURL:     shared.EnvOrDefault("CHECKMK_API_URL", "http://checkmk-service.monitoring:5000/cmk/check_mk/api/1.0/"),
 		CheckMKAPIUser:    checkmkUser,
 		CheckMKAPISecret:  checkmkSecret,
@@ -97,7 +113,9 @@ func main() {
 	}
 
 	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
-	claudeClient := shared.NewClaudeClient(cfg.BaseConfig()).WithPrometheusMetrics(metrics, "checkmk")
+	hist := metrics.Prom.ClaudeAPIDuration.WithLabelValues("checkmk")
+	transport := shared.NewLimitedTransport(http.DefaultTransport, hist)
+	claudeClient := shared.NewClaudeClient(cfg.BaseConfig(), transport).WithPrometheusMetrics(metrics, "checkmk")
 	apiClient := checkmk.NewAPIClient(cfg)
 	cooldownMgr := shared.NewCooldownManager()
 	publishers := []shared.Publisher{

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 )
 
@@ -66,19 +67,20 @@ Output your analysis in markdown (headings, bold, lists, code blocks — no tabl
 Reference actual values from the provided context. Keep response under 500 words.
 Start directly with the analysis — no preamble, meta-commentary, or introductory sentences.`
 
-var sshTool = shared.Tool{
-	Name:        "execute_command",
-	Description: "Execute a diagnostic command on the remote host via SSH. The command is passed as an argv array (not interpreted by a shell). Only read-only commands are allowed.",
-	InputSchema: shared.InputSchema{
-		Type: "object",
-		Properties: map[string]shared.Property{
-			"command": {
-				Type:        "array",
-				Description: "Command and arguments as array, e.g. [\"df\", \"-h\"] or [\"journalctl\", \"--no-pager\", \"-n\", \"50\"]",
-				Items:       &shared.Items{Type: "string"},
+var sshTool = anthropic.ToolUnionParam{
+	OfTool: &anthropic.ToolParam{
+		Name:        "execute_command",
+		Description: anthropic.String("Execute a diagnostic command on the remote host via SSH. The command is passed as an argv array (not interpreted by a shell). Only read-only commands are allowed."),
+		InputSchema: anthropic.ToolInputSchemaParam{
+			Properties: map[string]any{
+				"command": map[string]any{
+					"type":        "array",
+					"description": "Command and arguments as array, e.g. [\"df\", \"-h\"] or [\"journalctl\", \"--no-pager\", \"-n\", \"50\"]",
+					"items":       map[string]any{"type": "string"},
+				},
 			},
+			Required: []string{"command"},
 		},
-		Required: []string{"command"},
 	},
 }
 
@@ -925,7 +927,7 @@ func RunAgenticDiagnostics(
 
 	analysis, rounds, exhausted, err := client.RunToolLoop(
 		ctx, model, agentSystemPromptForRounds(maxRounds), alertContext,
-		[]shared.Tool{sshTool}, maxRounds, wrappedHandleTool,
+		[]anthropic.ToolUnionParam{sshTool}, maxRounds, wrappedHandleTool,
 	)
 	if metrics != nil {
 		metrics.RecordAgentRounds("checkmk", rounds, exhausted)

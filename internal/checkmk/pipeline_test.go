@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"golang.org/x/crypto/ssh"
@@ -40,7 +41,7 @@ func (m *mockAnalyzer) Analyze(ctx context.Context, model, systemPrompt, userPro
 }
 
 func (m *mockAnalyzer) RunToolLoop(ctx context.Context, model, systemPrompt, userPrompt string,
-	tools []shared.Tool, maxRounds int, handleTool func(string, json.RawMessage) (string, error)) (string, int, bool, error) {
+	tools []anthropic.ToolUnionParam, maxRounds int, handleTool func(string, json.RawMessage) (string, error)) (string, int, bool, error) {
 	m.gotModel = model
 	m.gotRounds = maxRounds
 	m.capturedPrompt = systemPrompt
@@ -60,7 +61,7 @@ func (p *panicAnalyzer) Analyze(_ context.Context, _, _, _ string) (string, erro
 type panicToolRunner struct{}
 
 func (p *panicToolRunner) RunToolLoop(_ context.Context, _, _, _ string,
-	_ []shared.Tool, _ int, _ func(string, json.RawMessage) (string, error)) (string, int, bool, error) {
+	_ []anthropic.ToolUnionParam, _ int, _ func(string, json.RawMessage) (string, error)) (string, int, bool, error) {
 	panic("simulated tool-loop panic")
 }
 

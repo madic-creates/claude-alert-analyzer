@@ -222,13 +222,13 @@ func TestWithPrometheusMetrics_RecordsCallDuration(t *testing.T) {
 	defer srv.Close()
 
 	m := &AlertMetrics{Prom: NewPrometheusMetrics()}
-	client := &ClaudeClient{
-		HTTP:    srv.Client(),
-		BaseURL: srv.URL,
-		APIKey:  "test-key",
-		Model:   "claude-test",
-	}
-	client.WithPrometheusMetrics(m, "k8s")
+	hist := m.Prom.ClaudeAPIDuration.WithLabelValues("k8s")
+	transport := NewLimitedTransport(srv.Client().Transport, hist)
+	client := NewClaudeClient(BaseConfig{
+		APIBaseURL:  srv.URL,
+		APIKey:      "test-key",
+		ClaudeModel: "claude-test",
+	}, transport).WithPrometheusMetrics(m, "k8s")
 
 	_, err := client.Analyze(context.Background(), "test-model", "system", "user")
 	if err != nil {
