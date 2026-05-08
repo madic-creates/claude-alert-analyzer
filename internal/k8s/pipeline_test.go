@@ -906,6 +906,56 @@ func TestProcessAlert_StormDegradedForcesRoundsZero(t *testing.T) {
 	}
 }
 
+// TestProcessAlert_StormModeAggregatesNotification verifies that when storm-mode
+// is degraded AND deps.StormNotify is configured, a successful analysis is handed
+// off to the aggregator instead of being published directly to deps.Publishers.
+// This covers the `deps.StormNotify.Add(alertname)` branch in pipeline.go.
+func TestProcessAlert_StormModeAggregatesNotification(t *testing.T) {
+	cm := shared.NewCooldownManager()
+	storm := shared.NewStormDetector(1, time.Now)
+	storm.Record()
+	storm.Record() // count=2 > threshold=1 → IsDegraded() == true
+
+	an := &mockAnalyzer{returnAnalysis: "analysis text"}
+
+	directPub := &pipelineFakePublisher{}
+	stormPub := &pipelineFakePublisher{}
+	stormNotify := shared.NewNotifyAggregator([]shared.Publisher{stormPub}, time.Hour, "Storm: %d alerts", "3", nil)
+	defer stormNotify.Stop(context.Background())
+
+	deps := PipelineDeps{
+		Cooldown:      cm,
+		Metrics:       &shared.AlertMetrics{},
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "x", DefaultMaxRounds: 0, Storm: storm},
+		GatherContext: func(_ context.Context, _ shared.AlertPayload) shared.AnalysisContext { return shared.AnalysisContext{} },
+		Analyzer:      an,
+		ToolRunner:    &mockToolRunner{},
+		Publishers:    []shared.Publisher{directPub},
+		StormNotify:   stormNotify,
+	}
+	alert := shared.AlertPayload{Fingerprint: "fp1", Title: "TargetDown", SeverityLevel: shared.SeverityWarning}
+
+	ProcessAlert(context.Background(), deps, alert)
+
+	// Analysis must have run (rounds=0 forced by storm, but Analyzer is called).
+	if an.calls != 1 {
+		t.Fatalf("expected Analyzer to be called once; got %d", an.calls)
+	}
+
+	// The direct publisher must NOT have been called — storm mode aggregates.
+	if n := len(directPub.calls); n != 0 {
+		t.Fatalf("direct publisher should not be called in storm mode; got %d calls", n)
+	}
+
+	// Flush the aggregator and confirm the stormPub received the batched notification.
+	if err := stormNotify.Stop(context.Background()); err != nil {
+		t.Fatalf("StormNotify.Stop: %v", err)
+	}
+	if n := len(stormPub.calls); n != 1 {
+		t.Fatalf("storm aggregator publisher should receive exactly 1 flush; got %d calls", n)
+	}
+}
+
 // TestProcessAlert_AnalyzerPanicOpensBreaker verifies that a PANIC during
 // analysis is reported as a failure through the permit so the breaker can
 // open. Without the cleanup-defer ordering fix (permit.Done after recover()),
