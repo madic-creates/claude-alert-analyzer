@@ -100,3 +100,7 @@ Both are also tagged with the short commit SHA (e.g. `:a1b2c3d`) for pinning.
 - [`docs/pre-commit.md`](docs/pre-commit.md) — pre-commit hook configuration
 - [`docs/renovate.md`](docs/renovate.md) — dependency update automation
 - [`docs/cleanup-ghcr.md`](docs/cleanup-ghcr.md) — GHCR tag retention
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE). See [`NOTICE`](NOTICE) for attribution of bundled third-party software.
