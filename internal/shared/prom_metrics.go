@@ -191,6 +191,29 @@ func NewPrometheusMetrics(product Product) (*PrometheusMetrics, error) {
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
 
+	// Materialize the time series for bounded label combinations so dashboard
+	// queries like rate(alert_analyzer_webhooks_total[5m]) return 0 instead
+	// of "no data" before the first event arrives. CounterVec is lazy: a
+	// series only exists after the first WithLabelValues(...) call.
+	for _, outcome := range []WebhookOutcome{
+		WebhookAccepted, WebhookAuthFailed, WebhookPayloadInvalid,
+		WebhookPayloadTooLarge, WebhookUnavailable, WebhookInternalError,
+	} {
+		pm.WebhooksTotal.WithLabelValues(string(outcome))
+	}
+	for _, reason := range []DropReason{
+		DropReasonInvalidFingerprint, DropReasonCooldown,
+		DropReasonGroupCooldown, DropReasonQueueFull,
+	} {
+		pm.AlertsDropped.WithLabelValues(string(reason))
+	}
+	for _, sev := range []Severity{SeverityUnknown, SeverityInfo, SeverityWarning, SeverityCritical} {
+		pm.AlertsProcessed.WithLabelValues(sev.String())
+	}
+	for _, agg := range []string{"storm", "breaker"} {
+		pm.NotifyAggregatorDrops.WithLabelValues(agg)
+	}
+
 	return pm, nil
 }
 
