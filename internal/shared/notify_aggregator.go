@@ -11,6 +11,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+// notifyAggregatorBufferSize is the size of the in-channel between Add() and
+// the owner goroutine. Sized to absorb short bursts (~100 alerts in a single
+// scrape interval) without dropping. Drops past this threshold are visible
+// via the drops counter — the contract on Add() is non-blocking by design.
+const notifyAggregatorBufferSize = 100
+
 // NotifyAggregator buffers alert titles during a time interval and emits one
 // summary notification per interval. It is concurrency-safe via a single
 // owner goroutine that owns buffer + timer; Add() and Stop() communicate
@@ -49,7 +55,7 @@ func NewNotifyAggregator(publishers []Publisher, interval time.Duration, titleFm
 		titleFmt:   titleFmt,
 		priority:   priority,
 		drops:      drops,
-		in:         make(chan string, 100),
+		in:         make(chan string, notifyAggregatorBufferSize),
 		stopReq:    make(chan stopRequest, 1),
 		stopped:    make(chan struct{}),
 	}
@@ -59,6 +65,12 @@ func NewNotifyAggregator(publishers []Publisher, interval time.Duration, titleFm
 
 // Add buffers an alert title for the next aggregated notification.
 // Returns false if stopped or the channel is full; both cases increment drops.
+//
+// Non-blocking by design: if the in-channel is at capacity, the alert is
+// dropped (recorded in the drops counter) rather than blocking the caller.
+// This keeps webhook-handler latency bounded under storm bursts. Operators
+// monitoring the drops counter learn whether the configured buffer
+// (notifyAggregatorBufferSize) is large enough for their alert volume.
 func (a *NotifyAggregator) Add(alertTitle string) bool {
 	if a == nil {
 		return false
@@ -126,6 +138,14 @@ func (a *NotifyAggregator) run() {
 		title := fmt.Sprintf(a.titleFmt, len(buffer))
 		body := strings.Join(buffer, "\n")
 		err := PublishAll(ctx, a.publishers, title, a.priority, body)
+		// Drops invariant: every alert that enters Add() and is not eventually
+		// surfaced in a notification must be reflected in the drops counter.
+		// PublishAll-failure means the buffered titles never reach the operator,
+		// so we count them here; channel-full and post-Stop drops are counted
+		// in Add() itself.
+		if err != nil && a.drops != nil {
+			a.drops.Add(float64(len(buffer)))
+		}
 		buffer = nil
 		return err
 	}

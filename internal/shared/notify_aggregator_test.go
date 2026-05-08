@@ -186,6 +186,23 @@ func TestNotifyAggregator_HungPublisher_StopReturnsTimeout(t *testing.T) {
 	}
 }
 
+func TestNotifyAggregator_TickFlushPublisherFailureCountsDrops(t *testing.T) {
+	pub := &aggFakePublisher{failNext: errors.New("ntfy down")}
+	drops := newDropsCounter()
+	a := NewNotifyAggregator([]Publisher{pub}, 30*time.Millisecond, "S: %d", "5", drops)
+	defer a.Stop(context.Background())
+
+	for i := 0; i < 7; i++ {
+		a.Add("x")
+	}
+	// Wait for the tick (30ms interval; 200ms slack).
+	time.Sleep(200 * time.Millisecond)
+
+	if v := getCounterValue(drops); v != 7 {
+		t.Fatalf("publisher-error drops=%v, want 7", v)
+	}
+}
+
 func TestNotifyAggregator_StopRaceNoLosses(t *testing.T) {
 	pub := &aggFakePublisher{}
 	drops := newDropsCounter()
