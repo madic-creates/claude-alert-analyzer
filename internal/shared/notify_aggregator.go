@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -36,6 +37,13 @@ type NotifyAggregator struct {
 	stopOnce sync.Once
 	stopped  chan struct{}
 	stopErr  error
+
+	// stopping is set by the owner goroutine when it begins shutdown drain.
+	// Add() callers check it FIRST so they drop instead of racing with the
+	// owner's drain loop. Without this flag, an Add() that wins the random
+	// select against the channel-full default could land an item in a.in
+	// AFTER the owner has already drained-and-flushed → silently lost item.
+	stopping atomic.Bool
 }
 
 type stopRequest struct {
@@ -71,8 +79,17 @@ func NewNotifyAggregator(publishers []Publisher, interval time.Duration, titleFm
 // This keeps webhook-handler latency bounded under storm bursts. Operators
 // monitoring the drops counter learn whether the configured buffer
 // (notifyAggregatorBufferSize) is large enough for their alert volume.
+//
+// Drop ordering: the stopping flag is checked FIRST so Add() refuses sends
+// once the owner has begun shutdown drain. Without this, a select-race
+// between `a.in <- alertTitle` and `<-a.stopped` could land an item in
+// the channel after the owner already drained-and-flushed → silent loss.
 func (a *NotifyAggregator) Add(alertTitle string) bool {
 	if a == nil {
+		return false
+	}
+	if a.stopping.Load() {
+		a.recordDrop()
 		return false
 	}
 	select {
@@ -101,6 +118,12 @@ func (a *NotifyAggregator) recordDrop() {
 
 // Stop signals the owner goroutine to flush pending alerts and exit.
 // Idempotent via sync.Once. Final flush uses caller-supplied ctx.
+//
+// Memory-model note: stopErr is read after stopOnce.Do returns. Per Go's
+// sync.Once docs, "no call to Do returns until the one call to f returns" —
+// so all callers (including those for whom Do is a no-op) observe the
+// happens-before edge from the first caller's f-body, and the read of
+// stopErr is race-free without an additional mutex.
 func (a *NotifyAggregator) Stop(ctx context.Context) error {
 	if a == nil {
 		return nil
@@ -171,15 +194,25 @@ func (a *NotifyAggregator) run() {
 			if timer != nil {
 				timer.Stop()
 			}
+			// Signal Add() callers to start dropping. Any Add() that has already
+			// passed the stopping-check but not yet sent into a.in is in a small
+			// race window — the rolling-deadline drain below absorbs those.
+			a.stopping.Store(true)
+			drainDeadline := time.NewTimer(10 * time.Millisecond)
 		drain:
 			for {
 				select {
 				case alertTitle := <-a.in:
 					buffer = append(buffer, alertTitle)
-				default:
+					if !drainDeadline.Stop() {
+						<-drainDeadline.C
+					}
+					drainDeadline.Reset(10 * time.Millisecond)
+				case <-drainDeadline.C:
 					break drain
 				}
 			}
+			drainDeadline.Stop()
 			req.ack <- flush(req.ctx)
 			return
 		}

@@ -473,7 +473,7 @@ if deps.Policy.IsDegraded() || permit.IsProbe() {
 
 ntfy-Aggregator: pro `CIRCUIT_BREAKER_NOTIFY_INTERVAL` eine Sammel-Notiz „API rate-limited, n alerts pending manual review" — implementiert als zweite Instance des shared `NotifyAggregator` (siehe 2.4).
 
-Neuer Gauge `claude_circuit_breaker_state{source}` (0=closed, 1=half-open, 2=open).
+Neuer Gauge `claude_circuit_breaker_state{source}` (0=closed, 1=open, 2=half-open). Encoding-Reihenfolge entspricht der Implementierung; eine frühere Spec-Iteration vertauschte 1 und 2 — Implementierung + Operator-Doku sind die Source of Truth.
 
 ENV: `CIRCUIT_BREAKER_THRESHOLD=0` (Default = aus, suggested: 5), `CIRCUIT_BREAKER_OPEN_SECONDS=60`, `CIRCUIT_BREAKER_NOTIFY_INTERVAL=300s`.
 

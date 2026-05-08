@@ -186,6 +186,41 @@ func TestNotifyAggregator_HungPublisher_StopReturnsTimeout(t *testing.T) {
 	}
 }
 
+// TestNotifyAggregator_StopConcurrentCallersAgree verifies that 50 concurrent
+// Stop() callers all see the same outcome under the race detector. The
+// sync.Once memory-model guarantees that the f-body's writes to stopErr
+// happen-before any Do call returns, so a follow-on read after <-stopped
+// is safe — but only as long as no goroutine reads stopErr without going
+// through Once.Do first. This test locks down that contract.
+func TestNotifyAggregator_StopConcurrentCallersAgree(t *testing.T) {
+	pub := &aggFakePublisher{}
+	a := NewNotifyAggregator([]Publisher{pub}, time.Second, "x", "5", newDropsCounter())
+	a.Add("seed")
+
+	const N = 50
+	var wg sync.WaitGroup
+	wg.Add(N)
+	results := make([]error, N)
+	for i := 0; i < N; i++ {
+		go func(i int) {
+			defer wg.Done()
+			results[i] = a.Stop(context.Background())
+		}(i)
+	}
+	wg.Wait()
+
+	// All callers must agree.
+	for i := 1; i < N; i++ {
+		if results[i] != results[0] {
+			t.Fatalf("caller %d got %v, caller 0 got %v — disagreement", i, results[i], results[0])
+		}
+	}
+	// The seed alert should have been published once via the final flush.
+	if got := pub.callCount(); got != 1 {
+		t.Fatalf("expected 1 publish, got %d", got)
+	}
+}
+
 func TestNotifyAggregator_TickFlushPublisherFailureCountsDrops(t *testing.T) {
 	pub := &aggFakePublisher{failNext: errors.New("ntfy down")}
 	drops := newDropsCounter()
