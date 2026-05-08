@@ -68,7 +68,7 @@ k8s optional: `MAX_LOG_BYTES`, `PROMETHEUS_URL`, `SKIP_RESOLVED`.
 
 Severity-based overrides (`CLAUDE_MODEL_<SEVERITY>`, `MAX_AGENT_ROUNDS_<SEVERITY>`) are operator-facing and documented in [`docs/cost-and-storm-protection.md`](docs/cost-and-storm-protection.md).
 
-Phase 2 optional: `GROUP_COOLDOWN_SECONDS` (default 0 = disabled),
+Storm-robustness optional: `GROUP_COOLDOWN_SECONDS` (default 0 = disabled),
 `STORM_MODE_THRESHOLD` (default 0), `STORM_MODE_NOTIFY_INTERVAL` (default 60s),
 `CIRCUIT_BREAKER_THRESHOLD` (default 0), `CIRCUIT_BREAKER_OPEN_SECONDS` (default 60),
 `CIRCUIT_BREAKER_MAX_PROBE_SECONDS` (default 60),
@@ -78,23 +78,25 @@ k8s-analyzer runs in-cluster only (`rest.InClusterConfig()`).
 
 ## Cost & Storm Protection
 
-Phase 1 ships three operator-facing features: prompt caching (always on), severity-based model and tool-round routing (opt-in via env vars), and four token-cost Prometheus counters. Architectural touchpoints when working in this code:
+Two coupled feature groups in `internal/shared/`:
+
+**Cost optimization** (caching + severity routing):
 
 - `internal/shared/severity.go` — `Severity` enum + `SeverityFromAlertmanager` / `SeverityFromCheckMK` normalizers. Set on `AlertPayload.SeverityLevel` in each handler.
 - `internal/shared/policy.go` — `AnalysisPolicy` decision layer. `ModelFor(sev)` and `MaxRoundsFor(sev)` are the two routing entry points called from each pipeline. `LoadPolicy(BaseConfig)` reads the optional env vars.
 - `internal/shared/claude.go` — Cache breakpoints set at three levels: `systemBlocks()` helper, `withCachedTail()` helper for tools, and an inline assignment on the last `tool_result` of each `RunToolLoop` round.
 - Pipelines (`internal/k8s/pipeline.go`, `internal/checkmk/pipeline.go`) branch on `policy.MaxRoundsFor(...) == 0` to call `Analyzer.Analyze` (static-only) instead of `RunAgenticDiagnostics`.
 
+**Storm robustness** (group-cooldown + storm-mode + circuit-breaker):
 
-- **Phase 2 (storm-mode + circuit-breaker + group-cooldown)**: Three new
-  components in `internal/shared/`: `StormDetector` (sliding-window),
-  `CircuitBreaker` (Permit-Token + Watchdog), `NotifyAggregator`
-  (Single-Owner-Goroutine + Request/Reply Stop). Pipeline tracks `phase` +
-  `analysisErr` for failure-phase-differentiated cooldown cleanup. All
-  features default disabled. See `docs/cost-and-storm-protection.md` for
-  operator guidance.
+- `internal/shared/cooldown.go` — atomic `CheckAndSetWithGroup` for combined fingerprint+group cooldowns with rollback semantics; lock hierarchy `groupMu < fpMu`.
+- `internal/shared/storm.go` — `StormDetector` (5-min sliding window). Triggers `Policy.IsDegraded()` which forces `rounds=0` in the pipeline.
+- `internal/shared/breaker.go` — `CircuitBreaker` with Permit-Token API (`Acquire()` → `*Permit`, `permit.Done(err)`). Probe-watchdog auto-releases stuck probes.
+- `internal/shared/notify_aggregator.go` — single-owner-goroutine aggregator with request/reply Stop; used by both storm and breaker for collapsed notifications.
+- Pipelines track `phase failurePhase` + `analysisErr` (separate from named return) so the deferred cooldown-cleanup is correct for `ErrCircuitOpen` and post-API failures (Verstärker-Bug fix).
+- All storm-robustness features default disabled. See [`docs/cost-and-storm-protection.md`](docs/cost-and-storm-protection.md) for operator guidance and [`docs/cost-and-storm-protection-internals.md`](docs/cost-and-storm-protection-internals.md) for component architecture.
 
-Full design spec: `docs/superpowers/specs/2026-05-01-storm-cost-protection-design.md`.
+Design spec: `docs/superpowers/specs/2026-05-01-storm-cost-protection-design.md`.
 
 ## CI & Deployment
 

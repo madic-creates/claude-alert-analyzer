@@ -1,16 +1,15 @@
-# Storm & Cost Protection — Phase 2
+# Storm & Cost Protection — Internals
 
-Feature reference for the storm-mode, circuit-breaker, group-cooldown, and
-pipeline failure-phase differentiation introduced in Phase 2 of the
-cost-and-storm-protection design.
+Architecture and component reference for the cost-and-storm-protection
+features: prompt caching, severity-based routing, group-cooldown,
+storm-mode, circuit-breaker, and pipeline failure-phase differentiation.
 
 This document covers **architecture, components, configuration, observability,
 failure modes, and developer notes**. For the day-to-day operator workflow
-(when to enable each knob, migration sequence, recommended PromQL), see
+(when to enable each knob, rollout sequence, recommended PromQL), see
 [`cost-and-storm-protection.md`](cost-and-storm-protection.md).
 
-- **Spec:** [`superpowers/specs/2026-05-01-storm-cost-protection-design.md`](superpowers/specs/2026-05-01-storm-cost-protection-design.md)
-- **Implementation plan:** [`superpowers/plans/2026-05-08-storm-cost-protection-phase2.md`](superpowers/plans/2026-05-08-storm-cost-protection-phase2.md)
+- **Design spec:** [`superpowers/specs/2026-05-01-storm-cost-protection-design.md`](superpowers/specs/2026-05-01-storm-cost-protection-design.md)
 
 ## Table of contents
 
@@ -32,18 +31,25 @@ failure modes, and developer notes**. For the day-to-day operator workflow
 
 ## What it solves
 
-Phase 1 made each individual analysis cheaper (prompt caching, severity-based
-model routing). It did not protect the system against:
+Two pressure axes against the analyzers:
 
-1. **Many distinct alerts at once** — 50 pods crashing with 50 distinct
-   fingerprints all trigger 50 full analyses, each up to 10 tool-rounds.
-2. **The Storm-Verstärker-Bug** — when a queue or API failure clears
-   cooldowns, Alertmanager retries hit the same broken path again, amplifying
-   load just when the system is already struggling.
+- **Cost per analysis** — high-severity alerts can use Opus; lower-severity
+  alerts can be routed to Haiku or even skip the tool loop entirely. Prompt
+  caching reduces token usage on the cached prefix.
+- **Load and Anthropic-API failure modes** — distinct fingerprints in a
+  burst can each trigger a full analysis (50 crashing pods × 10 tool-rounds
+  is expensive); Anthropic outages can cascade if every retry tries the
+  broken API again.
 
-Phase 2 adds three opt-in soft-throttling protections plus the
-Verstärker-Bug fix. **All features default disabled.** Operators turn them
-on one at a time after observing Phase 1 metrics.
+The features in this document address both axes: caching and severity
+routing optimize the per-analysis cost; group-cooldown deduplicates alerts
+that share a coarser key; storm-mode forces cheaper static analysis under
+sustained burst load; the circuit-breaker halts API calls during
+sustained failures and prevents Alertmanager-retries from amplifying the
+problem (the Storm-Verstärker-Bug fix).
+
+Most features are opt-in and default disabled. Caching and the four
+token-cost metrics are always on.
 
 ## At a glance
 
@@ -363,7 +369,7 @@ breaker observes panics correctly. Regression test:
 
 ## Configuration
 
-All Phase 2 environment variables are optional and default disabled.
+All storm-robustness environment variables are optional and default disabled.
 Validated at startup via `shared.ParseIntEnv` — out-of-range values cause
 a hard exit with a clear message.
 
@@ -439,9 +445,9 @@ storm-mode AND the breaker is open" as two correlated signals.
 
 ### When to nil-check vs trust nil-safe
 
-Phase 2 components are **all nil-safe**. The pipeline never needs an
-`if breaker != nil` guard around `Acquire()` — a nil breaker returns a
-no-op permit. Same for `Storm.Record()`, `StormNotify.Add()`,
+The storm-robustness components are **all nil-safe**. The pipeline never
+needs an `if breaker != nil` guard around `Acquire()` — a nil breaker
+returns a no-op permit. Same for `Storm.Record()`, `StormNotify.Add()`,
 `policy.IsDegraded()`. Code that constructs the components decides
 disabled-vs-enabled by passing `0` for the threshold/interval; everything
 downstream is uniform.
@@ -479,8 +485,8 @@ map, use `CheckAndSet` / `CheckAndSetGroup` / `Clear` / `ClearGroup`.
 
 ### Tests that lock down invariants
 
-If you change Phase 2 internals, make sure these still pass under
-`-race`:
+If you change the storm-protection internals, make sure these still pass
+under `-race`:
 
 - `TestVerstaerkerBug_OpenBreakerKeepsCooldown_NoSecondAnalysis` (both pipelines) —
   cooldowns survive an open breaker; Claude is not called on retries.
@@ -528,7 +534,7 @@ records SUCCESS for panicked analyses).
 
 ## Limitations
 
-Phase 2 is intentionally narrow. Out-of-scope:
+The storm-robustness features are intentionally narrow. Out-of-scope:
 
 - **Hard kill-switch / spend cap.** Anthropic's workspace spend limit is
   the external backstop. We don't track per-day cost.
@@ -546,6 +552,6 @@ Phase 2 is intentionally narrow. Out-of-scope:
   notification format is hard-coded; if the operator wants different
   templates per source, they'd need to extend `NotifyAggregator`.
 
-For each of these, the Phase 1 + Phase 2 metrics give operators the
+For each of these, the cost and storm-robustness metrics give operators the
 visibility to decide whether the limitation is acceptable in their
 deployment.

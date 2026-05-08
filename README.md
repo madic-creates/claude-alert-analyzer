@@ -280,13 +280,11 @@ Exactly one of `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` must be set at star
 
 ### Cost & storm protection
 
-The analyzers ship with prompt caching (always on), severity-based model routing, and severity-based tool-round budgets — all driven by optional environment variables. Token-cost Prometheus counters expose cache-hit rate and per-model spend.
+The analyzers ship with prompt caching (always on), severity-based model routing, severity-based tool-round budgets, and three opt-in storm-robustness protections (group-cooldown, storm-mode, circuit-breaker). Token-cost Prometheus counters expose cache-hit rate and per-model spend.
 
-Phase 2 layers on three opt-in storm-robustness protections (group-cooldown, storm-mode, circuit-breaker), all default disabled.
+Operator-facing details — setup recommendations, PromQL queries for cache-hit-rate and cost dashboards, alerting examples, rollout playbook, and troubleshooting — live in [docs/cost-and-storm-protection.md](docs/cost-and-storm-protection.md). Architecture and component reference in [docs/cost-and-storm-protection-internals.md](docs/cost-and-storm-protection-internals.md).
 
-Operator-facing details: setup recommendations, PromQL queries for cache-hit-rate and cost dashboards, alerting examples, rollout playbook, and troubleshooting live in [docs/cost-and-storm-protection.md](docs/cost-and-storm-protection.md).
-
-#### Phase 2 — Storm robustness (optional, default disabled)
+#### Storm robustness env vars (optional, default disabled)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -298,7 +296,7 @@ Operator-facing details: setup recommendations, PromQL queries for cache-hit-rat
 | `CIRCUIT_BREAKER_MAX_PROBE_SECONDS` | `60` | Half-open probe watchdog timeout |
 | `CIRCUIT_BREAKER_NOTIFY_INTERVAL` | `300s` | Breaker-aggregator emit interval |
 
-See [docs/cost-and-storm-protection.md](docs/cost-and-storm-protection.md) for the recommended migration sequence.
+See [docs/cost-and-storm-protection.md](docs/cost-and-storm-protection.md) for the recommended rollout sequence.
 
 ## API Endpoints
 
