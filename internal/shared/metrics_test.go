@@ -212,6 +212,34 @@ func TestMetricsHandler_WithPrometheusMetrics_IncludesLabeledMetrics(t *testing.
 	}
 }
 
+// TestMetricsHandler_GzipRequestNotCompressed verifies that even when the
+// scraper sends Accept-Encoding: gzip, the response body stays plain text.
+// Regression: promhttp.HandlerFor used to gzip its output for such requests;
+// because bufferedResponseWriter only captures the body (not the
+// Content-Encoding header), the gzipped bytes were appended to the plain-text
+// counters and Prometheus rejected the scrape with `expected a valid start
+// token, got "\x1f"`.
+func TestMetricsHandler_GzipRequestNotCompressed(t *testing.T) {
+	m := &AlertMetrics{Prom: NewPrometheusMetrics()}
+	m.RecordAnalyzed("k8s", "critical")
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rr := httptest.NewRecorder()
+	m.MetricsHandler()(rr, req)
+
+	if got := rr.Header().Get("Content-Encoding"); got != "" {
+		t.Errorf("Content-Encoding = %q, want empty (no compression)", got)
+	}
+	body := rr.Body.Bytes()
+	if bytes.Contains(body, []byte{0x1f, 0x8b}) {
+		t.Errorf("response body contains gzip magic bytes (0x1f 0x8b); raw body:\n%q", body)
+	}
+	if !bytes.Contains(body, []byte("alerts_analyzed_total")) {
+		t.Errorf("expected labeled metric in plain-text body, got:\n%s", body)
+	}
+}
+
 // TestWithPrometheusMetrics_RecordsCallDuration verifies that WithPrometheusMetrics
 // wires the durationHistogram so that a successful API call records an observation.
 func TestWithPrometheusMetrics_RecordsCallDuration(t *testing.T) {

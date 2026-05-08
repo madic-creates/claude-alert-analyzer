@@ -141,9 +141,15 @@ func (m *AlertMetrics) MetricsHandler() http.HandlerFunc {
 	// Create the promhttp handler once at registration time rather than on
 	// every scrape request. promhttp.HandlerFor is safe to call concurrently
 	// after construction, so this is both correct and more efficient.
+	// DisableCompression: bufferedResponseWriter captures only the body, not
+	// headers. If promhttp gzipped the body in response to Accept-Encoding,
+	// the gzipped bytes would be appended to the plain-text counters above
+	// without a Content-Encoding header — corrupting the exposition format.
 	var promHandler http.Handler
 	if m.Prom != nil {
-		promHandler = promhttp.HandlerFor(m.Prom.Registry(), promhttp.HandlerOpts{})
+		promHandler = promhttp.HandlerFor(m.Prom.Registry(), promhttp.HandlerOpts{
+			DisableCompression: true,
+		})
 	}
 	return m.metricsHandlerWith(promHandler)
 }
