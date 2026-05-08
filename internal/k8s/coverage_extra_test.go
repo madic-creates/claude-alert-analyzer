@@ -1063,3 +1063,59 @@ func TestProcessAlert_AlertFieldsArePromptInjectionSafe(t *testing.T) {
 		}
 	}
 }
+
+// TestIsTimeoutErr verifies that isTimeoutErr correctly identifies timeout-like
+// errors by their message strings. Both "context deadline exceeded" (from
+// exec.CommandContext) and "signal: killed" (from the OS when SIGKILL is sent
+// after the deadline) must be classified as timeouts; all other errors and a
+// nil must not. Without these tests a mutation to either string literal would
+// cause timeout events to be recorded as "nonzero_exit" in the
+// agent_tool_calls_total metric, hiding slow-kubectl patterns from operators.
+func TestIsTimeoutErr(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"deadline exceeded", fmt.Errorf("kubectl: context deadline exceeded"), true},
+		{"signal killed", fmt.Errorf("signal: killed"), true},
+		{"generic non-zero exit", fmt.Errorf("exit status 1"), false},
+		{"no such file", fmt.Errorf("no such file or directory"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isTimeoutErr(tc.err); got != tc.want {
+				t.Errorf("isTimeoutErr(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIsExecError verifies that isExecError correctly identifies errors that
+// indicate the kubectl binary could not be started (missing or non-executable).
+// These must be classified as "exec_error" rather than "nonzero_exit" in
+// agent_tool_calls_total so operators can distinguish a misconfigured image
+// (binary absent) from a legitimate kubectl failure (non-zero exit).
+// Without these tests a mutation to either string literal would silently
+// misclassify exec errors as nonzero_exit.
+func TestIsExecError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"no such file", fmt.Errorf("fork/exec /usr/local/bin/kubectl: no such file or directory"), true},
+		{"executable not found", fmt.Errorf("executable file not found in $PATH"), true},
+		{"non-zero exit", fmt.Errorf("exit status 1"), false},
+		{"deadline exceeded", fmt.Errorf("context deadline exceeded"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isExecError(tc.err); got != tc.want {
+				t.Errorf("isExecError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
