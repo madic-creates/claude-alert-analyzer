@@ -11,15 +11,12 @@ on:
       - "go.mod"
       - "go.sum"
       - ".github/workflows/build.yaml"
+      - ".semrelrc"
   workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
-
-concurrency:
-  group: ${{ github.workflow }}
-  cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io/${{ github.repository_owner }}
@@ -44,58 +41,103 @@ jobs:
           go-version-file: go.mod
       - uses: golangci/golangci-lint-action@v9
 
-  build-k8s:
+  release:
     needs: [test, lint]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v6
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Install pinned semantic-release binary
+        run: |
+          curl -fsSL \
+            https://github.com/go-semantic-release/semantic-release/releases/download/v2.31.0/semantic-release_v2.31.0_linux_amd64 \
+            -o /tmp/semantic-release
+          chmod +x /tmp/semantic-release
+          /tmp/semantic-release --version
+
+      - name: Determine next version (dry-run)
+        id: semrel-dry
+        # go-semantic-release/action v1.24.1
+        uses: go-semantic-release/action@2e9dc4247a6004f8377781bef4cb9dad273a741f
+        with:
+          bin: /tmp/semantic-release
+          dry: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        if: steps.semrel-dry.outputs.version != ''
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        if: steps.semrel-dry.outputs.version != ''
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: meta
+
+      - name: Compute image tags (k8s)
+        if: steps.semrel-dry.outputs.version != ''
+        id: meta-k8s
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/claude-alert-kubernetes-analyzer
           tags: |
-            type=sha,format=short,prefix=
-            type=raw,value=latest,enable={{is_default_branch}}
-      - uses: docker/build-push-action@v7
+            type=raw,value=v${{ steps.semrel-dry.outputs.version }}
+            type=raw,value=${{ steps.semrel-dry.outputs.version }}
+            type=raw,value=${{ steps.semrel-dry.outputs.version_major }}.${{ steps.semrel-dry.outputs.version_minor }}
+            type=raw,value=latest
+
+      - name: Build & push k8s-analyzer
+        if: steps.semrel-dry.outputs.version != ''
+        uses: docker/build-push-action@v7
         with:
           context: .
           target: k8s-analyzer
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ steps.meta-k8s.outputs.tags }}
+          labels: ${{ steps.meta-k8s.outputs.labels }}
+          cache-from: type=gha,scope=k8s-analyzer
+          cache-to: type=gha,scope=k8s-analyzer,mode=max
 
-  build-checkmk:
-    needs: [test, lint]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - id: meta
+      - name: Compute image tags (checkmk)
+        if: steps.semrel-dry.outputs.version != ''
+        id: meta-checkmk
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/claude-alert-checkmk-analyzer
           tags: |
-            type=sha,format=short,prefix=
-            type=raw,value=latest,enable={{is_default_branch}}
-      - uses: docker/build-push-action@v7
+            type=raw,value=v${{ steps.semrel-dry.outputs.version }}
+            type=raw,value=${{ steps.semrel-dry.outputs.version }}
+            type=raw,value=${{ steps.semrel-dry.outputs.version_major }}.${{ steps.semrel-dry.outputs.version_minor }}
+            type=raw,value=latest
+
+      - name: Build & push checkmk-analyzer
+        if: steps.semrel-dry.outputs.version != ''
+        uses: docker/build-push-action@v7
         with:
           context: .
           target: checkmk-analyzer
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ steps.meta-checkmk.outputs.tags }}
+          labels: ${{ steps.meta-checkmk.outputs.labels }}
+          cache-from: type=gha,scope=checkmk-analyzer
+          cache-to: type=gha,scope=checkmk-analyzer,mode=max
+
+      - name: Publish Git tag + GitHub Release
+        if: steps.semrel-dry.outputs.version != ''
+        # go-semantic-release/action v1.24.1
+        uses: go-semantic-release/action@2e9dc4247a6004f8377781bef4cb9dad273a741f
+        with:
+          bin: /tmp/semantic-release
+          github-token: ${{ secrets.GITHUB_TOKEN }}

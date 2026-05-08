@@ -1,0 +1,15 @@
+{
+  "plugins": {
+    "commit-analyzer": {
+      "name": "default@^1.0.0",
+      "options": {
+        "patch_release_rules": "fix,perf,refactor,chore(deps)",
+        "minor_release_rules": "feat",
+        "major_release_rules": "*!"
+      }
+    },
+    "ci-condition":        { "name": "github@^1.0.0" },
+    "provider":            { "name": "github@^1.0.0" },
+    "changelog-generator": { "name": "default@^1.0.0" }
+  }
+}
