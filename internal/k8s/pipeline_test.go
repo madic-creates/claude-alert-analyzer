@@ -897,6 +897,44 @@ func TestProcessAlert_StormDegradedForcesRoundsZero(t *testing.T) {
 	}
 }
 
+// TestProcessAlert_AnalyzerErrorOpensBreaker verifies that an analysis failure
+// is correctly reported through the permit so that the breaker's
+// consecFailures counter increments and the breaker eventually opens.
+//
+// Regression test for the lazy-eval bug in `defer permit.Done(analysisErr)`:
+// if the deferred call evaluates analysisErr at defer-registration time
+// (when it is nil because we just passed the err==nil check after Acquire),
+// the breaker sees Done(nil) — success — and never opens regardless of how
+// many analyses fail. The fix is `defer func() { permit.Done(analysisErr) }()`
+// so the closure reads analysisErr at execution time.
+func TestProcessAlert_AnalyzerErrorOpensBreaker(t *testing.T) {
+	cm := shared.NewCooldownManager()
+	clk := &pipelineFakeClock{t: time.Unix(0, 0)}
+	breaker := shared.NewCircuitBreaker(2, time.Hour, time.Hour, clk.Now)
+
+	deps := PipelineDeps{
+		Cooldown:      cm,
+		Breaker:       breaker,
+		Metrics:       &shared.AlertMetrics{},
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "x", DefaultMaxRounds: 0},
+		GatherContext: func(_ context.Context, _ shared.AlertPayload) shared.AnalysisContext { return shared.AnalysisContext{} },
+		Analyzer:      &mockAnalyzer{returnErr: errors.New("api 503")},
+		ToolRunner:    &mockToolRunner{},
+		Publishers:    []shared.Publisher{&pipelineFakePublisher{}},
+	}
+
+	// Two failed analyses must hit the threshold and open the breaker.
+	for i := 0; i < 2; i++ {
+		alert := shared.AlertPayload{Fingerprint: fmt.Sprintf("fp%d", i)}
+		ProcessAlert(context.Background(), deps, alert)
+	}
+
+	// Third Acquire should now return ErrCircuitOpen.
+	if _, err := breaker.Acquire(); !errors.Is(err, shared.ErrCircuitOpen) {
+		t.Fatalf("breaker should be open after 2 failed analyses; Acquire returned err=%v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Test fixtures for Phase 2 pipeline tests.
 // Names are prefixed/suffixed to avoid collision with Phase 1 helpers above.

@@ -149,7 +149,11 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 		deps.Metrics.RecordClaudeAPIError(alert.Source)
 		return
 	}
-	defer permit.Done(analysisErr) // panic-safe, idempotent
+	// Closure (not direct defer-arg) so analysisErr is read at execution time,
+	// not at defer-registration time. With a direct argument, analysisErr would
+	// always be nil (we passed the err==nil check above) and the breaker would
+	// never see a failure → consecFailures stays 0 → breaker never opens.
+	defer func() { permit.Done(analysisErr) }()
 
 	model := deps.Policy.ModelFor(alert.SeverityLevel)
 	rounds := deps.Policy.MaxRoundsFor(alert.SeverityLevel)
