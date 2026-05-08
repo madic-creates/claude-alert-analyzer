@@ -72,6 +72,7 @@ jobs:
         with:
           bin: /tmp/semantic-release
           dry: true
+          allow-initial-development-versions: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Buildx
@@ -140,4 +141,5 @@ jobs:
         uses: go-semantic-release/action@2e9dc4247a6004f8377781bef4cb9dad273a741f
         with:
           bin: /tmp/semantic-release
+          allow-initial-development-versions: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
