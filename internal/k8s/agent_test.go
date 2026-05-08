@@ -13,6 +13,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func TestParseKubectlInput_BasicValidation(t *testing.T) {
@@ -523,7 +524,7 @@ type fakeToolLoopRunner struct {
 }
 
 func (f *fakeToolLoopRunner) RunToolLoop(
-	ctx context.Context, model, system, user string,
+	ctx context.Context, _ shared.Severity, model, system, user string,
 	tools []anthropic.ToolUnionParam, maxRounds int,
 	handleTool func(name string, input json.RawMessage) (string, error),
 ) (string, int, bool, error) {
@@ -558,7 +559,7 @@ func (f *fakePromQLQuerier) Query(ctx context.Context, q string) string {
 func TestRunAgenticDiagnostics_HappyPath(t *testing.T) {
 	kc := &fakeKubectlRunner{response: "pod-x   Running\n"}
 	pq := &fakePromQLQuerier{response: "up: 1"}
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
 
 	runner := &fakeToolLoopRunner{
 		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
@@ -574,7 +575,7 @@ func TestRunAgenticDiagnostics_HappyPath(t *testing.T) {
 	}
 
 	got, err := RunAgenticDiagnostics(
-		context.Background(), runner, kc, pq, metrics,
+		context.Background(), runner, kc, pq, metrics, shared.SeverityWarning,
 		"## Alert: Foo\nbody", 10, "test-model",
 	)
 	if err != nil {
@@ -594,7 +595,7 @@ func TestRunAgenticDiagnostics_HappyPath(t *testing.T) {
 func TestRunAgenticDiagnostics_PromQLDispatch(t *testing.T) {
 	kc := &fakeKubectlRunner{}
 	pq := &fakePromQLQuerier{response: "up: 1"}
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
 
 	runner := &fakeToolLoopRunner{
 		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
@@ -608,7 +609,7 @@ func TestRunAgenticDiagnostics_PromQLDispatch(t *testing.T) {
 			return "ok", nil
 		},
 	}
-	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10, "test-model"); err != nil {
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(pq.calls) != 1 || pq.calls[0] != "up" {
@@ -622,7 +623,7 @@ func TestRunAgenticDiagnostics_PromQLDispatch(t *testing.T) {
 // outcome variable was hard-coded to outcomeOK and queryCtx.Err() was never
 // checked, making Prometheus timeouts invisible in the metric.
 func TestHandlePromQLTool_TimeoutOutcome(t *testing.T) {
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
 
 	// Pre-cancel the parent context so that the queryCtx created inside
 	// handlePromQLTool (via context.WithTimeout) inherits the cancellation
@@ -642,9 +643,9 @@ func TestHandlePromQLTool_TimeoutOutcome(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/metrics", nil)
-	metrics.MetricsHandler()(rec, req)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
 	body := rec.Body.String()
-	if !strings.Contains(body, `agent_tool_calls_total{outcome="timeout",source="k8s",tool="promql_query"} 1`) {
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="timeout",product="k8s",tool="promql_query"} 1`) {
 		t.Errorf("expected timeout outcome metric for cancelled context; body:\n%s", body)
 	}
 }
@@ -652,7 +653,7 @@ func TestHandlePromQLTool_TimeoutOutcome(t *testing.T) {
 func TestRunAgenticDiagnostics_ValidationRejected(t *testing.T) {
 	kc := &fakeKubectlRunner{}
 	pq := &fakePromQLQuerier{}
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
 
 	runner := &fakeToolLoopRunner{
 		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
@@ -669,7 +670,7 @@ func TestRunAgenticDiagnostics_ValidationRejected(t *testing.T) {
 			return "stopped early", nil
 		},
 	}
-	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10, "test-model"); err != nil {
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -677,7 +678,7 @@ func TestRunAgenticDiagnostics_ValidationRejected(t *testing.T) {
 func TestRunAgenticDiagnostics_UnknownTool(t *testing.T) {
 	kc := &fakeKubectlRunner{}
 	pq := &fakePromQLQuerier{}
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
 
 	runner := &fakeToolLoopRunner{
 		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
@@ -688,7 +689,7 @@ func TestRunAgenticDiagnostics_UnknownTool(t *testing.T) {
 			return "ok", nil
 		},
 	}
-	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10, "test-model"); err != nil {
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -696,7 +697,7 @@ func TestRunAgenticDiagnostics_UnknownTool(t *testing.T) {
 func TestRunAgenticDiagnostics_RecordsMetrics(t *testing.T) {
 	kc := &fakeKubectlRunner{response: "ok\n"}
 	pq := &fakePromQLQuerier{response: "v"}
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
 
 	runner := &fakeToolLoopRunner{
 		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
@@ -706,22 +707,22 @@ func TestRunAgenticDiagnostics_RecordsMetrics(t *testing.T) {
 			return "done", nil
 		},
 	}
-	_, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10, "test-model")
+	_, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/metrics", nil)
-	metrics.MetricsHandler()(rec, req)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
 	body := rec.Body.String()
-	if !strings.Contains(body, `agent_tool_calls_total{outcome="ok",source="k8s",tool="kubectl_exec"} 1`) {
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="ok",product="k8s",tool="kubectl_exec"} 1`) {
 		t.Errorf("missing kubectl ok counter; body:\n%s", body)
 	}
-	if !strings.Contains(body, `agent_tool_calls_total{outcome="rejected_verb",source="k8s",tool="kubectl_exec"} 1`) {
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="rejected_verb",product="k8s",tool="kubectl_exec"} 1`) {
 		t.Errorf("missing kubectl rejected_verb counter; body:\n%s", body)
 	}
-	if !strings.Contains(body, `agent_tool_calls_total{outcome="ok",source="k8s",tool="promql_query"} 1`) {
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="ok",product="k8s",tool="promql_query"} 1`) {
 		t.Errorf("missing promql ok counter; body:\n%s", body)
 	}
 }
@@ -734,7 +735,7 @@ func (panickyKubectlRunner) Exec(ctx context.Context, argv []string, timeout tim
 
 func TestRunAgenticDiagnostics_PanicRecovery(t *testing.T) {
 	pq := &fakePromQLQuerier{}
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
 
 	loopReturned := false
 	runner := &fakeToolLoopRunner{
@@ -753,7 +754,7 @@ func TestRunAgenticDiagnostics_PanicRecovery(t *testing.T) {
 	}
 
 	out, err := RunAgenticDiagnostics(
-		context.Background(), runner, panickyKubectlRunner{}, pq, metrics,
+		context.Background(), runner, panickyKubectlRunner{}, pq, metrics, shared.SeverityWarning,
 		"ctx", 10, "test-model",
 	)
 	if err != nil {
@@ -769,9 +770,9 @@ func TestRunAgenticDiagnostics_PanicRecovery(t *testing.T) {
 	// Metric assertion: panic recorded as exec_error outcome
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/metrics", nil)
-	metrics.MetricsHandler()(rec, req)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
 	body := rec.Body.String()
-	if !strings.Contains(body, `agent_tool_calls_total{outcome="exec_error",source="k8s",tool="kubectl_exec"} 1`) {
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="exec_error",product="k8s",tool="kubectl_exec"} 1`) {
 		t.Errorf("missing exec_error metric for panicked call; body:\n%s", body)
 	}
 }
@@ -782,7 +783,7 @@ type fakeToolLoopRunnerExhausted struct {
 }
 
 func (f *fakeToolLoopRunnerExhausted) RunToolLoop(
-	ctx context.Context, model, system, user string,
+	ctx context.Context, _ shared.Severity, model, system, user string,
 	tools []anthropic.ToolUnionParam, maxRounds int,
 	handleTool func(name string, input json.RawMessage) (string, error),
 ) (string, int, bool, error) {
@@ -792,10 +793,10 @@ func (f *fakeToolLoopRunnerExhausted) RunToolLoop(
 func TestRunAgenticDiagnostics_ForcedSummary(t *testing.T) {
 	kc := &fakeKubectlRunner{}
 	pq := &fakePromQLQuerier{}
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
 	runner := &fakeToolLoopRunnerExhausted{maxRounds: 10}
 
-	out, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10, "test-model")
+	out, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -805,9 +806,9 @@ func TestRunAgenticDiagnostics_ForcedSummary(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/metrics", nil)
-	metrics.MetricsHandler()(rec, req)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
 	body := rec.Body.String()
-	if !strings.Contains(body, `agent_rounds_exhausted_total{source="k8s"} 1`) {
+	if !strings.Contains(body, `alert_analyzer_agent_rounds_exhausted_total{product="k8s"} 1`) {
 		t.Errorf("expected exhausted counter to fire; body:\n%s", body)
 	}
 }
@@ -819,7 +820,7 @@ func TestRunAgenticDiagnostics_RBACForbidden(t *testing.T) {
 		err:      fmt.Errorf("exit status 1"),
 	}
 	pq := &fakePromQLQuerier{}
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
 
 	runner := &fakeToolLoopRunner{
 		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
@@ -836,15 +837,15 @@ func TestRunAgenticDiagnostics_RBACForbidden(t *testing.T) {
 			return "ok", nil
 		},
 	}
-	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10, "test-model"); err != nil {
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/metrics", nil)
-	metrics.MetricsHandler()(rec, req)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
 	body := rec.Body.String()
-	if !strings.Contains(body, `agent_tool_calls_total{outcome="nonzero_exit",source="k8s",tool="kubectl_exec"} 1`) {
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="nonzero_exit",product="k8s",tool="kubectl_exec"} 1`) {
 		t.Errorf("expected nonzero_exit metric for RBAC denial; body:\n%s", body)
 	}
 }
@@ -987,7 +988,7 @@ func TestRunAgenticDiagnostics_EmptyOutputError(t *testing.T) {
 		err:      fmt.Errorf("exit status 1"),
 	}
 	pq := &fakePromQLQuerier{}
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
 
 	var toolResult string
 	runner := &fakeToolLoopRunner{
@@ -1001,7 +1002,7 @@ func TestRunAgenticDiagnostics_EmptyOutputError(t *testing.T) {
 		},
 	}
 
-	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, "ctx", 10, "test-model"); err != nil {
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 

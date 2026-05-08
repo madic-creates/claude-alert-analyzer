@@ -44,7 +44,7 @@ func TestAnalyze_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv, "claude-3", "test-key", 0)
-	result, err := client.Analyze(context.Background(), "test-model", "sys prompt", "user prompt")
+	result, err := client.Analyze(context.Background(), SeverityWarning, "test-model", "sys prompt", "user prompt")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestAnalyze_MultipleTextBlocks(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv, "claude-3", "test-key", 0)
-	result, err := client.Analyze(context.Background(), "test-model", "sys", "user")
+	result, err := client.Analyze(context.Background(), SeverityWarning, "test-model", "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestAnalyze_EmptyContent(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv, "claude-3", "test-key", 0)
-	result, err := client.Analyze(context.Background(), "test-model", "sys", "user")
+	result, err := client.Analyze(context.Background(), SeverityWarning, "test-model", "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestAnalyze_NonTextBlocksIgnored(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv, "claude-3", "test-key", 0)
-	result, err := client.Analyze(context.Background(), "test-model", "sys", "user")
+	result, err := client.Analyze(context.Background(), SeverityWarning, "test-model", "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestAnalyze_MaxTokensStopReason(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv, "claude-3", "test-key", 0)
-	result, err := client.Analyze(context.Background(), "test-model", "sys", "user")
+	result, err := client.Analyze(context.Background(), SeverityWarning, "test-model", "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error for max_tokens stop reason: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestAnalyze_HTTPError(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv, "claude-3", "test-key", 0)
-	_, err := client.Analyze(context.Background(), "test-model", "sys", "user")
+	_, err := client.Analyze(context.Background(), SeverityWarning, "test-model", "sys", "user")
 	if err == nil {
 		t.Fatal("expected error for non-200 response")
 	}
@@ -178,7 +178,7 @@ func TestAnalyze_ContextCancellation(t *testing.T) {
 	cancel() // cancel immediately
 
 	client := newTestClient(t, srv, "claude-3", "test-key", 0)
-	_, err := client.Analyze(ctx, "test-model", "sys", "user")
+	_, err := client.Analyze(ctx, SeverityWarning, "test-model", "sys", "user")
 	if err == nil {
 		t.Fatal("expected error for cancelled context")
 	}
@@ -200,7 +200,7 @@ func TestAnalyze_ParseResponseError(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv, "claude-3", "test-key", 0)
-	_, err := client.Analyze(context.Background(), "test-model", "sys", "user")
+	_, err := client.Analyze(context.Background(), SeverityWarning, "test-model", "sys", "user")
 	if err == nil {
 		t.Fatal("expected error when API returns non-JSON body, got nil")
 	}
@@ -225,7 +225,7 @@ func TestRunToolLoop_EndTurnImmediately(t *testing.T) {
 		OfTool: &anthropic.ToolParam{Name: "execute_command"},
 	}}
 
-	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 10,
+	result, _, _, err := client.RunToolLoop(context.Background(), SeverityWarning, "test-model", "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) {
 			t.Fatal("tool handler should not be called")
 			return "", nil
@@ -271,7 +271,7 @@ func TestRunToolLoop_OneToolRoundThenEnd(t *testing.T) {
 	}}
 
 	var toolCalls int
-	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 10,
+	result, _, _, err := client.RunToolLoop(context.Background(), SeverityWarning, "test-model", "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) {
 			toolCalls++
 			if name != "execute_command" {
@@ -325,7 +325,7 @@ func TestRunToolLoop_MaxRoundsForcesSummary(t *testing.T) {
 	}}
 
 	var toolCalls int
-	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 2,
+	result, _, _, err := client.RunToolLoop(context.Background(), SeverityWarning, "test-model", "system", "user prompt", tools, 2,
 		func(name string, input json.RawMessage) (string, error) {
 			toolCalls++
 			return "up 5 days", nil
@@ -354,7 +354,7 @@ func TestRunToolLoop_APIError(t *testing.T) {
 		OfTool: &anthropic.ToolParam{Name: "execute_command"},
 	}}
 
-	_, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 10,
+	_, _, _, err := client.RunToolLoop(context.Background(), SeverityWarning, "test-model", "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) { return "", nil })
 
 	if err == nil {
@@ -417,7 +417,7 @@ func TestRunToolLoop_ToolHandlerError(t *testing.T) {
 		OfTool: &anthropic.ToolParam{Name: "execute_command"},
 	}}
 
-	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 5,
+	result, _, _, err := client.RunToolLoop(context.Background(), SeverityWarning, "test-model", "system", "user prompt", tools, 5,
 		func(name string, input json.RawMessage) (string, error) {
 			return "", fmt.Errorf("command not allowed")
 		})
@@ -464,7 +464,7 @@ func TestRunToolLoop_MultipleToolsInOneRound(t *testing.T) {
 	}
 
 	var calledTools []string
-	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 5,
+	result, _, _, err := client.RunToolLoop(context.Background(), SeverityWarning, "test-model", "system", "user prompt", tools, 5,
 		func(name string, input json.RawMessage) (string, error) {
 			calledTools = append(calledTools, name)
 			return "ok", nil
@@ -515,7 +515,7 @@ func TestRunToolLoop_MaxTokensStopReason(t *testing.T) {
 		OfTool: &anthropic.ToolParam{Name: "execute_command"},
 	}}
 
-	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 10,
+	result, _, _, err := client.RunToolLoop(context.Background(), SeverityWarning, "test-model", "system", "user prompt", tools, 10,
 		func(name string, input json.RawMessage) (string, error) {
 			t.Fatal("tool handler should not be called on max_tokens response")
 			return "", nil
@@ -581,7 +581,7 @@ func TestRunToolLoop_MaxRounds_NoConsecutiveUserMessages(t *testing.T) {
 		OfTool: &anthropic.ToolParam{Name: "execute_command"},
 	}}
 
-	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 1,
+	result, _, _, err := client.RunToolLoop(context.Background(), SeverityWarning, "test-model", "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil })
 
 	if err != nil {
@@ -655,7 +655,7 @@ func TestRunToolLoop_SummaryRequestFails(t *testing.T) {
 		OfTool: &anthropic.ToolParam{Name: "execute_command"},
 	}}
 
-	_, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 1,
+	_, _, _, err := client.RunToolLoop(context.Background(), SeverityWarning, "test-model", "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "ok", nil })
 
 	if err == nil {
@@ -710,7 +710,7 @@ func TestRunToolLoop_SummaryRequestHasToolChoiceNone(t *testing.T) {
 		OfTool: &anthropic.ToolParam{Name: "execute_command"},
 	}}
 
-	result, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 1,
+	result, _, _, err := client.RunToolLoop(context.Background(), SeverityWarning, "test-model", "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil })
 
 	if err != nil {
@@ -761,7 +761,7 @@ func TestRunToolLoop_SummaryParseFailure(t *testing.T) {
 		OfTool: &anthropic.ToolParam{Name: "execute_command"},
 	}}
 
-	_, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 1,
+	_, _, _, err := client.RunToolLoop(context.Background(), SeverityWarning, "test-model", "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil })
 
 	if err == nil {
@@ -786,7 +786,7 @@ func TestRunToolLoop_FallbackWhenNoToolRoundsOccurred(t *testing.T) {
 		OfTool: &anthropic.ToolParam{Name: "execute_command"},
 	}}
 
-	_, _, _, err := client.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 0,
+	_, _, _, err := client.RunToolLoop(context.Background(), SeverityWarning, "test-model", "system", "user prompt", tools, 0,
 		func(_ string, _ json.RawMessage) (string, error) {
 			t.Fatal("tool handler must not be called when maxRounds=0")
 			return "", nil
@@ -816,7 +816,7 @@ func TestRunToolLoop_LastToolHasCacheControl(t *testing.T) {
 		{OfTool: &anthropic.ToolParam{Name: "a"}},
 		{OfTool: &anthropic.ToolParam{Name: "b"}},
 	}
-	_, _, _, err := c.RunToolLoop(context.Background(), "m", "sys", "user", tools, 1, func(string, json.RawMessage) (string, error) { return "", nil })
+	_, _, _, err := c.RunToolLoop(context.Background(), SeverityWarning, "m", "sys", "user", tools, 1, func(string, json.RawMessage) (string, error) { return "", nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -844,7 +844,7 @@ func TestAnalyze_UsesProvidedModel(t *testing.T) {
 
 	c := newTestClient(t, srv, "default-model", "x", 0)
 
-	if _, err := c.Analyze(context.Background(), "override-model", "sys", "usr"); err != nil {
+	if _, err := c.Analyze(context.Background(), SeverityWarning, "override-model", "sys", "usr"); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(capturedBody), `"model":"override-model"`) {
@@ -863,7 +863,7 @@ func TestAnalyze_SystemPromptHasCacheControl(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv, "m", "x", 0)
-	if _, err := c.Analyze(context.Background(), "m", "system", "user"); err != nil {
+	if _, err := c.Analyze(context.Background(), SeverityWarning, "m", "system", "user"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -915,7 +915,7 @@ func TestRunToolLoop_LastToolResultHasCacheControl(t *testing.T) {
 	tools := []anthropic.ToolUnionParam{{
 		OfTool: &anthropic.ToolParam{Name: "a"},
 	}}
-	_, rounds, _, err := c.RunToolLoop(context.Background(), "m", "sys", "user", tools, 5,
+	_, rounds, _, err := c.RunToolLoop(context.Background(), SeverityWarning, "m", "sys", "user", tools, 5,
 		func(string, json.RawMessage) (string, error) { return "tool-output-data", nil })
 	if err != nil {
 		t.Fatal(err)
@@ -948,7 +948,7 @@ func TestRunToolLoop_UsesProvidedModel(t *testing.T) {
 	tools := []anthropic.ToolUnionParam{{
 		OfTool: &anthropic.ToolParam{Name: "a"},
 	}}
-	_, _, _, err := c.RunToolLoop(context.Background(), "override-model", "sys", "usr", tools, 1,
+	_, _, _, err := c.RunToolLoop(context.Background(), SeverityWarning, "override-model", "sys", "usr", tools, 1,
 		func(string, json.RawMessage) (string, error) { return "out", nil })
 	if err != nil {
 		t.Fatal(err)
@@ -985,7 +985,7 @@ func TestClaudeClient_RetriesOnTransientError(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv, "test", "test-key", 2)
-	result, err := client.Analyze(context.Background(), "test-model", "sys", "user")
+	result, err := client.Analyze(context.Background(), SeverityWarning, "test-model", "sys", "user")
 	if err != nil {
 		t.Fatalf("expected success after retries, got error: %v", err)
 	}
@@ -1009,7 +1009,7 @@ func TestClaudeClient_NoRetryOnClientError(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(t, srv, "test", "test-key", 2)
-	_, err := client.Analyze(context.Background(), "test-model", "sys", "user")
+	_, err := client.Analyze(context.Background(), SeverityWarning, "test-model", "sys", "user")
 	if err == nil {
 		t.Fatal("expected error for 400 response")
 	}
@@ -1049,9 +1049,9 @@ func TestRunToolLoop_CacheTokensSummedAcrossRounds(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	prom := NewPrometheusMetrics()
+	prom := NewPrometheusMetricsForTest(ProductK8s)
 	metrics := &AlertMetrics{Prom: prom}
-	c := newTestClient(t, srv, "test-model", "test-key", 0).WithPrometheusMetrics(metrics, "k8s")
+	c := newTestClient(t, srv, "test-model", "test-key", 0).WithPrometheusMetrics(metrics)
 
 	tools := []anthropic.ToolUnionParam{{
 		OfTool: &anthropic.ToolParam{
@@ -1059,7 +1059,7 @@ func TestRunToolLoop_CacheTokensSummedAcrossRounds(t *testing.T) {
 			InputSchema: anthropic.ToolInputSchemaParam{Properties: map[string]any{}},
 		},
 	}}
-	if _, _, _, err := c.RunToolLoop(context.Background(), "test-model", "system", "user", tools, 5,
+	if _, _, _, err := c.RunToolLoop(context.Background(), SeverityWarning, "test-model", "system", "user", tools, 5,
 		func(_ string, _ json.RawMessage) (string, error) { return "load: 0.1", nil }); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1075,16 +1075,37 @@ func TestRunToolLoop_CacheTokensSummedAcrossRounds(t *testing.T) {
 		}
 		return -1
 	}
-	if v := gather("claude_input_tokens_total"); v != 130 {
+	gatherKind := func(kind string) float64 {
+		mfs, _ := prom.Registry().Gather()
+		for _, mf := range mfs {
+			if mf.GetName() != "alert_analyzer_claude_tokens_total" {
+				continue
+			}
+			for _, m := range mf.GetMetric() {
+				match := false
+				for _, lp := range m.GetLabel() {
+					if lp.GetName() == "kind" && lp.GetValue() == kind {
+						match = true
+					}
+				}
+				if match {
+					return m.GetCounter().GetValue()
+				}
+			}
+		}
+		return -1
+	}
+	_ = gather // suppress unused warning if name kept
+	if v := gatherKind("input"); v != 130 {
 		t.Errorf("input_tokens summed across 2 rounds: got %v, want 130 (50+80)", v)
 	}
-	if v := gather("claude_output_tokens_total"); v != 30 {
+	if v := gatherKind("output"); v != 30 {
 		t.Errorf("output_tokens summed: got %v, want 30 (10+20)", v)
 	}
-	if v := gather("claude_cache_creation_tokens_total"); v != 200 {
+	if v := gatherKind("cache_creation"); v != 200 {
 		t.Errorf("cache_creation summed: got %v, want 200 (200+0)", v)
 	}
-	if v := gather("claude_cache_read_tokens_total"); v != 400 {
+	if v := gatherKind("cache_read"); v != 400 {
 		t.Errorf("cache_read summed: got %v, want 400 (100+300)", v)
 	}
 }
@@ -1108,7 +1129,7 @@ func TestNewClaudeClient_APIKeyHeader(t *testing.T) {
 		ClaudeModel: "m",
 	}
 	c := NewClaudeClient(cfg, nil)
-	if _, err := c.Analyze(context.Background(), "m", "s", "u"); err != nil {
+	if _, err := c.Analyze(context.Background(), SeverityWarning, "m", "s", "u"); err != nil {
 		t.Fatal(err)
 	}
 	if gotKey != "my-api-key" {
@@ -1134,7 +1155,7 @@ func TestNewClaudeClient_AuthTokenHeader(t *testing.T) {
 		ClaudeModel: "m",
 	}
 	c := NewClaudeClient(cfg, nil)
-	if _, err := c.Analyze(context.Background(), "m", "s", "u"); err != nil {
+	if _, err := c.Analyze(context.Background(), SeverityWarning, "m", "s", "u"); err != nil {
 		t.Fatal(err)
 	}
 	if gotAuth != "Bearer my-bearer-token" {
@@ -1162,7 +1183,7 @@ func TestNewClaudeClient_APIKeyOnly_NoAuthorizationHeader(t *testing.T) {
 		APIBaseURL:  srv.URL,
 		ClaudeModel: "m",
 	}, srv.Client().Transport)
-	if _, err := c.Analyze(context.Background(), "m", "s", "u"); err != nil {
+	if _, err := c.Analyze(context.Background(), SeverityWarning, "m", "s", "u"); err != nil {
 		t.Fatal(err)
 	}
 	if gotAuth != "" {
@@ -1187,7 +1208,7 @@ func TestNewClaudeClient_AuthTokenOnly_NoAPIKeyHeader(t *testing.T) {
 		APIBaseURL:  srv.URL,
 		ClaudeModel: "m",
 	}, srv.Client().Transport)
-	if _, err := c.Analyze(context.Background(), "m", "s", "u"); err != nil {
+	if _, err := c.Analyze(context.Background(), SeverityWarning, "m", "s", "u"); err != nil {
 		t.Fatal(err)
 	}
 	if gotKey != "" {
@@ -1226,7 +1247,7 @@ func TestRunToolLoop_RoundErrorIsWrappedWithRoundIndex(t *testing.T) {
 		},
 	}}
 
-	_, _, _, err := c.RunToolLoop(context.Background(), "test-model", "system", "user prompt", tools, 5,
+	_, _, _, err := c.RunToolLoop(context.Background(), SeverityWarning, "test-model", "system", "user prompt", tools, 5,
 		func(_ string, _ json.RawMessage) (string, error) { return "load: 0.1", nil })
 	if err == nil {
 		t.Fatal("expected error from round 2")
@@ -1255,7 +1276,7 @@ func TestNewClaudeClient_AnthropicVersionHeader(t *testing.T) {
 		ClaudeModel: "m",
 	}
 	c := NewClaudeClient(cfg, nil)
-	if _, err := c.Analyze(context.Background(), "m", "s", "u"); err != nil {
+	if _, err := c.Analyze(context.Background(), SeverityWarning, "m", "s", "u"); err != nil {
 		t.Fatal(err)
 	}
 	if gotVersion == "" {

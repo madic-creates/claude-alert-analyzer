@@ -33,6 +33,21 @@ func NewCooldownManager() *CooldownManager {
 	}
 }
 
+// CooldownOutcome describes which cooldown gate (if any) blocked an alert.
+type CooldownOutcome int
+
+const (
+	// CooldownAccepted: both gates passed; the alert is allowed and entries are set.
+	CooldownAccepted CooldownOutcome = iota
+	// CooldownFingerprint: the fingerprint was already in cooldown.
+	CooldownFingerprint
+	// CooldownGroup: the group key was already in cooldown.
+	CooldownGroup
+)
+
+// Accepted reports whether the alert passed all cooldown gates.
+func (o CooldownOutcome) Accepted() bool { return o == CooldownAccepted }
+
 // CheckAndSet returns true if the fingerprint was not in cooldown and is now set.
 // Sweeps expired entries on every call to keep the map bounded.
 func (cm *CooldownManager) CheckAndSet(fingerprint string, ttl time.Duration) bool {
@@ -64,11 +79,13 @@ func (cm *CooldownManager) ClearGroup(groupKey string) {
 }
 
 // CheckAndSetWithGroup atomically checks both cooldowns and sets both, or
-// neither, in fixed lock order (groupMu → fpMu). Returns false if either is
-// already in cooldown; in that case nothing is mutated.
+// neither, in fixed lock order (groupMu → fpMu). Returns CooldownAccepted on
+// success, CooldownFingerprint or CooldownGroup on rejection; in the rejection
+// cases nothing is mutated (the rollback semantics are preserved).
 //
 // groupKey == "" or groupTTL == 0 → group is skipped entirely; the call
 // reduces to CheckAndSet on the fingerprint alone (with the same locking).
+// In this mode the only possible non-Accepted return is CooldownFingerprint.
 //
 // Lock-Discipline: BOTH mutexes are held over the entire decision (not
 // taken individually and released between steps). Order: groupMu first, then
@@ -77,19 +94,22 @@ func (cm *CooldownManager) ClearGroup(groupKey string) {
 func (cm *CooldownManager) CheckAndSetWithGroup(
 	fingerprint string, fpTTL time.Duration,
 	groupKey string, groupTTL time.Duration,
-) bool {
+) CooldownOutcome {
 	now := time.Now()
 
 	if groupKey == "" || groupTTL == 0 {
 		cm.fpMu.Lock()
 		defer cm.fpMu.Unlock()
-		return checkAndSetLocked(cm.fpEntries, fingerprint, fpTTL, now)
+		if checkAndSetLocked(cm.fpEntries, fingerprint, fpTTL, now) {
+			return CooldownAccepted
+		}
+		return CooldownFingerprint
 	}
 
 	cm.groupMu.Lock()
 	defer cm.groupMu.Unlock()
 	if !checkAndSetLocked(cm.groupEntries, groupKey, groupTTL, now) {
-		return false
+		return CooldownGroup
 	}
 
 	cm.fpMu.Lock()
@@ -97,9 +117,9 @@ func (cm *CooldownManager) CheckAndSetWithGroup(
 	if !checkAndSetLocked(cm.fpEntries, fingerprint, fpTTL, now) {
 		// Rollback the group entry so the maps stay consistent.
 		delete(cm.groupEntries, groupKey)
-		return false
+		return CooldownFingerprint
 	}
-	return true
+	return CooldownAccepted
 }
 
 // checkAndSetLocked is the lock-free body shared by CheckAndSet and

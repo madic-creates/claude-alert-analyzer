@@ -235,7 +235,7 @@ func buildTestDialer(t *testing.T) (*SSHDialer, error) {
 func TestProcessAlert_AnalysisFails_PublishFailureNotification(t *testing.T) {
 	failPub := &mockPublisher{err: fmt.Errorf("ntfy unreachable")}
 	cooldown := shared.NewCooldownManager()
-	metrics := new(shared.AlertMetrics)
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductCheckMK))
 
 	deps := PipelineDeps{
 		Analyzer:   &mockAnalyzer{err: fmt.Errorf("claude timeout")},
@@ -263,8 +263,8 @@ func TestProcessAlert_AnalysisFails_PublishFailureNotification(t *testing.T) {
 	ProcessAlert(context.Background(), deps, alert)
 
 	// The primary failure (analysis error) must still be counted.
-	if metrics.AlertsFailed.Load() != 1 {
-		t.Errorf("AlertsFailed = %d, want 1", metrics.AlertsFailed.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)) != 1 {
+		t.Errorf("AlertsFailed = %d, want 1", int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)))
 	}
 	// publish was attempted (for the failure notification) even though it failed.
 	if len(failPub.calls) != 1 {
@@ -279,7 +279,7 @@ func TestProcessAlert_AnalysisFails_PublishFailureNotification(t *testing.T) {
 func TestProcessAlert_EmptyAnalysis_PublishFailureNotification(t *testing.T) {
 	failPub := &mockPublisher{err: fmt.Errorf("ntfy down")}
 	cooldown := shared.NewCooldownManager()
-	metrics := new(shared.AlertMetrics)
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductCheckMK))
 
 	deps := PipelineDeps{
 		Analyzer:   &mockAnalyzer{result: "", err: nil},
@@ -305,8 +305,8 @@ func TestProcessAlert_EmptyAnalysis_PublishFailureNotification(t *testing.T) {
 
 	ProcessAlert(context.Background(), deps, alert)
 
-	if metrics.AlertsFailed.Load() != 1 {
-		t.Errorf("AlertsFailed = %d, want 1", metrics.AlertsFailed.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)) != 1 {
+		t.Errorf("AlertsFailed = %d, want 1", int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)))
 	}
 }
 
@@ -322,7 +322,7 @@ func TestProcessAlert_SSH_AgenticFails_PublishFailureNotification(t *testing.T) 
 	dialer := &fixedDialer{client: sshClient}
 	failPub := &mockPublisher{err: fmt.Errorf("ntfy unreachable")}
 	cooldown := shared.NewCooldownManager()
-	metrics := new(shared.AlertMetrics)
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductCheckMK))
 
 	deps := PipelineDeps{
 		ToolRunner: &capturingToolRunner{err: fmt.Errorf("tool loop failed")},
@@ -350,11 +350,11 @@ func TestProcessAlert_SSH_AgenticFails_PublishFailureNotification(t *testing.T) 
 
 	ProcessAlert(context.Background(), deps, alert)
 
-	if metrics.AlertsFailed.Load() != 1 {
-		t.Errorf("AlertsFailed = %d, want 1", metrics.AlertsFailed.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)) != 1 {
+		t.Errorf("AlertsFailed = %d, want 1", int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)))
 	}
-	if metrics.AlertsProcessed.Load() != 0 {
-		t.Errorf("AlertsProcessed = %d, want 0", metrics.AlertsProcessed.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsProcessed.WithLabelValues("unknown"))) != 0 {
+		t.Errorf("AlertsProcessed = %d, want 0", int64(testutil.ToFloat64(metrics.Prom.AlertsProcessed.WithLabelValues("unknown"))))
 	}
 	if len(failPub.calls) != 1 {
 		t.Errorf("expected 1 publish call (failure notification), got %d", len(failPub.calls))
@@ -564,14 +564,14 @@ func TestGetHostServices_OtherStateSortsLastAmongNonOK(t *testing.T) {
 // when RunAgenticDiagnostics returns an error and Prom is non-nil, the
 // claude_api_errors_total Prometheus counter is incremented for the SSH agentic
 // path. TestProcessAlert_SSH_AgenticFails_PublishFailureNotification exercises the
-// same failure branch but uses new(shared.AlertMetrics) (Prom == nil), so
+// same failure branch but uses shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)) (Prom == nil), so
 // RecordClaudeAPIError is a no-op there; this test exercises the non-nil path.
 func TestProcessAlert_SSH_AgenticFails_RecordsClaudeAPIErrorCounter(t *testing.T) {
 	sshClient := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
 		sendExitStatus(ch, 0)
 	})
 	dialer := &fixedDialer{client: sshClient}
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)}
 
 	deps := PipelineDeps{
 		ToolRunner: &capturingToolRunner{err: fmt.Errorf("tool loop failed")},
@@ -599,7 +599,7 @@ func TestProcessAlert_SSH_AgenticFails_RecordsClaudeAPIErrorCounter(t *testing.T
 	}
 	ProcessAlert(context.Background(), deps, alert)
 
-	got := testutil.ToFloat64(metrics.Prom.ClaudeAPIErrors.WithLabelValues("checkmk"))
+	got := testutil.ToFloat64(metrics.Prom.ClaudeAPIErrors)
 	if got != 1 {
 		t.Errorf("claude_api_errors_total{source=\"checkmk\"} = %v, want 1", got)
 	}
@@ -614,7 +614,7 @@ func TestProcessAlert_SSH_ValidationFails_FallsBackToStaticAnalysis(t *testing.T
 	analyzer := &mockAnalyzer{result: "static analysis result"}
 	pub := &mockPublisher{}
 	cooldown := shared.NewCooldownManager()
-	metrics := new(shared.AlertMetrics)
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductCheckMK))
 
 	deps := PipelineDeps{
 		Analyzer:   analyzer,
@@ -642,11 +642,11 @@ func TestProcessAlert_SSH_ValidationFails_FallsBackToStaticAnalysis(t *testing.T
 	ProcessAlert(context.Background(), deps, alert)
 
 	// The static analysis path must succeed: processed incremented, not failed.
-	if metrics.AlertsProcessed.Load() != 1 {
-		t.Errorf("AlertsProcessed = %d, want 1", metrics.AlertsProcessed.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsProcessed.WithLabelValues("unknown"))) != 1 {
+		t.Errorf("AlertsProcessed = %d, want 1", int64(testutil.ToFloat64(metrics.Prom.AlertsProcessed.WithLabelValues("unknown"))))
 	}
-	if metrics.AlertsFailed.Load() != 0 {
-		t.Errorf("AlertsFailed = %d, want 0", metrics.AlertsFailed.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)) != 0 {
+		t.Errorf("AlertsFailed = %d, want 0", int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)))
 	}
 
 	// Analyzer.Analyze must have been called (not the ToolRunner).

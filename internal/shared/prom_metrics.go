@@ -1,216 +1,200 @@
 package shared
 
 import (
+	"fmt"
+
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 )
 
-// PrometheusMetrics holds the labeled Prometheus metrics exposed at /metrics.
-// It uses a private registry so that Go process default metrics (go_*, process_*)
-// are not included unless explicitly added.
+// PrometheusMetrics holds all Prometheus instruments for a single analyzer
+// binary. Construct via NewPrometheusMetrics(product); the product is applied
+// as a ConstLabel on every metric (and on go_*/process_* via WrapRegistererWith).
 type PrometheusMetrics struct {
 	registry *prometheus.Registry
 
-	// AlertsAnalyzed counts successfully analyzed alerts, labeled by source and severity.
-	AlertsAnalyzed *prometheus.CounterVec
-	// AlertsCooldown counts alerts skipped due to cooldown, labeled by source.
-	AlertsCooldown *prometheus.CounterVec
-	// QueueDepth is a gauge tracking the current number of alerts waiting in the work queue.
-	QueueDepth *prometheus.GaugeVec
-	// ClaudeAPIDuration is a histogram of Claude API call latency in seconds, labeled by source.
-	ClaudeAPIDuration *prometheus.HistogramVec
-	// ClaudeAPIErrors counts Claude API errors, labeled by source.
-	ClaudeAPIErrors *prometheus.CounterVec
-	// NtfyPublishErrors counts ntfy publish failures, labeled by source.
-	NtfyPublishErrors *prometheus.CounterVec
+	// Pipeline
+	WebhooksTotal      *prometheus.CounterVec // labels: outcome
+	AlertsEnqueued     prometheus.Counter
+	AlertsDropped      *prometheus.CounterVec // labels: reason
+	AlertsResolved     prometheus.Counter
+	AlertsProcessed    *prometheus.CounterVec // labels: severity
+	AlertsFailed       prometheus.Counter
+	ProcessingDuration prometheus.Histogram
+	QueueDepth         prometheus.Gauge
 
-	// AgentToolCalls counts every tool call made inside an agentic loop, labeled
-	// by source ("k8s" / "checkmk"), tool name, and outcome
-	// (ok / rejected_validation / rejected_verb / exec_error / nonzero_exit / timeout).
-	AgentToolCalls *prometheus.CounterVec
-	// AgentToolDuration is a histogram of per-tool wall-clock latency in seconds,
-	// labeled by source and tool name.
-	AgentToolDuration *prometheus.HistogramVec
-	// AgentRoundsUsed observes how many tool rounds Claude actually used per
-	// completed loop, labeled by source. Compare _count to AgentRoundsExhausted
-	// to see how often Claude ended naturally vs. hit the cap.
-	AgentRoundsUsed *prometheus.HistogramVec
-	// AgentRoundsExhausted counts loops that returned via the forced-summary path
-	// because maxRounds was reached, labeled by source.
-	AgentRoundsExhausted *prometheus.CounterVec
+	// Claude API
+	ClaudeAPIDuration prometheus.Histogram
+	ClaudeAPIErrors   prometheus.Counter
+	ClaudeTokens      *prometheus.CounterVec // labels: kind, severity, model
 
-	// ClaudeInputTokens tracks Claude API input tokens (excluding cache hits),
-	// labeled by source, severity, model. Combine with cache_read for cost analysis.
-	ClaudeInputTokens *prometheus.CounterVec
-	// ClaudeOutputTokens tracks Claude API output tokens, labeled by source/severity/model.
-	ClaudeOutputTokens *prometheus.CounterVec
-	// ClaudeCacheCreationTokens tracks tokens that produced new cache entries
-	// (~25% premium over regular input). Labeled by source/severity/model.
-	ClaudeCacheCreationTokens *prometheus.CounterVec
-	// ClaudeCacheReadTokens tracks tokens served from cache (~10% of regular input cost).
-	// Labeled by source/severity/model. Cache-hit-rate = read / (read + creation + input).
-	ClaudeCacheReadTokens *prometheus.CounterVec
+	// Agent tool loop
+	AgentToolCalls       *prometheus.CounterVec   // labels: tool, outcome
+	AgentToolDuration    *prometheus.HistogramVec // labels: tool
+	AgentRoundsPerRun    prometheus.Histogram
+	AgentRoundsExhausted prometheus.Counter
 
-	// StormModeActive is a gauge (0/1) per source — 1 when StormDetector
-	// reports the threshold exceeded.
-	StormModeActive *prometheus.GaugeVec
-	// ClaudeCircuitBreakerState is a gauge per source: 0=closed, 1=open, 2=half-open.
-	ClaudeCircuitBreakerState *prometheus.GaugeVec
-	// NotifyAggregatorDrops is a counter labeled by aggregator ("storm" | "breaker")
-	// that increments every time NotifyAggregator.Add drops a title or a tick-flush
-	// publish fails.
-	NotifyAggregatorDrops *prometheus.CounterVec
+	// Storm robustness
+	StormModeActive           prometheus.Gauge
+	ClaudeCircuitBreakerState prometheus.Gauge
+	NotifyAggregatorDrops     *prometheus.CounterVec // labels: aggregator
+
+	// External I/O
+	NtfyPublishErrors prometheus.Counter
 }
 
-// NewPrometheusMetrics creates and registers all labeled Prometheus metrics on a
-// private registry. Call Registry() to obtain the registry for promhttp.HandlerFor.
-func NewPrometheusMetrics() *PrometheusMetrics {
+// NewPrometheusMetrics constructs the registry, applies the product ConstLabel,
+// and registers all metrics including go_*/process_* collectors.
+func NewPrometheusMetrics(product Product) (*PrometheusMetrics, error) {
+	if !product.Valid() {
+		return nil, fmt.Errorf("invalid product %q (must be %q or %q)",
+			product, ProductK8s, ProductCheckMK)
+	}
 	reg := prometheus.NewRegistry()
+	constLabels := prometheus.Labels{"product": string(product)}
 
-	alertsAnalyzed := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "alerts_analyzed_total",
-		Help: "Total number of alerts successfully analyzed, by source and severity.",
-	}, []string{"source", "severity"})
+	pm := &PrometheusMetrics{registry: reg}
 
-	alertsCooldown := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "alerts_cooldown_total",
-		Help: "Total number of alerts skipped because a duplicate is already in cooldown, by source.",
-	}, []string{"source"})
+	pm.WebhooksTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "alert_analyzer_webhooks_total",
+		Help:        "Total /webhook HTTP requests by outcome.",
+		ConstLabels: constLabels,
+	}, []string{"outcome"})
 
-	queueDepth := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "queue_depth",
-		Help: "Current number of alerts waiting in the work queue, by source.",
-	}, []string{"source"})
+	pm.AlertsEnqueued = prometheus.NewCounter(prometheus.CounterOpts{
+		Name:        "alert_analyzer_alerts_enqueued_total",
+		Help:        "Alerts successfully placed on the work queue.",
+		ConstLabels: constLabels,
+	})
 
-	// claudeAPIBuckets covers the expected latency range for Claude API calls.
-	// The Anthropic API typically responds in 5–60 s for analysis requests and
-	// up to 120 s for long agentic tool-loop conversations. prometheus.DefBuckets
-	// top out at 10 s, which would place the vast majority of calls in the +Inf
-	// bucket and make the histogram useless for percentile estimation.
+	pm.AlertsDropped = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "alert_analyzer_alerts_dropped_total",
+		Help:        "Alerts dropped before reaching the work queue, by reason.",
+		ConstLabels: constLabels,
+	}, []string{"reason"})
+
+	pm.AlertsResolved = prometheus.NewCounter(prometheus.CounterOpts{
+		Name:        "alert_analyzer_alerts_resolved_total",
+		Help:        "Alerts skipped because they were resolved (k8s) or recovery (CheckMK).",
+		ConstLabels: constLabels,
+	})
+
+	pm.AlertsProcessed = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "alert_analyzer_alerts_processed_total",
+		Help:        "Alerts successfully analyzed and published, by severity.",
+		ConstLabels: constLabels,
+	}, []string{"severity"})
+
+	pm.AlertsFailed = prometheus.NewCounter(prometheus.CounterOpts{
+		Name:        "alert_analyzer_alerts_failed_total",
+		Help:        "Alerts where analysis or publishing failed.",
+		ConstLabels: constLabels,
+	})
+
+	pm.ProcessingDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:        "alert_analyzer_processing_duration_seconds",
+		Help:        "End-to-end per-alert processing time.",
+		ConstLabels: constLabels,
+		Buckets:     []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 45, 60, 90, 120, 300},
+	})
+
+	pm.QueueDepth = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name:        "alert_analyzer_queue_depth",
+		Help:        "Current alerts waiting in the work queue.",
+		ConstLabels: constLabels,
+	})
+
 	claudeAPIBuckets := []float64{1, 5, 10, 20, 30, 45, 60, 90, 120}
+	pm.ClaudeAPIDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:        "alert_analyzer_claude_api_duration_seconds",
+		Help:        "Latency of Claude API calls in seconds.",
+		ConstLabels: constLabels,
+		Buckets:     claudeAPIBuckets,
+	})
 
-	claudeAPIDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "claude_api_duration_seconds",
-		Help:    "Latency of Claude API calls in seconds, by source.",
-		Buckets: claudeAPIBuckets,
-	}, []string{"source"})
+	pm.ClaudeAPIErrors = prometheus.NewCounter(prometheus.CounterOpts{
+		Name:        "alert_analyzer_claude_api_errors_total",
+		Help:        "Total Claude API errors.",
+		ConstLabels: constLabels,
+	})
 
-	claudeAPIErrors := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "claude_api_errors_total",
-		Help: "Total number of Claude API errors, by source.",
-	}, []string{"source"})
+	pm.ClaudeTokens = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "alert_analyzer_claude_tokens_total",
+		Help:        "Cumulative Claude API tokens, by kind/severity/model. Use sum by(kind) for cost analysis.",
+		ConstLabels: constLabels,
+	}, []string{"kind", "severity", "model"})
 
-	ntfyPublishErrors := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "ntfy_publish_errors_total",
-		Help: "Total number of ntfy publish failures, by source.",
-	}, []string{"source"})
+	pm.AgentToolCalls = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "alert_analyzer_agent_tool_calls_total",
+		Help:        "Tool calls inside the agentic Claude loop, by tool and outcome.",
+		ConstLabels: constLabels,
+	}, []string{"tool", "outcome"})
 
-	agentToolCalls := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "agent_tool_calls_total",
-		Help: "Total number of tool calls made inside an agentic Claude loop, by source, tool, and outcome.",
-	}, []string{"source", "tool", "outcome"})
-
-	// agentToolBuckets cover the realistic per-tool wall-clock range.
-	// kubectl/PromQL calls are typically 50 ms – 5 s; the 10 s ceiling is the
-	// per-call timeout enforced by the handlers.
 	agentToolBuckets := []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
+	pm.AgentToolDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:        "alert_analyzer_agent_tool_duration_seconds",
+		Help:        "Per-tool wall-clock latency in seconds.",
+		ConstLabels: constLabels,
+		Buckets:     agentToolBuckets,
+	}, []string{"tool"})
 
-	agentToolDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "agent_tool_duration_seconds",
-		Help:    "Per-tool wall-clock latency in seconds for agentic-loop tool calls, by source and tool.",
-		Buckets: agentToolBuckets,
-	}, []string{"source", "tool"})
+	pm.AgentRoundsPerRun = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:        "alert_analyzer_agent_rounds_per_run",
+		Help:        "Tool rounds Claude used per completed agentic loop.",
+		ConstLabels: constLabels,
+		Buckets:     []float64{1, 2, 3, 4, 5, 7, 10, 15, 25, 45, 50},
+	})
 
-	agentRoundsUsed := prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "agent_rounds_used",
-		Help:    "Number of tool rounds Claude used per completed agentic loop, by source.",
-		Buckets: []float64{1, 2, 3, 4, 5, 7, 10, 15, 25, 50},
-	}, []string{"source"})
+	pm.AgentRoundsExhausted = prometheus.NewCounter(prometheus.CounterOpts{
+		Name:        "alert_analyzer_agent_rounds_exhausted_total",
+		Help:        "Agentic loops that ended via forced summary (maxRounds reached).",
+		ConstLabels: constLabels,
+	})
 
-	agentRoundsExhausted := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "agent_rounds_exhausted_total",
-		Help: "Number of agentic loops that ended via forced-summary because maxRounds was reached, by source.",
-	}, []string{"source"})
+	pm.StormModeActive = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name:        "alert_analyzer_storm_mode_active",
+		Help:        "1 when the storm-mode threshold is exceeded, 0 otherwise.",
+		ConstLabels: constLabels,
+	})
 
-	tokenLabels := []string{"source", "severity", "model"}
+	pm.ClaudeCircuitBreakerState = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name:        "alert_analyzer_claude_circuit_breaker_state",
+		Help:        "Circuit-breaker state: 0=closed, 1=open, 2=half-open.",
+		ConstLabels: constLabels,
+	})
 
-	claudeInputTokens := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "claude_input_tokens_total",
-		Help: "Cumulative Claude API input tokens (excluding cache hits), by source/severity/model.",
-	}, tokenLabels)
-
-	claudeOutputTokens := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "claude_output_tokens_total",
-		Help: "Cumulative Claude API output tokens, by source/severity/model.",
-	}, tokenLabels)
-
-	claudeCacheCreationTokens := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "claude_cache_creation_tokens_total",
-		Help: "Cumulative tokens that produced new cache entries, by source/severity/model.",
-	}, tokenLabels)
-
-	claudeCacheReadTokens := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "claude_cache_read_tokens_total",
-		Help: "Cumulative tokens served from cache, by source/severity/model.",
-	}, tokenLabels)
-
-	stormModeActive := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "storm_mode_active",
-		Help: "1 when the storm-mode threshold is exceeded for a given source, 0 otherwise.",
-	}, []string{"source"})
-
-	claudeCircuitBreakerState := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "claude_circuit_breaker_state",
-		Help: "Circuit-breaker state: 0=closed, 1=open, 2=half-open.",
-	}, []string{"source"})
-
-	notifyAggregatorDrops := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "notify_aggregator_drops_total",
-		Help: "Total alerts dropped by NotifyAggregator (channel full, post-stop, race, publish-error), by aggregator type.",
+	pm.NotifyAggregatorDrops = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "alert_analyzer_notify_aggregator_drops_total",
+		Help:        "Alerts dropped by NotifyAggregator, by aggregator type.",
+		ConstLabels: constLabels,
 	}, []string{"aggregator"})
 
+	pm.NtfyPublishErrors = prometheus.NewCounter(prometheus.CounterOpts{
+		Name:        "alert_analyzer_ntfy_publish_errors_total",
+		Help:        "Total ntfy publish failures.",
+		ConstLabels: constLabels,
+	})
+
 	reg.MustRegister(
-		alertsAnalyzed,
-		alertsCooldown,
-		queueDepth,
-		claudeAPIDuration,
-		claudeAPIErrors,
-		ntfyPublishErrors,
-		agentToolCalls,
-		agentToolDuration,
-		agentRoundsUsed,
-		agentRoundsExhausted,
-		claudeInputTokens,
-		claudeOutputTokens,
-		claudeCacheCreationTokens,
-		claudeCacheReadTokens,
-		stormModeActive,
-		claudeCircuitBreakerState,
-		notifyAggregatorDrops,
+		pm.WebhooksTotal, pm.AlertsEnqueued, pm.AlertsDropped, pm.AlertsResolved,
+		pm.AlertsProcessed, pm.AlertsFailed, pm.ProcessingDuration, pm.QueueDepth,
+		pm.ClaudeAPIDuration, pm.ClaudeAPIErrors, pm.ClaudeTokens,
+		pm.AgentToolCalls, pm.AgentToolDuration, pm.AgentRoundsPerRun, pm.AgentRoundsExhausted,
+		pm.StormModeActive, pm.ClaudeCircuitBreakerState, pm.NotifyAggregatorDrops,
+		pm.NtfyPublishErrors,
 	)
 
-	return &PrometheusMetrics{
-		registry:                  reg,
-		AlertsAnalyzed:            alertsAnalyzed,
-		AlertsCooldown:            alertsCooldown,
-		QueueDepth:                queueDepth,
-		ClaudeAPIDuration:         claudeAPIDuration,
-		ClaudeAPIErrors:           claudeAPIErrors,
-		NtfyPublishErrors:         ntfyPublishErrors,
-		AgentToolCalls:            agentToolCalls,
-		AgentToolDuration:         agentToolDuration,
-		AgentRoundsUsed:           agentRoundsUsed,
-		AgentRoundsExhausted:      agentRoundsExhausted,
-		ClaudeInputTokens:         claudeInputTokens,
-		ClaudeOutputTokens:        claudeOutputTokens,
-		ClaudeCacheCreationTokens: claudeCacheCreationTokens,
-		ClaudeCacheReadTokens:     claudeCacheReadTokens,
-		StormModeActive:           stormModeActive,
-		ClaudeCircuitBreakerState: claudeCircuitBreakerState,
-		NotifyAggregatorDrops:     notifyAggregatorDrops,
-	}
+	// Runtime/process collectors with the product ConstLabel applied via wrapper.
+	wrapped := prometheus.WrapRegistererWith(constLabels, reg)
+	wrapped.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+
+	return pm, nil
 }
 
-// Registry returns the underlying prometheus.Registry for use with promhttp.HandlerFor.
+// Registry returns the underlying prometheus.Registry for promhttp.HandlerFor.
 func (p *PrometheusMetrics) Registry() *prometheus.Registry {
 	return p.registry
 }

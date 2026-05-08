@@ -11,6 +11,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -33,7 +34,7 @@ type agentToolCall struct {
 }
 
 func (r *capturingToolRunner) RunToolLoop(
-	_ context.Context, _, systemPrompt, _ string,
+	_ context.Context, _ shared.Severity, _, systemPrompt, _ string,
 	_ []anthropic.ToolUnionParam, maxRounds int,
 	handleTool func(string, json.RawMessage) (string, error),
 ) (string, int, bool, error) {
@@ -62,7 +63,7 @@ func TestRunAgenticDiagnostics_DialFailure(t *testing.T) {
 	dialer := &fixedDialer{err: fmt.Errorf("connection refused")}
 	runner := &capturingToolRunner{result: "should not reach"}
 
-	_, err := RunAgenticDiagnostics(context.Background(), Config{}, runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model")
+	_, err := RunAgenticDiagnostics(context.Background(), Config{}, runner, dialer, nil, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 3, "test-model")
 	if err == nil {
 		t.Fatal("expected error when dial fails")
 	}
@@ -86,7 +87,7 @@ func TestRunAgenticDiagnostics_DeniedCommandBlocked(t *testing.T) {
 
 	analysis, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model",
+		runner, dialer, nil, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -123,7 +124,7 @@ func TestRunAgenticDiagnostics_AllowedCommandExecuted(t *testing.T) {
 
 	analysis, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model",
+		runner, dialer, nil, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -164,7 +165,7 @@ func TestRunAgenticDiagnostics_SpaceArgShellQuoted(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model",
+		runner, dialer, nil, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -196,7 +197,7 @@ func TestRunAgenticDiagnostics_UnknownToolReturnsError(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model",
+		runner, dialer, nil, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected top-level error: %v", err)
@@ -227,7 +228,7 @@ func TestRunAgenticDiagnostics_OutputRedacted(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model",
+		runner, dialer, nil, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -270,7 +271,7 @@ func TestRunAgenticDiagnostics_OutputControlCharsStripped(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model",
+		runner, dialer, nil, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -316,7 +317,7 @@ func TestRunAgenticDiagnostics_NonZeroExitControlCharsStripped(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model",
+		runner, dialer, nil, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -359,7 +360,7 @@ func TestRunAgenticDiagnostics_NonZeroExitIncludesOutput(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model",
+		runner, dialer, nil, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -402,7 +403,7 @@ func TestRunAgenticDiagnostics_NonZeroExitNoOutput(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model",
+		runner, dialer, nil, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected top-level error: %v", err)
@@ -444,7 +445,7 @@ func TestRunAgenticDiagnostics_InvalidCommandInputReturnsToolResult(t *testing.T
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", 3, "test-model",
+		runner, dialer, nil, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected top-level error: %v", err)
@@ -1672,7 +1673,7 @@ func TestRunAgenticDiagnostics_SystemPromptContainsMaxRounds(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, "host1", "10.0.0.1", "ctx", customRounds, "test-model",
+		runner, dialer, nil, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", customRounds, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1698,7 +1699,7 @@ func TestRunAgenticDiagnostics_RecordsMetrics(t *testing.T) {
 		sendExitStatus(ch, 0)
 	})
 	dialer := &fixedDialer{client: client}
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)}
 
 	runner := &capturingToolRunner{
 		calls:  []agentToolCall{{name: "execute_command", input: `{"command": ["df", "-h"]}`}},
@@ -1707,7 +1708,7 @@ func TestRunAgenticDiagnostics_RecordsMetrics(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, metrics, "host1", "10.0.0.1", "ctx", 10, "test-model",
+		runner, dialer, metrics, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 10, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1715,12 +1716,12 @@ func TestRunAgenticDiagnostics_RecordsMetrics(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/metrics", nil)
-	metrics.MetricsHandler()(rec, req)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
 	body := rec.Body.String()
-	if !strings.Contains(body, `agent_tool_calls_total{outcome="ok",source="checkmk",tool="execute_command"}`) {
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="ok",product="checkmk",tool="execute_command"}`) {
 		t.Errorf("missing agent_tool_calls_total ok counter for checkmk; body:\n%s", body)
 	}
-	if !strings.Contains(body, `agent_rounds_used_count{source="checkmk"} 1`) {
+	if !strings.Contains(body, `alert_analyzer_agent_rounds_per_run_count{product="checkmk"} 1`) {
 		t.Errorf("missing agent_rounds_used metric for checkmk; body:\n%s", body)
 	}
 }
@@ -3232,7 +3233,7 @@ func TestRunAgenticDiagnostics_NonZeroExitMetricClassification(t *testing.T) {
 		sendExitStatus(ch, 3) // systemctl status exits 3 for stopped/failed units
 	})
 
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)}
 	runner := &capturingToolRunner{
 		calls:  []agentToolCall{{name: "execute_command", input: `{"command": ["systemctl", "status", "nginx"]}`}},
 		result: "analysis",
@@ -3241,7 +3242,7 @@ func TestRunAgenticDiagnostics_NonZeroExitMetricClassification(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, metrics, "host1", "10.0.0.1", "ctx", 3, "test-model",
+		runner, dialer, metrics, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -3249,9 +3250,9 @@ func TestRunAgenticDiagnostics_NonZeroExitMetricClassification(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/metrics", nil)
-	metrics.MetricsHandler()(rec, req)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
 	body := rec.Body.String()
-	if !strings.Contains(body, `agent_tool_calls_total{outcome="nonzero_exit",source="checkmk",tool="execute_command"} 1`) {
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="nonzero_exit",product="checkmk",tool="execute_command"} 1`) {
 		t.Errorf("expected nonzero_exit metric for non-zero exit with output; body:\n%s", body)
 	}
 }
@@ -3274,7 +3275,7 @@ func TestRunAgenticDiagnostics_TimeoutMetricClassification(t *testing.T) {
 		<-unblockCh // block until test cleanup
 	})
 
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)}
 	runner := &capturingToolRunner{
 		calls:  []agentToolCall{{name: "execute_command", input: `{"command": ["df", "-h"]}`}},
 		result: "analysis",
@@ -3289,14 +3290,14 @@ func TestRunAgenticDiagnostics_TimeoutMetricClassification(t *testing.T) {
 
 	_, _ = RunAgenticDiagnostics(
 		ctx, Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, metrics, "host1", "10.0.0.1", "ctx", 3, "test-model",
+		runner, dialer, metrics, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/metrics", nil)
-	metrics.MetricsHandler()(rec, req)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
 	body := rec.Body.String()
-	if !strings.Contains(body, `agent_tool_calls_total{outcome="timeout",source="checkmk",tool="execute_command"} 1`) {
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="timeout",product="checkmk",tool="execute_command"} 1`) {
 		t.Errorf("expected timeout metric for context-cancelled SSH command; body:\n%s", body)
 	}
 }
@@ -3308,7 +3309,7 @@ type driverToolLoopRunner struct {
 }
 
 func (r *driverToolLoopRunner) RunToolLoop(
-	_ context.Context, _, _, _ string,
+	_ context.Context, _ shared.Severity, _, _, _ string,
 	_ []anthropic.ToolUnionParam, _ int,
 	handleTool func(string, json.RawMessage) (string, error),
 ) (string, int, bool, error) {
@@ -3324,7 +3325,7 @@ type nilDialer struct{}
 func (nilDialer) Dial(_ context.Context, _, _ string) (*ssh.Client, error) { return nil, nil }
 
 func TestRunAgenticDiagnostics_PanicRecovery(t *testing.T) {
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)}
 
 	loopReturned := false
 	runner := &driverToolLoopRunner{
@@ -3345,7 +3346,7 @@ func TestRunAgenticDiagnostics_PanicRecovery(t *testing.T) {
 
 	out, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, nilDialer{}, metrics, "host1", "10.0.0.1", "ctx", 10, "test-model",
+		runner, nilDialer{}, metrics, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 10, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("loop should not return error after recovered panic: %v", err)
@@ -3360,9 +3361,9 @@ func TestRunAgenticDiagnostics_PanicRecovery(t *testing.T) {
 	// Metric assertion: panic recorded as exec_error outcome.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/metrics", nil)
-	metrics.MetricsHandler()(rec, req)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
 	body := rec.Body.String()
-	if !strings.Contains(body, `agent_tool_calls_total{outcome="exec_error",source="checkmk",tool="execute_command"} 1`) {
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="exec_error",product="checkmk",tool="execute_command"} 1`) {
 		t.Errorf("missing exec_error metric for panicked call; body:\n%s", body)
 	}
 }
@@ -3373,7 +3374,7 @@ func TestRunAgenticDiagnostics_PanicRecovery(t *testing.T) {
 // denied" (capital C); this test confirms that the outcome switch matches that
 // prefix and increments the correct counter.
 func TestRunAgenticDiagnostics_RejectedVerbMetricClassification(t *testing.T) {
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)}
 
 	runner := &driverToolLoopRunner{
 		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
@@ -3392,7 +3393,7 @@ func TestRunAgenticDiagnostics_RejectedVerbMetricClassification(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, nilDialer{}, metrics, "host1", "10.0.0.1", "ctx", 10, "test-model",
+		runner, nilDialer{}, metrics, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 10, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -3400,9 +3401,9 @@ func TestRunAgenticDiagnostics_RejectedVerbMetricClassification(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/metrics", nil)
-	metrics.MetricsHandler()(rec, req)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
 	body := rec.Body.String()
-	if !strings.Contains(body, `agent_tool_calls_total{outcome="rejected_verb",source="checkmk",tool="execute_command"} 1`) {
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="rejected_verb",product="checkmk",tool="execute_command"} 1`) {
 		t.Errorf("expected rejected_verb metric for denied command; body:\n%s", body)
 	}
 }

@@ -134,10 +134,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
-	hist := metrics.Prom.ClaudeAPIDuration.WithLabelValues("k8s")
-	transport := shared.NewLimitedTransport(http.DefaultTransport, hist)
-	claudeClient := shared.NewClaudeClient(cfg.BaseConfig(), transport).WithPrometheusMetrics(metrics, "k8s")
+	prom, err := shared.NewPrometheusMetrics(shared.ProductK8s)
+	if err != nil {
+		slog.Error("metrics init failed", "error", err)
+		os.Exit(1)
+	}
+	metrics := shared.NewAlertMetrics(prom)
+	slog.Info("metrics initialized",
+		"prefix", "alert_analyzer_*",
+		"product", shared.ProductK8s.String())
+	transport := shared.NewLimitedTransport(http.DefaultTransport, prom.ClaudeAPIDuration)
+	claudeClient := shared.NewClaudeClient(cfg.BaseConfig(), transport).WithPrometheusMetrics(metrics)
 	promClient := k8s.NewPrometheusClient(cfg.PrometheusURL)
 	cooldownMgr := shared.NewCooldownManager()
 	publishers := []shared.Publisher{
@@ -193,7 +200,6 @@ func main() {
 		WorkerCount:  5,
 		QueueSize:    20,
 		DrainTimeout: 25 * time.Second,
-		Source:       "k8s",
 	}, metrics, func(ctx context.Context, alert shared.AlertPayload) {
 		k8s.ProcessAlert(ctx, deps, alert)
 	})

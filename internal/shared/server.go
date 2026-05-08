@@ -11,6 +11,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // ServerConfig holds settings for the shared HTTP server and worker pool.
@@ -25,8 +27,6 @@ type ServerConfig struct {
 	// Defaults to 30 seconds if zero. Tune this down in environments with tight
 	// termination grace periods (e.g. Kubernetes SIGTERM → SIGKILL windows).
 	ShutdownTimeout time.Duration
-	// Source is the analyzer source label used for Prometheus metrics (e.g. "k8s", "checkmk").
-	Source string
 }
 
 // Server manages a webhook-driven worker pool with graceful shutdown.
@@ -49,8 +49,11 @@ func NewServer(cfg ServerConfig, metrics *AlertMetrics, process func(ctx context
 	}
 }
 
-// Enqueue attempts to place an alert on the work queue.
-// Returns false if the queue is full or the server is shutting down.
+// Enqueue attempts to place an alert on the work queue. Returns false if the
+// queue is full or the server is shutting down.
+//
+// Counter ownership: handlers own RecordEnqueued/RecordDropped — Enqueue only
+// updates QueueDepth (the queue state).
 func (s *Server) Enqueue(alert AlertPayload) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -59,35 +62,42 @@ func (s *Server) Enqueue(alert AlertPayload) bool {
 	}
 	select {
 	case s.queue <- alert:
-		s.metrics.AlertsQueued.Add(1)
-		s.metrics.SetQueueDepth(s.cfg.Source, float64(len(s.queue)))
+		s.metrics.SetQueueDepth(float64(len(s.queue)))
 		return true
 	default:
-		s.metrics.AlertsQueueFull.Add(1)
 		return false
 	}
 }
 
 // BuildMux returns an http.ServeMux with /health and POST /webhook.
-// The webhookHandler is wrapped to increment WebhooksReceived.
-// /metrics is served on a separate port via BuildMetricsMux.
+// /metrics is served on a separate port via BuildMetricsMux. The webhook
+// handler is responsible for emitting RecordWebhookOutcome once per request.
 func (s *Server) BuildMux(webhookHandler http.HandlerFunc) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "ok")
 	})
-	mux.HandleFunc("POST /webhook", func(w http.ResponseWriter, r *http.Request) {
-		s.metrics.WebhooksReceived.Add(1)
-		webhookHandler(w, r)
-	})
+	mux.HandleFunc("POST /webhook", webhookHandler)
 	return mux
 }
 
 // BuildMetricsMux returns an http.ServeMux with only the /metrics endpoint.
+// When metrics or its Prom field is nil, returns a 200 with empty body so
+// callers (and tests) get a stable response shape.
 func (s *Server) BuildMetricsMux() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /metrics", s.metrics.MetricsHandler())
+	if s.metrics == nil || s.metrics.Prom == nil {
+		mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+		})
+		return mux
+	}
+	mux.Handle("GET /metrics", promhttp.HandlerFor(
+		s.metrics.Prom.Registry(),
+		promhttp.HandlerOpts{DisableCompression: true},
+	))
 	return mux
 }
 
@@ -119,7 +129,7 @@ func (s *Server) Run(webhookHandler http.HandlerFunc) {
 		go func() {
 			defer wg.Done()
 			for alert := range s.queue {
-				s.metrics.SetQueueDepth(s.cfg.Source, float64(len(s.queue)))
+				s.metrics.SetQueueDepth(float64(len(s.queue)))
 				s.safeProcess(workerCtx, alert)
 			}
 		}()
