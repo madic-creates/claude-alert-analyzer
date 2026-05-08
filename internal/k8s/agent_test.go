@@ -891,6 +891,25 @@ func TestSummarizeKubectlArgv(t *testing.T) {
 			name: "empty argv",
 			argv: []string{},
 		},
+		// Regression: flags that consume the next token as their value (e.g.
+		// "-o json", "--output yaml") must not cause the value to be mistaken
+		// for the resource positional argument. Before the fix, "kubectl get
+		// -o json pods" would log resource="json" instead of resource="pods".
+		{
+			name:     "-o json before resource",
+			argv:     []string{"get", "-o", "json", "pods", "-n", "monitoring"},
+			wantVerb: "get", wantRes: "pods", wantNS: "monitoring",
+		},
+		{
+			name:     "--output yaml before resource",
+			argv:     []string{"get", "--output", "yaml", "deployments"},
+			wantVerb: "get", wantRes: "deployments",
+		},
+		{
+			name:     "--timeout before resource",
+			argv:     []string{"get", "--timeout", "30s", "nodes"},
+			wantVerb: "get", wantRes: "nodes",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

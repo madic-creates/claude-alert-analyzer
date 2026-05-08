@@ -607,7 +607,7 @@ func recordToolCall(metrics *shared.AlertMetrics, tool, outcome string, dur time
 // and namespace (-n / --namespace value) from a kubectl argv. Empty strings on
 // missing parts. Used for low-cardinality structured logging.
 func summarizeKubectlArgv(argv []string) (verb, resource, namespace string) {
-	nonFlags := []string{}
+	var nonFlags []string
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		if a == "-n" || a == "--namespace" {
@@ -626,6 +626,15 @@ func summarizeKubectlArgv(argv []string) (verb, resource, namespace string) {
 			continue
 		}
 		if strings.HasPrefix(a, "-") {
+			// Skip the next token for flags that consume it as their value
+			// (e.g. "-o json", "--timeout 30s") so those values are not
+			// mistakenly treated as positional arguments. This mirrors the
+			// logic in extractVerbs which uses the same flagsConsumingNextToken
+			// map. Without this, "kubectl get -o json pods" would log
+			// resource="json" instead of resource="pods".
+			if flagsConsumingNextToken[a] && i+1 < len(argv) {
+				i++
+			}
 			continue
 		}
 		nonFlags = append(nonFlags, a)
