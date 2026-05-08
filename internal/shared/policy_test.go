@@ -3,6 +3,7 @@ package shared
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAnalysisPolicy_ModelFor(t *testing.T) {
@@ -144,5 +145,34 @@ func TestLoadPolicy_RejectsInvalidGlobalRounds(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "MAX_AGENT_ROUNDS") {
 		t.Errorf("error missing var name: %v", err)
+	}
+}
+
+func TestAnalysisPolicy_IsDegradedNilStorm(t *testing.T) {
+	p := &AnalysisPolicy{}
+	if p.IsDegraded() {
+		t.Fatal("nil Storm: IsDegraded should be false")
+	}
+}
+
+func TestAnalysisPolicy_IsDegradedBelowThreshold(t *testing.T) {
+	storm := NewStormDetector(50, time.Now)
+	p := &AnalysisPolicy{Storm: storm}
+	for i := 0; i < 25; i++ {
+		storm.Record()
+	}
+	if p.IsDegraded() {
+		t.Fatalf("count=25 < threshold=50: IsDegraded should be false")
+	}
+}
+
+func TestAnalysisPolicy_IsDegradedAboveThreshold(t *testing.T) {
+	storm := NewStormDetector(10, time.Now)
+	p := &AnalysisPolicy{Storm: storm}
+	for i := 0; i < 11; i++ {
+		storm.Record()
+	}
+	if !p.IsDegraded() {
+		t.Fatal("count=11 > threshold=10: IsDegraded should be true")
 	}
 }
