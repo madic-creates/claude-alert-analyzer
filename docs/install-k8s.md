@@ -65,5 +65,5 @@ receivers:
 
 - [`configuration.md`](configuration.md) — full env-var reference (shared + k8s-specific)
 - [`observability.md`](observability.md) — metrics, scrape config, logging
-- [`security.md`](security.md) — hardening, RBAC, agentic-loop guardrails
+- [`hardening.md`](hardening.md) — runtime hardening, RBAC, agentic-loop guardrails
 - [`cost-and-storm-protection.md`](cost-and-storm-protection.md) — prompt caching, severity routing, storm-mode, circuit-breaker

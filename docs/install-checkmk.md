@@ -128,5 +128,5 @@ When set, the attribute appears as a "Host Context (operator-provided)" section 
 
 - [`configuration.md`](configuration.md) — full env-var reference (shared + checkmk-specific)
 - [`observability.md`](observability.md) — metrics, scrape config, logging
-- [`security.md`](security.md) — SSH hardening, command denylist, host validation
+- [`hardening.md`](hardening.md) — SSH hardening, command denylist, host validation
 - [`cost-and-storm-protection.md`](cost-and-storm-protection.md) — prompt caching, severity routing, storm-mode, circuit-breaker

@@ -1,4 +1,6 @@
-# Security
+# Hardening
+
+Runtime hardening, sandboxing, and agentic-loop guardrails. For vulnerability reporting, open a private security advisory on GitHub.
 
 ## Both analyzers
 

@@ -90,7 +90,7 @@ Both are also tagged with the short commit SHA (e.g. `:a1b2c3d`) for pinning.
 
 - [`docs/configuration.md`](docs/configuration.md) — full env-var reference (shared, k8s, checkmk, LLM provider, storm robustness)
 - [`docs/observability.md`](docs/observability.md) — API endpoints, Prometheus metrics, scrape config, logging
-- [`docs/security.md`](docs/security.md) — hardening summary, agentic-loop guardrails, RBAC and SSH details
+- [`docs/hardening.md`](docs/hardening.md) — runtime hardening, agentic-loop guardrails, RBAC and SSH details
 - [`docs/cost-and-storm-protection.md`](docs/cost-and-storm-protection.md) — operator guide for prompt caching, severity-based routing, token-cost dashboards, storm-mode and circuit-breaker rollout
 
 **Development & maintenance**
