@@ -10,6 +10,7 @@ on:
       - "Dockerfile"
       - "go.mod"
       - "go.sum"
+      - "Makefile"
       - ".github/workflows/build.yaml"
       - ".semrelrc"
   workflow_dispatch:
@@ -41,8 +42,30 @@ jobs:
           go-version-file: go.mod
       - uses: golangci/golangci-lint-action@v9
 
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Compile both binaries
+        run: |
+          set -euo pipefail
+          make binaries
+          ls -la k8s-analyzer checkmk-analyzer
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: |
+            k8s-analyzer
+            checkmk-analyzer
+          retention-days: 1
+          if-no-files-found: error
+
   release:
-    needs: [test, lint]
+    needs: [test, lint, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -56,6 +79,15 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+
+      - name: Download prebuilt binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: .
+
+      - name: Make binaries executable
+        run: chmod +x k8s-analyzer checkmk-analyzer
 
       - name: Install pinned semantic-release binary
         run: |
@@ -108,8 +140,8 @@ jobs:
           push: true
           tags: ${{ steps.meta-k8s.outputs.tags }}
           labels: ${{ steps.meta-k8s.outputs.labels }}
-          cache-from: type=gha,scope=k8s-analyzer
-          cache-to: type=gha,scope=k8s-analyzer,mode=max
+          cache-from: type=gha,scope=alert-analyzer
+          cache-to: type=gha,scope=alert-analyzer,mode=max
 
       - name: Compute image tags (checkmk)
         if: steps.semrel-dry.outputs.version != ''
@@ -132,8 +164,8 @@ jobs:
           push: true
           tags: ${{ steps.meta-checkmk.outputs.tags }}
           labels: ${{ steps.meta-checkmk.outputs.labels }}
-          cache-from: type=gha,scope=checkmk-analyzer
-          cache-to: type=gha,scope=checkmk-analyzer,mode=max
+          cache-from: type=gha,scope=alert-analyzer
+          cache-to: type=gha,scope=alert-analyzer,mode=max
 
       - name: Publish Git tag + GitHub Release
         if: steps.semrel-dry.outputs.version != ''
@@ -144,13 +176,7 @@ jobs:
           allow-initial-development-versions: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Go
-        if: steps.semrel-dry.outputs.version != ''
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-
-      - name: Compile binaries and checksums
+      - name: Rename binaries + checksums for release
         if: steps.semrel-dry.outputs.version != ''
         env:
           VERSION: ${{ steps.semrel-dry.outputs.version }}
@@ -158,10 +184,7 @@ jobs:
           set -euo pipefail
           for COMPONENT in k8s-analyzer checkmk-analyzer; do
             OUT="${COMPONENT}-v${VERSION}-linux-amd64"
-            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-              -trimpath -ldflags="-s -w" \
-              -o "$OUT" \
-              "./cmd/${COMPONENT}/"
+            mv "$COMPONENT" "$OUT"
             sha256sum "$OUT" > "${OUT}.sha256"
           done
           ls -la k8s-analyzer-* checkmk-analyzer-*

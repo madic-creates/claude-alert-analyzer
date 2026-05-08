@@ -14,9 +14,8 @@ Two independent alert analyzer services that receive monitoring webhooks, gather
 Go 1.26+, no CGO dependencies.
 
 ```bash
-# Build both binaries
-CGO_ENABLED=0 go build -o k8s-analyzer ./cmd/k8s-analyzer/
-CGO_ENABLED=0 go build -o checkmk-analyzer ./cmd/checkmk-analyzer/
+# Build both binaries (or use the underlying go build commands directly)
+make binaries
 
 # Run all tests
 go test ./...
@@ -25,10 +24,16 @@ go test ./...
 go test ./internal/shared/
 go test ./internal/checkmk/
 
-# Docker multi-stage build (two targets)
-docker build --target k8s-analyzer -t k8s-analyzer .
-docker build --target checkmk-analyzer -t checkmk-analyzer .
+# Docker images: the Dockerfile expects prebuilt binaries in the build
+# context, so binaries must exist on disk first. `make images` does both
+# steps in order.
+make images
 ```
+
+**Note:** The Dockerfile no longer compiles Go. Always run `make binaries`
+(or the equivalent `go build` commands) before `docker build`. CI does this
+automatically in the `build` job and feeds the binaries to image builds via
+workflow artifacts.
 
 ## Architecture
 
