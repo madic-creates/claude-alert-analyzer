@@ -143,3 +143,38 @@ jobs:
           bin: /tmp/semantic-release
           allow-initial-development-versions: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Go
+        if: steps.semrel-dry.outputs.version != ''
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Compile binaries and checksums
+        if: steps.semrel-dry.outputs.version != ''
+        env:
+          VERSION: ${{ steps.semrel-dry.outputs.version }}
+        run: |
+          set -euo pipefail
+          for COMPONENT in k8s-analyzer checkmk-analyzer; do
+            OUT="${COMPONENT}-v${VERSION}-linux-amd64"
+            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+              -trimpath -ldflags="-s -w" \
+              -o "$OUT" \
+              "./cmd/${COMPONENT}/"
+            sha256sum "$OUT" > "${OUT}.sha256"
+          done
+          ls -la k8s-analyzer-* checkmk-analyzer-*
+
+      - name: Upload binaries to GitHub Release
+        if: steps.semrel-dry.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.semrel-dry.outputs.version }}
+        run: |
+          gh release upload "v${VERSION}" \
+            "k8s-analyzer-v${VERSION}-linux-amd64" \
+            "k8s-analyzer-v${VERSION}-linux-amd64.sha256" \
+            "checkmk-analyzer-v${VERSION}-linux-amd64" \
+            "checkmk-analyzer-v${VERSION}-linux-amd64.sha256" \
+            --clobber
