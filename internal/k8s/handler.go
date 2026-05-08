@@ -28,10 +28,15 @@ const maxAlertsPerBatch = 100
 // some extra room but cap at 256 bytes to prevent unbounded map key growth.
 const maxFingerprintLen = 256
 
-// HandleWebhook returns an HTTP handler that receives Alertmanager webhook payloads,
-// validates auth, applies cooldown, and enqueues alerts for processing.
-// metrics may be nil, in which case no counters are incremented by the handler.
-func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(shared.AlertPayload) bool, metrics *shared.AlertMetrics) http.HandlerFunc {
+// HandleWebhook returns an HTTP handler that receives Alertmanager webhook
+// payloads. metrics may be nil. storm may be nil (storm-mode disabled).
+func HandleWebhook(
+	cfg Config,
+	cooldown *shared.CooldownManager,
+	enqueue func(shared.AlertPayload) bool,
+	metrics *shared.AlertMetrics,
+	storm *shared.StormDetector,
+) http.HandlerFunc {
 	cooldownTTL := time.Duration(cfg.CooldownSeconds) * time.Second
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -83,14 +88,20 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 				continue
 			}
 
-			if !cooldown.CheckAndSet(alert.Fingerprint, cooldownTTL) {
-				slog.Info("in cooldown", "alertname", alert.Labels["alertname"])
+			groupKey := groupKeyFromLabels(alert.Labels)
+
+			// Atomic combined check: either both cooldowns set, or neither.
+			if !cooldown.CheckAndSetWithGroup(alert.Fingerprint, cooldownTTL, groupKey, cfg.GroupCooldownTTL) {
+				slog.Info("in cooldown", "alertname", alert.Labels["alertname"], "groupKey", groupKey)
 				if metrics != nil {
 					metrics.AlertsCooldown.Add(1)
 					metrics.RecordCooldown("k8s")
 				}
 				continue
 			}
+
+			// Storm-mode counter: only counts alerts that pass the cooldown check.
+			storm.Record() // nil-safe
 
 			ap := shared.AlertPayload{
 				Fingerprint:   alert.Fingerprint,
@@ -99,6 +110,7 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 				SeverityLevel: shared.SeverityFromAlertmanager(alert.Labels),
 				Source:        "k8s",
 				Fields:        make(map[string]string),
+				GroupKey:      groupKey,
 			}
 			// Copy all labels and annotations into Fields
 			for k, v := range alert.Labels {
@@ -115,6 +127,7 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 			} else {
 				slog.Warn("work queue full, rejecting", "alertname", alert.Labels["alertname"])
 				cooldown.Clear(alert.Fingerprint)
+				cooldown.ClearGroup(groupKey)
 				dropped++
 			}
 		}
@@ -128,4 +141,16 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, "queued %d alerts", queued)
 	}
+}
+
+// groupKeyFromLabels derives the group cooldown key from Alertmanager labels.
+// Empty namespace is replaced with the sentinel "_cluster_" so cluster-wide
+// alerts (e.g. KubeAPIDown) don't collide with each other or with alerts
+// that happen to have an empty Namespace label.
+func groupKeyFromLabels(labels map[string]string) string {
+	ns := labels["namespace"]
+	if ns == "" {
+		ns = "_cluster_"
+	}
+	return labels["alertname"] + ":" + ns
 }
