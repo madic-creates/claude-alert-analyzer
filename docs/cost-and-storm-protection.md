@@ -127,27 +127,28 @@ Watch the analysis quality on a sample of warnings before fully committing.
 
 ## Metrics & dashboards
 
-Four token counters, all on `:METRICS_PORT/metrics`. Labels:
-`{source, severity, model}`. (Severity is recorded as `"all"` because
-per-call severity isn't threaded into the API client yet — to be refined.)
+A single token counter on `:METRICS_PORT/metrics` covers all four cost
+categories via the `kind` label:
 
-| Metric | Meaning |
-|---|---|
-| `claude_input_tokens_total` | Regular input tokens (excluding cache hits) |
-| `claude_output_tokens_total` | Output tokens generated |
-| `claude_cache_creation_tokens_total` | Tokens that produced new cache entries (~25% surcharge) |
-| `claude_cache_read_tokens_total` | Tokens served from cache (~10% of regular input cost) |
+| Metric | Type | Labels |
+|---|---|---|
+| `alert_analyzer_claude_tokens_total` | counter | `kind`, `severity`, `model`, plus the constant `product` |
+
+`kind` is one of `input`, `output`, `cache_creation`, `cache_read`. The
+`product` ConstLabel (`k8s` or `checkmk`) is applied at registry construction.
+`severity` carries the actual per-call value (`unknown`, `info`, `warning`,
+`critical`); it is no longer hardcoded to `"all"`.
+
+> **PromQL caveat.** `sum(rate(alert_analyzer_claude_tokens_total[5m]))` —
+> *without* `by (kind)` — adds different cost categories and is meaningless.
+> Every query below filters or groups by `kind`.
 
 ### Cache hit rate (the most important derived signal)
 
 ```promql
-sum(rate(claude_cache_read_tokens_total[5m]))
+sum(rate(alert_analyzer_claude_tokens_total{kind="cache_read"}[5m]))
 /
-sum(
-  rate(claude_cache_read_tokens_total[5m])
-  + rate(claude_cache_creation_tokens_total[5m])
-  + rate(claude_input_tokens_total[5m])
-)
+sum(rate(alert_analyzer_claude_tokens_total{kind=~"input|cache_creation|cache_read"}[5m]))
 ```
 
 **Healthy ranges:**
@@ -166,10 +167,10 @@ from your Anthropic pricing page.
 
 ```promql
 # Approximate cost per second
-  sum(rate(claude_input_tokens_total[5m]))         * <input_price>
-+ sum(rate(claude_output_tokens_total[5m]))        * <output_price>
-+ sum(rate(claude_cache_creation_tokens_total[5m])) * <input_price * 1.25>
-+ sum(rate(claude_cache_read_tokens_total[5m]))    * <input_price * 0.10>
+  sum(rate(alert_analyzer_claude_tokens_total{kind="input"}[5m]))           * <input_price>
++ sum(rate(alert_analyzer_claude_tokens_total{kind="output"}[5m]))          * <output_price>
++ sum(rate(alert_analyzer_claude_tokens_total{kind="cache_creation"}[5m]))  * <input_price * 1.25>
++ sum(rate(alert_analyzer_claude_tokens_total{kind="cache_read"}[5m]))      * <input_price * 0.10>
 ```
 
 ### What to alert on
@@ -178,9 +179,9 @@ Defensive alerts that catch cost surprises before they become bills.
 
 ```promql
 # Sudden token spike (>3× the rolling 1h baseline)
-sum(rate(claude_input_tokens_total[5m]))
+sum(rate(alert_analyzer_claude_tokens_total{kind="input"}[5m]))
 >
-3 * sum(rate(claude_input_tokens_total[1h] offset 1h))
+3 * sum(rate(alert_analyzer_claude_tokens_total{kind="input"}[1h] offset 1h))
 ```
 
 ```promql
@@ -192,8 +193,10 @@ sum(rate(claude_input_tokens_total[5m]))
 ```promql
 # Output tokens climbing without input — probably an analysis loop
 # that's burning rounds. Enable the circuit-breaker to gate this.
-rate(claude_output_tokens_total[5m]) /
-  rate(claude_input_tokens_total[5m]) > 0.15
+sum(rate(alert_analyzer_claude_tokens_total{kind="output"}[5m]))
+/
+sum(rate(alert_analyzer_claude_tokens_total{kind="input"}[5m]))
+> 0.15
 ```
 
 ## Rollout playbook
@@ -223,7 +226,7 @@ Anthropic-API outages cause issues:
    `alerts_cooldown_total{source}` rise during deployment thrashes.
 7. **Enable circuit-breaker** with `CIRCUIT_BREAKER_THRESHOLD=5`. The
    breaker only fires under sustained Claude-API failure; in normal
-   operation `claude_circuit_breaker_state` stays at 0.
+   operation `alert_analyzer_claude_circuit_breaker_state` stays at 0.
 8. **Enable storm-mode last** with `STORM_MODE_THRESHOLD=50`. This is the
    loudest behavior change — all severities drop to `rounds=0` while the
    threshold is exceeded. Tune the threshold based on your normal alert
@@ -318,7 +321,8 @@ Set `STORM_MODE_THRESHOLD=50` (alerts/5min, suggested). When the sliding
 - Aggregated ntfy via the shared `NotifyAggregator`: one summary per
   `STORM_MODE_NOTIFY_INTERVAL` (default 60s) instead of N per-alert messages.
 
-Gauge: `storm_mode_active{source}` (0/1) — page operators on `1` for >5min.
+Gauge: `alert_analyzer_storm_mode_active` (0/1, plus the constant `product`
+label) — page operators on `1` for >5min.
 
 ### Circuit-Breaker
 
@@ -336,7 +340,8 @@ A probe-watchdog (`CIRCUIT_BREAKER_MAX_PROBE_SECONDS`, default 60s)
 prevents stuck-state if the probe goroutine hangs without calling
 `permit.Done()`.
 
-Gauge: `claude_circuit_breaker_state{source}` (0=closed, 1=open, 2=half-open).
+Gauge: `alert_analyzer_claude_circuit_breaker_state` (0=closed, 1=open,
+2=half-open; carries the constant `product` label).
 
 ### Storm-Verstärker-Bug Mitigation
 
@@ -348,7 +353,7 @@ on subsequent webhooks instead of hammering the degraded API.
 
 ### Notify-Aggregator Drop Metric
 
-`notify_aggregator_drops_total{aggregator}` (counter, labels: `storm`,
+`alert_analyzer_notify_aggregator_drops_total{aggregator}` (counter, labels: `storm`,
 `breaker`) reports alerts that were dropped because:
 
 - the aggregator's in-channel was full (back-pressure),
@@ -364,19 +369,17 @@ difference is in this metric.
 
 ```
 # Cache-hit rate
-sum(rate(claude_cache_read_tokens_total[5m]))
-  / sum(rate(claude_cache_read_tokens_total[5m])
-       + rate(claude_cache_creation_tokens_total[5m])
-       + rate(claude_input_tokens_total[5m]))
+sum(rate(alert_analyzer_claude_tokens_total{kind="cache_read"}[5m]))
+  / sum(rate(alert_analyzer_claude_tokens_total{kind=~"input|cache_creation|cache_read"}[5m]))
 
-# Storm-mode dwell-time (alerts on storm_mode_active=1 for >5min)
-storm_mode_active{source="k8s"} == 1
+# Storm-mode dwell-time (alerts on storm-mode active=1 for >5min)
+alert_analyzer_storm_mode_active{product="k8s"} == 1
 
 # Breaker-open dwell-time (alerts on state=1 for >2min)
-claude_circuit_breaker_state{source="checkmk"} == 1
+alert_analyzer_claude_circuit_breaker_state{product="checkmk"} == 1
 
 # Aggregator-drop rate
-sum by (aggregator) (rate(notify_aggregator_drops_total[5m]))
+sum by (aggregator) (rate(alert_analyzer_notify_aggregator_drops_total[5m]))
 ```
 
 ### Multi-replica caveat
