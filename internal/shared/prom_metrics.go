@@ -49,6 +49,16 @@ type PrometheusMetrics struct {
 	// ClaudeCacheReadTokens tracks tokens served from cache (~10% of regular input cost).
 	// Labeled by source/severity/model. Cache-hit-rate = read / (read + creation + input).
 	ClaudeCacheReadTokens *prometheus.CounterVec
+
+	// StormModeActive is a gauge (0/1) per source — 1 when StormDetector
+	// reports the threshold exceeded.
+	StormModeActive *prometheus.GaugeVec
+	// ClaudeCircuitBreakerState is a gauge per source: 0=closed, 1=open, 2=half-open.
+	ClaudeCircuitBreakerState *prometheus.GaugeVec
+	// NotifyAggregatorDrops is a counter labeled by aggregator ("storm" | "breaker")
+	// that increments every time NotifyAggregator.Add drops a title or a tick-flush
+	// publish fails.
+	NotifyAggregatorDrops *prometheus.CounterVec
 }
 
 // NewPrometheusMetrics creates and registers all labeled Prometheus metrics on a
@@ -143,6 +153,21 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 		Help: "Cumulative tokens served from cache, by source/severity/model.",
 	}, tokenLabels)
 
+	stormModeActive := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "storm_mode_active",
+		Help: "1 when the storm-mode threshold is exceeded for a given source, 0 otherwise.",
+	}, []string{"source"})
+
+	claudeCircuitBreakerState := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "claude_circuit_breaker_state",
+		Help: "Circuit-breaker state: 0=closed, 1=open, 2=half-open.",
+	}, []string{"source"})
+
+	notifyAggregatorDrops := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "notify_aggregator_drops_total",
+		Help: "Total alerts dropped by NotifyAggregator (channel full, post-stop, race, publish-error), by aggregator type.",
+	}, []string{"aggregator"})
+
 	reg.MustRegister(
 		alertsAnalyzed,
 		alertsCooldown,
@@ -158,6 +183,9 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 		claudeOutputTokens,
 		claudeCacheCreationTokens,
 		claudeCacheReadTokens,
+		stormModeActive,
+		claudeCircuitBreakerState,
+		notifyAggregatorDrops,
 	)
 
 	return &PrometheusMetrics{
@@ -176,6 +204,9 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 		ClaudeOutputTokens:        claudeOutputTokens,
 		ClaudeCacheCreationTokens: claudeCacheCreationTokens,
 		ClaudeCacheReadTokens:     claudeCacheReadTokens,
+		StormModeActive:           stormModeActive,
+		ClaudeCircuitBreakerState: claudeCircuitBreakerState,
+		NotifyAggregatorDrops:     notifyAggregatorDrops,
 	}
 }
 
