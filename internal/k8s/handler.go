@@ -97,7 +97,7 @@ func HandleWebhook(
 			groupKey := groupKeyFromLabels(alert.Labels)
 
 			// Atomic combined check: either both cooldowns set, or neither.
-			if !cooldown.CheckAndSetWithGroup(alert.Fingerprint, cooldownTTL, groupKey, cfg.GroupCooldownTTL) {
+			if !cooldown.CheckAndSetWithGroup(alert.Fingerprint, cooldownTTL, groupKey, cfg.GroupCooldownTTL).Accepted() {
 				slog.Info("in cooldown", "alertname", alert.Labels["alertname"], "groupKey", groupKey)
 				if metrics != nil {
 					metrics.AlertsCooldown.Add(1)

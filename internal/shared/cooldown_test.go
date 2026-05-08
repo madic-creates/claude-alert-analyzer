@@ -108,7 +108,7 @@ func TestCooldownManager_ClearGroup(t *testing.T) {
 
 func TestCooldownManager_CheckAndSetWithGroup_BothEmpty(t *testing.T) {
 	cm := NewCooldownManager()
-	if !cm.CheckAndSetWithGroup("fp1", time.Second, "g1", time.Second) {
+	if !cm.CheckAndSetWithGroup("fp1", time.Second, "g1", time.Second).Accepted() {
 		t.Fatal("first combined call should set both")
 	}
 	if cm.CheckAndSet("fp1", time.Second) {
@@ -123,7 +123,7 @@ func TestCooldownManager_CheckAndSetWithGroup_GroupBlocksRollbackFP(t *testing.T
 	cm := NewCooldownManager()
 	cm.CheckAndSetGroup("g1", time.Hour)
 
-	if cm.CheckAndSetWithGroup("fp1", time.Second, "g1", time.Hour) {
+	if cm.CheckAndSetWithGroup("fp1", time.Second, "g1", time.Hour).Accepted() {
 		t.Fatal("combined call should fail when group blocks")
 	}
 	if !cm.CheckAndSet("fp1", time.Second) {
@@ -135,7 +135,7 @@ func TestCooldownManager_CheckAndSetWithGroup_FPBlocksRollbackGroup(t *testing.T
 	cm := NewCooldownManager()
 	cm.CheckAndSet("fp1", time.Hour)
 
-	if cm.CheckAndSetWithGroup("fp1", time.Second, "g1", time.Hour) {
+	if cm.CheckAndSetWithGroup("fp1", time.Second, "g1", time.Hour).Accepted() {
 		t.Fatal("combined call should fail when fingerprint blocks")
 	}
 	if !cm.CheckAndSetGroup("g1", time.Second) {
@@ -145,7 +145,7 @@ func TestCooldownManager_CheckAndSetWithGroup_FPBlocksRollbackGroup(t *testing.T
 
 func TestCooldownManager_CheckAndSetWithGroup_EmptyGroupSkipsGroup(t *testing.T) {
 	cm := NewCooldownManager()
-	if !cm.CheckAndSetWithGroup("fp1", time.Second, "", time.Second) {
+	if !cm.CheckAndSetWithGroup("fp1", time.Second, "", time.Second).Accepted() {
 		t.Fatal("empty group should not block fingerprint set")
 	}
 	if cm.CheckAndSet("fp1", time.Second) {
@@ -166,7 +166,7 @@ func TestCooldownManager_CheckAndSetWithGroup_ConcurrentAtomic(t *testing.T) {
 	for i := 0; i < N; i++ {
 		go func(i int) {
 			defer wg.Done()
-			if cm.CheckAndSetWithGroup(fmt.Sprintf("fp-%d", i), time.Second, "shared-group", time.Second) {
+			if cm.CheckAndSetWithGroup(fmt.Sprintf("fp-%d", i), time.Second, "shared-group", time.Second).Accepted() {
 				atomic.AddInt64(&ok, 1)
 			} else {
 				atomic.AddInt64(&fail, 1)
@@ -180,4 +180,54 @@ func TestCooldownManager_CheckAndSetWithGroup_ConcurrentAtomic(t *testing.T) {
 	if fail != N-1 {
 		t.Fatalf("expected %d losers, got %d", N-1, fail)
 	}
+}
+
+func TestCheckAndSetWithGroup_Outcomes(t *testing.T) {
+	cm := NewCooldownManager()
+	ttl := 5 * time.Second
+
+	t.Run("cold path returns Accepted", func(t *testing.T) {
+		if got := cm.CheckAndSetWithGroup("fp1", ttl, "g1", ttl); got != CooldownAccepted {
+			t.Errorf("got %v, want CooldownAccepted", got)
+		}
+	})
+
+	t.Run("fingerprint already set returns Fingerprint", func(t *testing.T) {
+		_ = cm.CheckAndSetWithGroup("fp2", ttl, "g2", ttl)
+		if got := cm.CheckAndSetWithGroup("fp2", ttl, "g2-other", ttl); got != CooldownFingerprint {
+			t.Errorf("got %v, want CooldownFingerprint", got)
+		}
+	})
+
+	t.Run("group already set returns Group with fp rollback", func(t *testing.T) {
+		_ = cm.CheckAndSetWithGroup("fp3", ttl, "g3", ttl)
+		// fp3-other has not been set, but group g3 is. Outcome must be Group.
+		if got := cm.CheckAndSetWithGroup("fp3-other", ttl, "g3", ttl); got != CooldownGroup {
+			t.Errorf("got %v, want CooldownGroup", got)
+		}
+		// Verify the fingerprint entry was NOT set (rollback) by re-checking it
+		// against a fresh group key.
+		if got := cm.CheckAndSetWithGroup("fp3-other", ttl, "g3-fresh", ttl); got != CooldownAccepted {
+			t.Errorf("fp3-other should be available after group-rejected, got %v", got)
+		}
+	})
+
+	t.Run("groupKey empty never returns Group", func(t *testing.T) {
+		_ = cm.CheckAndSetWithGroup("fp4", ttl, "", 0)
+		if got := cm.CheckAndSetWithGroup("fp4", ttl, "", 0); got != CooldownFingerprint {
+			t.Errorf("got %v, want CooldownFingerprint", got)
+		}
+	})
+
+	t.Run("Accepted helper", func(t *testing.T) {
+		if !CooldownAccepted.Accepted() {
+			t.Error("CooldownAccepted.Accepted() must be true")
+		}
+		if CooldownFingerprint.Accepted() {
+			t.Error("CooldownFingerprint.Accepted() must be false")
+		}
+		if CooldownGroup.Accepted() {
+			t.Error("CooldownGroup.Accepted() must be false")
+		}
+	})
 }

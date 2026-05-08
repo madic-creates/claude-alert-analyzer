@@ -83,7 +83,7 @@ func HandleWebhook(
 		fp := fingerprint(notif.Hostname, notif.ServiceDescription, notif.NotificationType, notif.ServiceState)
 		groupKey := groupKeyFromNotif(notif)
 
-		if !cooldown.CheckAndSetWithGroup(fp, cooldownTTL, groupKey, cfg.GroupCooldownTTL) {
+		if !cooldown.CheckAndSetWithGroup(fp, cooldownTTL, groupKey, cfg.GroupCooldownTTL).Accepted() {
 			slog.Info("in cooldown", "hostname", notif.Hostname, "service", notif.ServiceDescription, "groupKey", groupKey)
 			if metrics != nil {
 				metrics.AlertsCooldown.Add(1)
