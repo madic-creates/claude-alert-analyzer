@@ -4,6 +4,7 @@
 **Status**: Approved (pending implementation plan)
 **Updated**: 2026-05-08 — Phase 2 implementation clarifications: failure-phase tracking via `phase` enum + tracker variable in `ProcessAlert` (not separate phase-typed errors); shared `NotifyAggregator` utility (one type, two instances for Storm + Breaker); circuit-breaker wired exclusively in `PipelineDeps` (not in `ClaudeClient`).
 **Updated**: 2026-05-08 (post Codex-Review) — Robustness patches: explicit `threshold=0 == disabled` semantics for Storm and Breaker (return `nil` from constructor); circuit-breaker API replaced with Permit-Token pattern (`Acquire`/`Done`) so half-open-probe state is call-local and panic-safe via `defer`; probe-watchdog with max-probe-duration to prevent stuck-state; group-cooldown lifecycle reordered (Group-check before Fingerprint-check + atomic `CheckAndSetWithGroup` with rollback) to prevent orphaned fingerprint entries; group-key fallbacks for empty namespace/service (sentinel suffix); pipeline tracks `analysisErr` separately from named return so post-API err overrides cannot kip the phase decision; NotifyAggregator owner-goroutine pattern with closing-flag and synchronous final flush.
+**Updated**: 2026-05-08 (post Codex-Review Round 2) — Three follow-up bugs fixed: NotifyAggregator `Stop()` rewritten as request/reply protocol with `sync.Once`, ack-channel and bounded publish-context (closes Add-after-`closed`-check race, fixes Owner-goroutine-leak on hanging publisher); old `err`-based defer-snippet in 2.3 replaced with explicit reference to phase+analysisErr logic in 2.1 (eliminates contradictory cleanup spec); `CheckAndSetWithGroup` lock-holding-discipline made explicit (both locks held over the entire decision); Aggregator-drop metric `notify_aggregator_drops_total{aggregator}` added so dropped alerts are observable.
 **Scope**: Both analyzers (k8s-analyzer, checkmk-analyzer)
 
 ## Problem
@@ -234,9 +235,16 @@ func (cm *CooldownManager) ClearGroup(groupKey string)  // für Failure-Cleanup
 //
 // Reihenfolge: Group zuerst checken (wenn enabled), dann Fingerprint.
 // Wenn Fingerprint blockt nachdem Group gesetzt wurde → Group rollbacken.
-// Beide Maps werden unter ihren jeweiligen Mutexen aktualisiert,
-// in fester Reihenfolge groupMu → fpMu (kein Deadlock, weil keine
-// andere Methode die Reihenfolge umkehrt).
+//
+// **Lock-Discipline (klargestellt post Codex-Review Round 2)**: BEIDE Mutexe
+// werden über die GESAMTE Entscheidung gehalten — nicht hintereinander
+// einzeln genommen und freigegeben. Reihenfolge: groupMu.Lock() zuerst,
+// dann fpMu.Lock(); Unlock in umgekehrter Reihenfolge via defer. Keine
+// andere Methode im Cooldown-Manager hält die Locks in umgekehrter
+// Reihenfolge (Lock-Hierarchy ist groupMu < fpMu), daher kein Deadlock.
+// Ohne dieses Pattern wäre die behauptete Atomik nur scheinbar — ein
+// paralleler Caller könnte zwischen den Locks reinschlüpfen und Group
+// für denselben Key setzen während wir gerade Rollback machen.
 //
 // Returns true und setzt beide, wenn weder Group noch Fingerprint im Cooldown sind.
 // Returns false und setzt KEINE der beiden, wenn eine der beiden blockt.
@@ -461,20 +469,7 @@ if deps.Policy.IsDegraded() || permit.IsProbe() {
 }
 ```
 
-**Wichtige Verstärker-Mitigation**: Der `defer` in `pipeline.go`, der bei Fehlern `Cooldown.Clear()` und `ClearGroup` aufruft, bekommt einen Spezialfall:
-
-```go
-defer func() {
-    if err != nil && !errors.Is(err, shared.ErrCircuitOpen) {
-        deps.Cooldown.Clear(alert.Fingerprint)
-        if groupKey != "" {
-            deps.Cooldown.ClearGroup(groupKey)
-        }
-    }
-}()
-```
-
-Damit hämmert Alertmanager bei offenem Breaker nicht weiter — Fingerprint- und Group-Cooldown bleiben aktiv und absorbieren die Last.
+**Wichtige Verstärker-Mitigation**: Der Cooldown-Cleanup-`defer` in `pipeline.go` darf bei `ErrCircuitOpen` die Cooldowns **nicht** clearen — sonst hämmert Alertmanager bei offenem Breaker weiter. Diese Logik ist Teil der phase-differenzierten Cleanup-Logik aus 2.1 und wird dort konkret implementiert. Kurz: in `phaseAPI` wird bei `errors.Is(analysisErr, ErrCircuitOpen)` ein `return` aus dem switch gemacht; Fingerprint- und Group-Cooldown bleiben aktiv und absorbieren die Last. Siehe Code-Template in Section 2.1 unter „Implementierung (klargestellt 2026-05-08, robustness 2026-05-08)".
 
 ntfy-Aggregator: pro `CIRCUIT_BREAKER_NOTIFY_INTERVAL` eine Sammel-Notiz „API rate-limited, n alerts pending manual review" — implementiert als zweite Instance des shared `NotifyAggregator` (siehe 2.4).
 
@@ -482,51 +477,91 @@ Neuer Gauge `claude_circuit_breaker_state{source}` (0=closed, 1=half-open, 2=ope
 
 ENV: `CIRCUIT_BREAKER_THRESHOLD=0` (Default = aus, suggested: 5), `CIRCUIT_BREAKER_OPEN_SECONDS=60`, `CIRCUIT_BREAKER_NOTIFY_INTERVAL=300s`.
 
-### 2.4 Shared NotifyAggregator (klargestellt 2026-05-08, robustness 2026-05-08)
+### 2.4 Shared NotifyAggregator (klargestellt 2026-05-08, robustness 2026-05-08, request-reply 2026-05-08)
 
 Storm-Mode und Circuit-Breaker brauchen beide dieselbe Mechanik: Alerts während eines Intervalls puffern und am Intervallende eine zusammengefasste ntfy-Nachricht emittieren. Statt zwei Implementierungen kommt **eine** generische Komponente in `internal/shared/notify_aggregator.go`.
 
-**Concurrency-Pattern (post Codex-Review)**: Der initial skizzierte „buffer + timer + mutex"-Ansatz hatte drei Race-Probleme (Timer-Tick vs Stop-Flush, Add-after-Stop-verloren, Worker-Cancel mitten im Flush). Die robuste Lösung ist ein **Single-Owner-Goroutine-Pattern**: ein dedizierter Goroutine besitzt Buffer + Timer; `Add()` und `Stop()` kommunizieren ausschließlich über Channels mit dem Owner. So entfallen Mutex-Locks im Hot-Path, und das Lifecycle ist linear.
+**Concurrency-Pattern**: Single-Owner-Goroutine. Ein dedizierter Goroutine besitzt Buffer + Timer; `Add()` und `Stop()` kommunizieren ausschließlich über Channels mit dem Owner. Das eliminiert die ursprünglichen mutex+timer-Races vollständig.
+
+**Stop-Protokoll (post Codex-Review Round 2)**: Der initial skizzierte „closed-Flag + drain"-Ansatz hatte zwei Bugs: (a) Add-Race zwischen Flag-Check und Drain → Items konnten verloren gehen; (b) `flush()` mit `context.Background()` → bei hängendem Publisher blockiert die Owner-Goroutine permanent und leakt. Die Lösung ist **`Stop()` als Request/Reply-Protokoll** mit ack-Channel und bounded publish-context:
 
 ```go
 type NotifyAggregator struct {
     publishers []Publisher
     interval   time.Duration
-    titleFmt   string                // z.B. "Storm-mode active: %d alerts"
-    priority   string                // z.B. "4" für Storm, "5" für Breaker
+    titleFmt   string             // z.B. "Storm-mode active: %d alerts"
+    priority   string             // z.B. "4" für Storm, "5" für Breaker
+    dropMetric *Counter           // Prometheus counter für gedropte Alerts (siehe unten)
 
-    in     chan string               // Add() → Owner; gepuffert (z.B. 100)
-    done   chan struct{}             // Stop()-Signal
-    closed atomic.Bool               // verhindert Add() nach Stop()
-    wg     sync.WaitGroup            // Owner-Goroutine-Lifecycle
+    in        chan string         // Add() → Owner; gepuffert (z.B. 100)
+    stopReq   chan stopRequest    // Stop() → Owner mit ack-Channel
+    stopOnce  sync.Once           // Stop() ist idempotent
+    stopped   chan struct{}       // geschlossen wenn Owner-Goroutine beendet
 }
 
-func NewNotifyAggregator(pubs []Publisher, interval time.Duration, titleFmt, priority string) *NotifyAggregator
-// Konstruktor spawnt automatisch die Owner-Goroutine; nil-publishers oder interval==0 → returnt nil.
+type stopRequest struct {
+    ctx context.Context  // Owner nutzt diesen ctx für den Final-Flush-PublishAll
+    ack chan error       // Owner signalisiert Abschluss + ggf. ctx.Err()
+}
 
-// Add: non-blocking, droppt Alerts wenn Channel voll (mit Logging).
-// Returnt false wenn Aggregator bereits gestoppt — Caller kann fallback auf direkten PublishAll machen.
+func NewNotifyAggregator(pubs []Publisher, interval time.Duration, titleFmt, priority string, dropMetric *Counter) *NotifyAggregator
+// Konstruktor spawnt automatisch die Owner-Goroutine. nil-publishers oder interval==0 → returnt nil.
+
+// Add: non-blocking. Returnt false wenn Aggregator bereits gestoppt ODER der in-channel voll ist.
+// In beiden Fällen wird dropMetric.Inc() gerufen — dropped Alerts sind beobachtbar.
 func (a *NotifyAggregator) Add(alertTitle string) bool
 
-// Stop: signalisiert Owner zu beenden, wartet auf finalen Flush, returnt ctx.Err() bei Timeout.
-// Idempotent: zweiter Aufruf ist No-Op.
+// Stop: idempotent via sync.Once. Erster Aufruf sendet stopRequest{ctx, ack} an Owner und wartet
+// auf ack. Folge-Aufrufe warten lediglich auf <-a.stopped.
+//
+// Returnt nil bei sauberem Abschluss, ctx.Err() bei Timeout.
+//
+// Ablauf im Owner: nach Empfang der stopRequest setzt er state=stopping, drain't den in-channel
+// bis er leer ist, ruft flush(req.ctx) (bounded — kein context.Background() mehr), schickt
+// flush-Result an req.ack, schließt a.stopped, beendet sich.
 func (a *NotifyAggregator) Stop(ctx context.Context) error
 ```
+
+**Add-Logik (race-frei via select)**:
+
+```go
+func (a *NotifyAggregator) Add(alertTitle string) bool {
+    select {
+    case <-a.stopped:
+        a.dropMetric.Inc()
+        return false  // bereits gestoppt
+    default:
+    }
+    select {
+    case a.in <- alertTitle:
+        return true
+    case <-a.stopped:
+        a.dropMetric.Inc()
+        return false  // gestoppt zwischen den beiden Selects
+    default:
+        a.dropMetric.Inc()
+        return false  // channel voll (Backpressure)
+    }
+}
+```
+
+Der zweite `select` ist kritisch: er behandelt den Fall, dass `Stop()` zwischen den beiden Selects feuert UND der channel voll ist — das ursprüngliche Pattern hätte hier blockierend in den Channel geschrieben und am Drain teilgenommen. Durch das `default` ist der Channel-Send non-blocking; durch das parallele `<-a.stopped` wird der Stopp-Pfad bevorzugt erkannt.
 
 **Owner-Goroutine-Logik**:
 
 ```go
 func (a *NotifyAggregator) run() {
-    defer a.wg.Done()
+    defer close(a.stopped)
     var buffer []string
     var timer *time.Timer
 
-    flush := func() {
-        if len(buffer) == 0 { return }
+    flush := func(ctx context.Context) error {
+        if len(buffer) == 0 { return nil }
         title := fmt.Sprintf(a.titleFmt, len(buffer))
         body := strings.Join(buffer, "\n")
-        _ = PublishAll(context.Background(), a.publishers, title, a.priority, body)
-        buffer = nil
+        err := PublishAll(ctx, a.publishers, title, a.priority, body)
+        buffer = nil  // immer leeren, auch bei publish-Error (Drop-Logging)
+        return err
     }
 
     for {
@@ -541,20 +576,26 @@ func (a *NotifyAggregator) run() {
             }
         case <-timerC:
             timer = nil
-            flush()
-        case <-a.done:
+            // Tick-Flush ist mit context.Background — kein bounded ctx, weil im
+            // Steady-State der Publish-Timeout (NtfyPublisher) selbst greift.
+            _ = flush(context.Background())
+        case req := <-a.stopReq:
             if timer != nil { timer.Stop() }
-            // Drain in-channel non-blocking — Add() das nach closed=true kommt sieht das Flag
-            // und returnt false; alles was vor closed=true reinkam ist hier noch im Channel.
+            // Drain pending in-channel non-blocking
             for {
                 select {
                 case alertTitle := <-a.in:
                     buffer = append(buffer, alertTitle)
                 default:
-                    flush()  // synchron, blockierend bis publishers fertig
-                    return
+                    goto done
                 }
             }
+        done:
+            // Final-Flush mit dem vom Caller gegebenen ctx — KEIN context.Background mehr.
+            // Wenn Publisher hängt und ctx läuft ab, wird der publish-Call abgebrochen
+            // und wir leaken nicht.
+            req.ack <- flush(req.ctx)
+            return
         }
     }
 }
@@ -562,21 +603,34 @@ func (a *NotifyAggregator) run() {
 
 **Lifecycle-Garantien**:
 
-- **Kein Race zwischen Tick und Stop**: nur die Owner-Goroutine schreibt am Buffer. `Stop()` signalisiert über `done`-Channel, Owner sieht den Tick-vs-Done-Race im `select` deterministisch.
-- **Add nach Stop**: `closed` Flag mit `atomic.Bool` wird bei Stop() gesetzt; `Add()` checkt das Flag zuerst und returnt false ohne den Channel zu schließen (sicheres Schreiben in einen offenen Channel-Buffer wäre theoretisch OK, aber das Flag spart die Channel-Send-Latency).
-- **Final Flush**: garantiert synchron in `Stop()`. Aufruf-Reihenfolge im SIGTERM-Pfad: HTTP-Server stop → Worker-Queue drain → `aggregator.Stop(ctx)` (jeweils mit ausreichend Timeout im ctx).
+- **Kein Race zwischen Tick und Stop**: nur die Owner-Goroutine schreibt am Buffer. `Stop()` signalisiert über `stopReq`-Channel, Owner sieht den Tick-vs-Stop-Race im `select` deterministisch.
+- **Kein Add-after-Stop-Race**: `Add()` benutzt `<-a.stopped` als Signal in beiden Selects; sobald die Owner-Goroutine `close(a.stopped)` ausgeführt hat (am Funktionsende, NACH dem Drain+Flush), kann kein `Add()` mehr durchkommen. Add-Versuche, die genau in diesem Race-Fenster lagen, werden als Drop gezählt — sichtbar in der Metrik.
+- **Owner-Goroutine leakt nicht**: Final-Flush nutzt den vom Stop-Caller übergebenen `ctx`. Wenn Publisher hängt und `ctx` abläuft, gibt `PublishAll` `ctx.Err()` zurück, der Owner schreibt das in `req.ack` und beendet sich. Stop-Caller bekommt `ctx.Err()`.
+- **Idempotenz von Stop**: `sync.Once` garantiert, dass nur der erste `Stop()`-Aufruf `stopRequest` schickt. Folgeaufrufe warten via `<-a.stopped` und bekommen denselben `nil` (sauberer Shutdown war's beim Erstaufruf) oder `ctx.Err()` zurück; die Implementierung speichert das Ergebnis des ersten Aufrufs in einem privaten Feld unter dem `sync.Once`.
+- **Drop-Beobachtbarkeit**: jeder `Add()`-Drop (gestoppt, channel voll, race gegen Stop) inkrementiert `notify_aggregator_drops_total{aggregator="storm"|"breaker"}`. Operator sieht in Grafana, ob der Aggregator unter Last Items wegwirft.
+
+**Drop-Metrik (klargestellt post Codex-Review Round 2)**:
+
+```
+notify_aggregator_drops_total{aggregator}  # Prometheus counter
+  # aggregator = "storm" | "breaker"
+```
+
+Erhöht bei: in-channel voll (Backpressure), Add-nach-Stop, Race zwischen Add und Stop. **Wichtig**: die Sammelmeldungen, die der Aggregator publisht, repräsentieren NICHT den vollen Eingangsstrom — sie sind eine untere Schranke. Die Differenz ist diese Metrik. Operatoren sollten sie in der Storm-/Breaker-Severity berücksichtigen.
 
 **Wiring**:
-- Storm-Instance: `interval = STORM_MODE_NOTIFY_INTERVAL`, Title `"Storm-mode active: %d alerts in last interval"`, Priority `"4"`.
-- Breaker-Instance: `interval = CIRCUIT_BREAKER_NOTIFY_INTERVAL`, Title `"API rate-limited: %d alerts pending manual review"`, Priority `"5"`.
+- Storm-Instance: `interval = STORM_MODE_NOTIFY_INTERVAL`, Title `"Storm-mode active: %d alerts in last interval"`, Priority `"4"`, `dropMetric.WithLabelValues("storm")`.
+- Breaker-Instance: `interval = CIRCUIT_BREAKER_NOTIFY_INTERVAL`, Title `"API rate-limited: %d alerts pending manual review"`, Priority `"5"`, `dropMetric.WithLabelValues("breaker")`.
 - Beide Instanzen werden in `cmd/*-analyzer/main.go` konstruiert und in `PipelineDeps` gehängt; Pipelines rufen `StormNotify.Add(...)` bzw. `BreakerNotify.Add(...)` statt direkt `PublishAll`, wenn der entsprechende Modus aktiv ist.
-- Beide Aggregator-`Stop()`-Calls hängen am SIGTERM-Pfad in `server.go` zwischen Worker-Drain und `shutdown complete`.
+- Beide Aggregator-`Stop()`-Calls hängen am SIGTERM-Pfad in `server.go` zwischen Worker-Drain und `shutdown complete`. Stop-Aufrufe bekommen einen `ctx` mit Timeout (z.B. 10s aus dem Shutdown-Budget).
 
-**Test-Strategie**: `notify_aggregator_test.go` mit kurzen Realtime-Intervals (z.B. 50 ms):
+**Test-Strategie**: `notify_aggregator_test.go` mit kurzen Realtime-Intervals (z.B. 50 ms), `-race` Pflicht:
 - Concurrency: 100 parallele `Add()` + ein Flush-Tick → genau eine `PublishAll` mit allen 100 Items im Body
-- Stop-Drain: `Add()` direkt vor `Stop()` → Inhalt landet im finalen Flush
-- Add-after-Stop: `Add()` nach `Stop()` returnt false, kein Panic, kein Channel-Close-Crash
-- Watchdog: Stop() mit cancelled ctx returnt ctx.Err() schnell, leakt keine Goroutine
+- Stop-Drain: 50 `Add()` direkt vor `Stop(ctx)` → alle 50 landen im finalen Flush; `Stop` returnt nil
+- Add-after-Stop: `Stop()` abgeschlossen → 100 `Add()`s returnen false, dropMetric == 100, kein Panic
+- Stop-Race: 1000 `Add()`-Goroutinen + paralleles `Stop()` → sum(published) + sum(drops) == 1000 (kein verlorener Alert)
+- **Hung-Publisher-Test**: Publisher blockiert künstlich → `Stop(ctx)` mit ctx-Timeout 100 ms → returnt ctx.DeadlineExceeded innerhalb 110 ms; `<-a.stopped` schließt; keine Goroutine bleibt nach 200 ms aktiv (verifiziert via `runtime.NumGoroutine` Δ-Check oder `goleak`)
+- Stop-Idempotency: drei parallele `Stop(ctx)`-Aufrufe → genau ein stopRequest gesendet (verifiziert via Mock-Owner-Counter), alle drei bekommen denselben Rückgabewert
 
 ### 2.5 Storm-Mode + Circuit-Breaker — Interaktions-Matrix
 
