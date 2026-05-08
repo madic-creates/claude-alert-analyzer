@@ -10,6 +10,21 @@
 
 **Spec:** `docs/superpowers/specs/2026-05-08-semantic-versioning-design.md` — read it first; this plan does not duplicate the design rationale.
 
+## Pin Reference (resolved during Task 1)
+
+```
+go-semantic-release/action: v1.24.1 @ 2e9dc4247a6004f8377781bef4cb9dad273a741f
+semantic-release binary:    v2.31.0
+commit-analyzer-cz major:        1   (use default@^1.0.0)
+changelog-generator-default major: 1   (use default@^1.0.0)
+condition-github major:          1   (use github@^1.0.0)
+provider-github major:           1   (use github@^1.0.0)
+```
+
+**Note on binary pinning:** the action does NOT expose a `version:` input. To pin the semantic-release binary, install it explicitly in a separate step and use the `bin:` input to point at the installed path. Asset URL pattern: `https://github.com/go-semantic-release/semantic-release/releases/download/v2.31.0/semantic-release_v2.31.0_linux_amd64`.
+
+**Note on output names:** the action exposes `outputs.version`, `outputs.version_major`, `outputs.version_minor`, `outputs.version_patch`, `outputs.version_prerelease`, `outputs.changelog`. Earlier drafts of this plan used `outputs.major`/`outputs.minor` — corrected below.
+
 ---
 
 ## File Structure
@@ -377,12 +392,20 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: Install pinned semantic-release binary
+        run: |
+          curl -fsSL \
+            https://github.com/go-semantic-release/semantic-release/releases/download/v2.31.0/semantic-release_v2.31.0_linux_amd64 \
+            -o /tmp/semantic-release
+          chmod +x /tmp/semantic-release
+          /tmp/semantic-release --version
+
       - name: Determine next version (dry-run)
         id: semrel-dry
-        # go-semantic-release/action {{ACTION_VERSION_TAG}}
-        uses: go-semantic-release/action@{{ACTION_SHA}}
+        # go-semantic-release/action v1.24.1
+        uses: go-semantic-release/action@2e9dc4247a6004f8377781bef4cb9dad273a741f
         with:
-          version: {{BIN_VERSION}}
+          bin: /tmp/semantic-release
           dry: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -407,7 +430,7 @@ jobs:
           tags: |
             type=raw,value=v${{ steps.semrel-dry.outputs.version }}
             type=raw,value=${{ steps.semrel-dry.outputs.version }}
-            type=raw,value=${{ steps.semrel-dry.outputs.major }}.${{ steps.semrel-dry.outputs.minor }}
+            type=raw,value=${{ steps.semrel-dry.outputs.version_major }}.${{ steps.semrel-dry.outputs.version_minor }}
             type=raw,value=latest
 
       - name: Build & push k8s-analyzer
@@ -431,7 +454,7 @@ jobs:
           tags: |
             type=raw,value=v${{ steps.semrel-dry.outputs.version }}
             type=raw,value=${{ steps.semrel-dry.outputs.version }}
-            type=raw,value=${{ steps.semrel-dry.outputs.major }}.${{ steps.semrel-dry.outputs.minor }}
+            type=raw,value=${{ steps.semrel-dry.outputs.version_major }}.${{ steps.semrel-dry.outputs.version_minor }}
             type=raw,value=latest
 
       - name: Build & push checkmk-analyzer
@@ -448,10 +471,10 @@ jobs:
 
       - name: Publish Git tag + GitHub Release
         if: steps.semrel-dry.outputs.version != ''
-        # go-semantic-release/action {{ACTION_VERSION_TAG}}
-        uses: go-semantic-release/action@{{ACTION_SHA}}
+        # go-semantic-release/action v1.24.1
+        uses: go-semantic-release/action@2e9dc4247a6004f8377781bef4cb9dad273a741f
         with:
-          version: {{BIN_VERSION}}
+          bin: /tmp/semantic-release
           github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
