@@ -3300,3 +3300,69 @@ func TestRunAgenticDiagnostics_TimeoutMetricClassification(t *testing.T) {
 		t.Errorf("expected timeout metric for context-cancelled SSH command; body:\n%s", body)
 	}
 }
+
+// driverToolLoopRunner lets tests supply a custom driver function that
+// receives the wrappedHandleTool closure and exercises it directly.
+type driverToolLoopRunner struct {
+	driver func(handleTool func(string, json.RawMessage) (string, error)) (string, error)
+}
+
+func (r *driverToolLoopRunner) RunToolLoop(
+	_ context.Context, _, _, _ string,
+	_ []anthropic.ToolUnionParam, _ int,
+	handleTool func(string, json.RawMessage) (string, error),
+) (string, int, bool, error) {
+	result, err := r.driver(handleTool)
+	return result, 1, false, err
+}
+
+// nilDialer returns a nil *ssh.Client and no error, simulating a Dialer
+// implementation that violates its contract. Used to trigger a nil-pointer
+// panic inside handleTool so the panic-recovery test can exercise that path.
+type nilDialer struct{}
+
+func (nilDialer) Dial(_ context.Context, _, _ string) (*ssh.Client, error) { return nil, nil }
+
+func TestRunAgenticDiagnostics_PanicRecovery(t *testing.T) {
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+
+	loopReturned := false
+	runner := &driverToolLoopRunner{
+		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
+			// nilDialer makes sshClient nil inside handleTool, so calling
+			// runSSHCommand will panic with a nil-pointer dereference.
+			result, err := handleTool("execute_command", json.RawMessage(`{"command":["df","-h"]}`))
+			if err != nil {
+				t.Errorf("wrappedHandleTool should swallow panic to nil error, got: %v", err)
+			}
+			if !strings.Contains(result, "panicked") {
+				t.Errorf("expected panic-recovery message in result, got: %q", result)
+			}
+			loopReturned = true
+			return "analysis after panic", nil
+		},
+	}
+
+	out, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, nilDialer{}, metrics, "host1", "10.0.0.1", "ctx", 10, "test-model",
+	)
+	if err != nil {
+		t.Fatalf("loop should not return error after recovered panic: %v", err)
+	}
+	if out != "analysis after panic" {
+		t.Errorf("loop did not complete after panic: out=%q", out)
+	}
+	if !loopReturned {
+		t.Error("loop driver did not reach return after panic")
+	}
+
+	// Metric assertion: panic recorded as exec_error outcome.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	metrics.MetricsHandler()(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `agent_tool_calls_total{outcome="exec_error",source="checkmk",tool="execute_command"} 1`) {
+		t.Errorf("missing exec_error metric for panicked call; body:\n%s", body)
+	}
+}

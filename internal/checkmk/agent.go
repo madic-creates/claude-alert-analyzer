@@ -862,7 +862,11 @@ func RunAgenticDiagnostics(
 	if err != nil {
 		return "", fmt.Errorf("SSH connection failed: %w", err)
 	}
-	defer func() { _ = sshClient.Close() }()
+	defer func() {
+		if sshClient != nil {
+			_ = sshClient.Close()
+		}
+	}()
 	slog.Info("SSH connected for agentic diagnostics", "hostname", hostname)
 
 	handleTool := func(name string, input json.RawMessage) (string, error) {
@@ -913,12 +917,25 @@ func RunAgenticDiagnostics(
 		return fmt.Sprintf("$ %s\n```\n%s\n```", logCmd, output), nil
 	}
 
-	wrappedHandleTool := func(name string, input json.RawMessage) (string, error) {
+	wrappedHandleTool := func(name string, input json.RawMessage) (result string, err error) {
 		start := time.Now()
-		out, err := handleTool(name, input)
+		// Recover from panics in handleTool so a buggy handler cannot kill the
+		// loop. The synthetic tool result lets Claude move on instead of aborting
+		// the entire alert analysis. Matches the same recovery pattern in k8s.
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("agent tool handler panicked", "tool", name, "recover", r)
+				if metrics != nil {
+					metrics.RecordAgentToolCall("checkmk", name, "exec_error", 0)
+				}
+				result = fmt.Sprintf("Tool %s panicked: %v — continue with a different command", name, r)
+				err = nil
+			}
+		}()
+		out, callErr := handleTool(name, input)
 		outcome := "ok"
 		switch {
-		case err != nil:
+		case callErr != nil:
 			outcome = "exec_error"
 		case strings.HasPrefix(out, "Invalid command: "):
 			outcome = "rejected_validation"
@@ -944,7 +961,7 @@ func RunAgenticDiagnostics(
 		if metrics != nil {
 			metrics.RecordAgentToolCall("checkmk", name, outcome, time.Since(start))
 		}
-		return out, err
+		return out, callErr
 	}
 
 	analysis, rounds, exhausted, err := client.RunToolLoop(
