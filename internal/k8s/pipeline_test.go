@@ -3,9 +3,12 @@ package k8s
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
@@ -219,8 +222,10 @@ func TestProcessAlert_AnalysisFails(t *testing.T) {
 }
 
 // TestProcessAlert_PublishFails verifies that when PublishAll returns an error
-// the cooldown is cleared (so the alert can be retried) and AlertsFailed is
-// incremented.
+// in the post-API phase (analysis succeeded, publish failed), AlertsFailed is
+// incremented and the cooldown is KEPT — re-running an expensive analysis just
+// because ntfy is unavailable wastes API spend. ntfy-failure is logged
+// separately and surfaced via the ntfy_publish_errors_total counter.
 func TestProcessAlert_PublishFails(t *testing.T) {
 	pub := &mockPublisher{err: fmt.Errorf("ntfy unavailable")}
 	cooldown := shared.NewCooldownManager()
@@ -243,6 +248,10 @@ func TestProcessAlert_PublishFails(t *testing.T) {
 		},
 	}
 
+	// Pre-set cooldown so we can verify it is NOT cleared after the post-API publish failure.
+	if !cooldown.CheckAndSet("fp1", time.Hour) {
+		t.Fatal("failed to set cooldown")
+	}
 	alert := shared.AlertPayload{Fingerprint: "fp1", Title: "DiskFull", Severity: "critical", Fields: map[string]string{}}
 	ProcessAlert(context.Background(), deps, alert)
 
@@ -252,9 +261,9 @@ func TestProcessAlert_PublishFails(t *testing.T) {
 	if metrics.AlertsProcessed.Load() != 0 {
 		t.Errorf("AlertsProcessed = %d, want 0", metrics.AlertsProcessed.Load())
 	}
-	// Cooldown must be cleared so the next webhook can re-trigger analysis.
-	if !cooldown.CheckAndSet("fp1", 300*1e9) {
-		t.Error("cooldown not cleared after publish failure")
+	// Post-API failure: cooldown must NOT be cleared.
+	if cooldown.CheckAndSet("fp1", time.Second) {
+		t.Error("cooldown was cleared after post-API publish failure; want kept")
 	}
 }
 
@@ -690,3 +699,260 @@ func TestProcessAlert_TitleFormatting(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2: phase-differentiated cleanup + Permit + breaker behavior tests
+// ---------------------------------------------------------------------------
+
+// TestProcessAlert_PreAPIFailureClearsCooldowns verifies that a panic before
+// the breaker permit is acquired (Pre-API phase, e.g. inside GatherContext)
+// clears both fingerprint and group cooldowns so the next webhook can retry.
+func TestProcessAlert_PreAPIFailureClearsCooldowns(t *testing.T) {
+	cm := shared.NewCooldownManager()
+	cm.CheckAndSet("fp1", time.Hour)
+	cm.CheckAndSetGroup("g1", time.Hour)
+
+	deps := PipelineDeps{
+		Cooldown: cm,
+		Metrics:  &shared.AlertMetrics{},
+		Policy:   &shared.AnalysisPolicy{DefaultModel: "x", DefaultMaxRounds: 0},
+		GatherContext: func(ctx context.Context, a shared.AlertPayload) shared.AnalysisContext {
+			panic("simulated gather failure")
+		},
+		Analyzer:   &mockAnalyzer{},
+		ToolRunner: &mockToolRunner{},
+		Publishers: []shared.Publisher{&pipelineFakePublisher{}},
+	}
+	alert := shared.AlertPayload{Fingerprint: "fp1", GroupKey: "g1"}
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic re-raise")
+		}
+		// After panic recovery, cooldowns should be cleared
+		if !cm.CheckAndSet("fp1", time.Second) {
+			t.Fatal("PreAPI panic: fp1 should be clear")
+		}
+		if !cm.CheckAndSetGroup("g1", time.Second) {
+			t.Fatal("PreAPI panic: g1 should be clear")
+		}
+	}()
+	ProcessAlert(context.Background(), deps, alert)
+}
+
+// TestProcessAlert_APIFailureClearsCooldowns verifies that a non-circuit-open
+// error from the analyzer (API phase) clears cooldowns so the next webhook can
+// trigger a retry of the cheap static-only analysis.
+func TestProcessAlert_APIFailureClearsCooldowns(t *testing.T) {
+	cm := shared.NewCooldownManager()
+	cm.CheckAndSet("fp1", time.Hour)
+	cm.CheckAndSetGroup("g1", time.Hour)
+
+	deps := PipelineDeps{
+		Cooldown:      cm,
+		Metrics:       &shared.AlertMetrics{},
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "x", DefaultMaxRounds: 0},
+		GatherContext: func(_ context.Context, _ shared.AlertPayload) shared.AnalysisContext { return shared.AnalysisContext{} },
+		Analyzer:      &mockAnalyzer{returnErr: errors.New("api 503")},
+		ToolRunner:    &mockToolRunner{},
+		Publishers:    []shared.Publisher{&pipelineFakePublisher{}},
+	}
+	alert := shared.AlertPayload{Fingerprint: "fp1", GroupKey: "g1"}
+
+	ProcessAlert(context.Background(), deps, alert)
+
+	if !cm.CheckAndSet("fp1", time.Second) {
+		t.Fatal("API err: fp1 should be cleared")
+	}
+	if !cm.CheckAndSetGroup("g1", time.Second) {
+		t.Fatal("API err: g1 should be cleared")
+	}
+}
+
+// TestProcessAlert_ErrCircuitOpenKeepsCooldowns verifies the
+// Verstärker-Mitigation: when the breaker is open and Acquire returns
+// ErrCircuitOpen, both cooldowns must remain set so Alertmanager retries are
+// absorbed at the cooldown layer instead of hammering the closed breaker.
+func TestProcessAlert_ErrCircuitOpenKeepsCooldowns(t *testing.T) {
+	cm := shared.NewCooldownManager()
+	cm.CheckAndSet("fp1", time.Hour)
+	cm.CheckAndSetGroup("g1", time.Hour)
+	clk := &pipelineFakeClock{t: time.Unix(0, 0)}
+	breaker := shared.NewCircuitBreaker(1, time.Hour, time.Hour, clk.Now)
+	p, _ := breaker.Acquire()
+	p.Done(errors.New("seed"))
+
+	deps := PipelineDeps{
+		Cooldown:      cm,
+		Breaker:       breaker,
+		Metrics:       &shared.AlertMetrics{},
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "x", DefaultMaxRounds: 0},
+		GatherContext: func(_ context.Context, _ shared.AlertPayload) shared.AnalysisContext { return shared.AnalysisContext{} },
+		Analyzer:      &mockAnalyzer{},
+		ToolRunner:    &mockToolRunner{},
+		Publishers:    []shared.Publisher{&pipelineFakePublisher{}},
+	}
+	alert := shared.AlertPayload{Fingerprint: "fp1", GroupKey: "g1"}
+
+	ProcessAlert(context.Background(), deps, alert)
+
+	if cm.CheckAndSet("fp1", time.Second) {
+		t.Fatal("ErrCircuitOpen: fp1 should NOT be cleared")
+	}
+	if cm.CheckAndSetGroup("g1", time.Second) {
+		t.Fatal("ErrCircuitOpen: g1 should NOT be cleared")
+	}
+}
+
+// TestProcessAlert_PostAPIFailureKeepsCooldowns verifies that when the
+// analysis succeeded but the ntfy publish failed (Post-API phase), neither
+// cooldown is cleared — re-running an expensive analysis just because ntfy
+// is unavailable wastes API spend.
+func TestProcessAlert_PostAPIFailureKeepsCooldowns(t *testing.T) {
+	cm := shared.NewCooldownManager()
+	cm.CheckAndSet("fp1", time.Hour)
+	cm.CheckAndSetGroup("g1", time.Hour)
+
+	failingPub := &pipelineFakePublisher{failNext: errors.New("ntfy down")}
+	deps := PipelineDeps{
+		Cooldown:      cm,
+		Metrics:       &shared.AlertMetrics{},
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "x", DefaultMaxRounds: 0},
+		GatherContext: func(_ context.Context, _ shared.AlertPayload) shared.AnalysisContext { return shared.AnalysisContext{} },
+		Analyzer:      &mockAnalyzer{returnAnalysis: "ok"},
+		ToolRunner:    &mockToolRunner{},
+		Publishers:    []shared.Publisher{failingPub},
+	}
+	alert := shared.AlertPayload{Fingerprint: "fp1", GroupKey: "g1"}
+
+	ProcessAlert(context.Background(), deps, alert)
+
+	if cm.CheckAndSet("fp1", time.Second) {
+		t.Fatal("PostAPI err: fp1 should NOT be cleared")
+	}
+	if cm.CheckAndSetGroup("g1", time.Second) {
+		t.Fatal("PostAPI err: g1 should NOT be cleared")
+	}
+}
+
+// TestProcessAlert_HalfOpenProbeForcesRoundsZero verifies that when the
+// breaker hands out a half-open probe permit, the pipeline forces rounds=0
+// (static-only Analyze) regardless of the policy's configured budget. This
+// keeps the probe cheap and bounded.
+func TestProcessAlert_HalfOpenProbeForcesRoundsZero(t *testing.T) {
+	cm := shared.NewCooldownManager()
+	clk := &pipelineFakeClock{t: time.Unix(0, 0)}
+	breaker := shared.NewCircuitBreaker(1, 10*time.Second, time.Minute, clk.Now)
+	p, _ := breaker.Acquire()
+	p.Done(errors.New("seed"))
+	clk.advance(11 * time.Second)
+
+	an := &mockAnalyzer{returnAnalysis: "ok"}
+	tr := &mockToolRunner{}
+	deps := PipelineDeps{
+		Cooldown:      cm,
+		Breaker:       breaker,
+		Metrics:       &shared.AlertMetrics{},
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "x", DefaultMaxRounds: 10},
+		GatherContext: func(_ context.Context, _ shared.AlertPayload) shared.AnalysisContext { return shared.AnalysisContext{} },
+		Analyzer:      an,
+		ToolRunner:    tr,
+		Publishers:    []shared.Publisher{&pipelineFakePublisher{}},
+	}
+	alert := shared.AlertPayload{Fingerprint: "fp1", SeverityLevel: shared.SeverityCritical}
+
+	ProcessAlert(context.Background(), deps, alert)
+
+	if an.calls != 1 || tr.calls != 0 {
+		t.Fatalf("half-open probe: Analyzer.calls=%d ToolRunner.calls=%d, want 1/0", an.calls, tr.calls)
+	}
+}
+
+// TestProcessAlert_StormDegradedForcesRoundsZero verifies that when storm-mode
+// is degraded, the pipeline forces rounds=0 regardless of policy.MaxRoundsFor,
+// shedding tool-loop cost during the burst.
+func TestProcessAlert_StormDegradedForcesRoundsZero(t *testing.T) {
+	cm := shared.NewCooldownManager()
+	storm := shared.NewStormDetector(1, time.Now)
+	storm.Record()
+	storm.Record() // count=2 > threshold=1
+
+	an := &mockAnalyzer{returnAnalysis: "ok"}
+	tr := &mockToolRunner{}
+	deps := PipelineDeps{
+		Cooldown:      cm,
+		Metrics:       &shared.AlertMetrics{},
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "x", DefaultMaxRounds: 10, Storm: storm},
+		GatherContext: func(_ context.Context, _ shared.AlertPayload) shared.AnalysisContext { return shared.AnalysisContext{} },
+		Analyzer:      an,
+		ToolRunner:    tr,
+		Publishers:    []shared.Publisher{&pipelineFakePublisher{}},
+	}
+	alert := shared.AlertPayload{Fingerprint: "fp1", SeverityLevel: shared.SeverityCritical}
+
+	ProcessAlert(context.Background(), deps, alert)
+
+	if an.calls != 1 || tr.calls != 0 {
+		t.Fatalf("storm-degraded: Analyzer.calls=%d ToolRunner.calls=%d, want 1/0", an.calls, tr.calls)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test fixtures for Phase 2 pipeline tests.
+// Names are prefixed/suffixed to avoid collision with Phase 1 helpers above.
+// ---------------------------------------------------------------------------
+
+type mockAnalyzer struct {
+	calls          int
+	returnAnalysis string
+	returnErr      error
+}
+
+func (m *mockAnalyzer) Analyze(ctx context.Context, model, system, user string) (string, error) {
+	m.calls++
+	if m.returnErr != nil {
+		return "", m.returnErr
+	}
+	return m.returnAnalysis, nil
+}
+
+type mockToolRunner struct {
+	calls int
+}
+
+func (m *mockToolRunner) RunToolLoop(
+	ctx context.Context, model, system, user string,
+	tools []anthropic.ToolUnionParam, maxRounds int,
+	handleTool func(name string, input json.RawMessage) (string, error),
+) (string, int, bool, error) {
+	m.calls++
+	return "ok", 1, false, nil
+}
+
+type pipelineFakePublisher struct {
+	mu       sync.Mutex
+	calls    []pipelineFakePublishCall
+	failNext error
+}
+type pipelineFakePublishCall struct{ title, priority, body string }
+
+func (p *pipelineFakePublisher) Name() string { return "fake" }
+func (p *pipelineFakePublisher) Publish(ctx context.Context, title, priority, body string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.failNext != nil {
+		err := p.failNext
+		p.failNext = nil
+		return err
+	}
+	p.calls = append(p.calls, pipelineFakePublishCall{title, priority, body})
+	return nil
+}
+
+type pipelineFakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *pipelineFakeClock) Now() time.Time          { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
+func (c *pipelineFakeClock) advance(d time.Duration) { c.mu.Lock(); c.t = c.t.Add(d); c.mu.Unlock() }
