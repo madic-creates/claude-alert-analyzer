@@ -11,12 +11,13 @@ Everything below is only relevant if you want to build, test, or modify the anal
 
 ```bash
 # Build both binaries
-CGO_ENABLED=0 go build -o k8s-analyzer ./cmd/k8s-analyzer/
-CGO_ENABLED=0 go build -o checkmk-analyzer ./cmd/checkmk-analyzer/
+make binaries
 
-# Multi-stage Docker build (two targets)
-docker build --target k8s-analyzer      -t claude-alert-kubernetes-analyzer .
-docker build --target checkmk-analyzer  -t claude-alert-checkmk-analyzer .
+# Build both Docker images (runs `make binaries` first, then docker build).
+# The Dockerfile expects prebuilt binaries in the build context — it does
+# not compile Go itself. CI mirrors this: a `build` job produces the
+# binaries and feeds them to image builds via workflow artifacts.
+make images
 ```
 
 ## Test
@@ -55,12 +56,19 @@ This repo uses [pre-commit](https://pre-commit.com/) for local hygiene (trailing
 
 ## CI/CD
 
-GitHub Actions ([`build.yaml`](../.github/workflows/build.yaml)) runs tests and lint, then builds and pushes both images to GHCR on every qualifying push to `main`:
+GitHub Actions ([`build.yaml`](../.github/workflows/build.yaml)) runs `test`, `lint`, and `build` in parallel, then a `release` job downloads the prebuilt binaries as artifacts, builds and pushes both images to GHCR, and publishes a semantic-release tag with attached binaries on every qualifying push to `main`:
 
-- `ghcr.io/madic-creates/claude-alert-kubernetes-analyzer:{sha,latest}`
-- `ghcr.io/madic-creates/claude-alert-checkmk-analyzer:{sha,latest}`
+- `ghcr.io/madic-creates/claude-alert-kubernetes-analyzer:{vX.Y.Z,X.Y.Z,X.Y,latest}`
+- `ghcr.io/madic-creates/claude-alert-checkmk-analyzer:{vX.Y.Z,X.Y.Z,X.Y,latest}`
 
-The workflow rebuilds and pushes both images on every push to `main` that touches `cmd/`, `internal/`, `Dockerfile`, `go.mod`, or `go.sum`. The workflow runs `go vet`, `go test -race`, and `golangci-lint` before publishing. Images are tagged with both the short commit SHA and `latest`. To pin a specific build, reference the SHA tag in your deployment manifest.
+The workflow triggers on every push to `main` that touches `cmd/`, `internal/`, `Dockerfile`, `Makefile`, `go.mod`, `go.sum`, the workflow file itself, or `.semrelrc`. Steps:
+
+1. **`test`** — `go vet` + `go test -race -count=1`.
+2. **`lint`** — `golangci-lint`.
+3. **`build`** — compiles both binaries via `make binaries` and uploads them as a `binaries` artifact (retention 1 day).
+4. **`release`** — downloads the artifact, runs semantic-release (dry-run) to determine the next version, builds and pushes both images using the prebuilt binaries (the Dockerfile only `COPY`s, no Go toolchain inside Docker), publishes the Git tag + GitHub Release, and uploads the binaries with sha256 checksums to the release.
+
+To pin a specific build, reference the `vX.Y.Z` tag in your deployment manifest.
 
 ## Maintenance
 
