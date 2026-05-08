@@ -1,6 +1,10 @@
 package checkmk
 
-import "github.com/madic-creates/claude-alert-analyzer/internal/shared"
+import (
+	"time"
+
+	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
+)
 
 type CheckMKNotification struct {
 	Hostname           string `json:"hostname"`
@@ -32,6 +36,7 @@ type Config struct {
 	SSHKeyPath        string
 	SSHKnownHostsPath string
 	SSHDeniedCommands map[string]bool // nil = use default, empty = no guardrails
+	GroupCooldownTTL  time.Duration   // 0 == group-cooldown disabled
 }
 
 // BaseConfig returns a shared.BaseConfig derived from this Config.

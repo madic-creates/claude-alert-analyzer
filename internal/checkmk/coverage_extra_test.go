@@ -371,7 +371,7 @@ func TestProcessAlert_SSH_AgenticFails_PublishFailureNotification(t *testing.T) 
 func TestHandleWebhook_BodyReadError(t *testing.T) {
 	cfg := makeCheckmkConfig()
 	cd := shared.NewCooldownManager()
-	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil)
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil, nil)
 
 	// Use an errorReader that returns an error immediately on Read.
 	req := httptest.NewRequest("POST", "/webhook", &errorReader{})

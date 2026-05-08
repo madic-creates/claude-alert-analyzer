@@ -181,6 +181,6 @@ func main() {
 		"modelOverrides", len(policy.ModelOverrides),
 		"roundsOverrides", len(policy.RoundsOverrides))
 
-	handler := checkmk.HandleWebhook(cfg, cooldownMgr, srv.Enqueue, metrics)
+	handler := checkmk.HandleWebhook(cfg, cooldownMgr, srv.Enqueue, metrics, nil) // TODO Task 12: pass policy.Storm
 	srv.Run(handler)
 }
