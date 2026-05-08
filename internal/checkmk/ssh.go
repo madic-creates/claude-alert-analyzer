@@ -199,7 +199,10 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 		return partial, fmt.Errorf("timeout after %v", timeout)
 	case <-ctx.Done():
 		session.Close()
-		return "", fmt.Errorf("context cancelled: %w", ctx.Err())
+		lw.mu.Lock()
+		partial := lw.w.String()
+		lw.mu.Unlock()
+		return partial, fmt.Errorf("context cancelled: %w", ctx.Err())
 	}
 }
 

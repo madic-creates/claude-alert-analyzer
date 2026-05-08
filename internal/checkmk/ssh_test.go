@@ -309,6 +309,43 @@ func TestRunSSHCommand_ContextCancelled(t *testing.T) {
 	}
 }
 
+// TestRunSSHCommand_ContextCancelled_PartialOutput verifies that partial output
+// already written by the remote process before context cancellation is returned
+// alongside the error, mirroring the timer-timeout path that also preserves
+// partial output. Without this, diagnostic data produced before the cancellation
+// (e.g. the start of a long log dump) is silently discarded.
+func TestRunSSHCommand_ContextCancelled_PartialOutput(t *testing.T) {
+	outputWritten := make(chan struct{})
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		_, _ = io.WriteString(ch, "partial context output\n")
+		close(outputWritten)
+		time.Sleep(10 * time.Second) // hold channel open so ctx.Done fires
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Wait until the server has written output, then cancel.
+	go func() {
+		<-outputWritten
+		// Allow a moment for the SSH packet to arrive at the client and be
+		// written into lw before the context is cancelled.
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	out, err := runSSHCommand(ctx, client, []string{"slow-cmd"}, 30*time.Second)
+	if err == nil {
+		t.Fatal("expected error when context is cancelled")
+	}
+	if !strings.Contains(err.Error(), "context cancelled") {
+		t.Errorf("expected 'context cancelled' error message, got: %v", err)
+	}
+	if !strings.Contains(out, "partial context output") {
+		t.Errorf("expected partial output to be returned on context cancellation, got: %q", out)
+	}
+}
+
 // TestRunSSHCommand_NewSessionFails verifies that runSSHCommand returns a
 // "new session: ..." error when the underlying SSH connection is closed before
 // NewSession is called. This is a real production failure mode: in an agentic
