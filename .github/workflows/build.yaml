@@ -52,12 +52,7 @@ jobs:
       - name: Compile both binaries
         run: |
           set -euo pipefail
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-            -trimpath -ldflags="-s -w" \
-            -o k8s-analyzer ./cmd/k8s-analyzer/
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-            -trimpath -ldflags="-s -w" \
-            -o checkmk-analyzer ./cmd/checkmk-analyzer/
+          make binaries
           ls -la k8s-analyzer checkmk-analyzer
       - name: Upload binaries
         uses: actions/upload-artifact@v4
