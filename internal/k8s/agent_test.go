@@ -144,6 +144,12 @@ func TestParseKubectlInput_VerbAllowlist(t *testing.T) {
 		`["rollout","history","deployment/foo"]`,
 		// flags before verb are tolerated as long as the FIRST non-flag is a verb
 		`["-v=4","get","pods"]`,
+		// flags with separate value between verb and sub-verb must not be
+		// mistaken for the sub-verb (regression: extractVerbs used to treat
+		// the flag's value token as the sub-verb, rejecting valid commands)
+		`["rollout","-n","monitoring","history","deployment/foo"]`,
+		`["auth","--namespace","default","can-i","get","pods"]`,
+		`["rollout","-v","4","history","deployment/foo"]`,
 	}
 	for _, c := range allowed {
 		t.Run("allowed:"+c, func(t *testing.T) {

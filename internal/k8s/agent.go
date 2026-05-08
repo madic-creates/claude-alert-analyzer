@@ -119,9 +119,30 @@ func validateKubectlVerb(argv []string) error {
 	return nil
 }
 
+// flagsConsumingNextToken is the set of kubectl flags whose value is passed as
+// a separate token (e.g. "-n monitoring" rather than "-n=monitoring"). When
+// extractVerbs encounters one of these flags, it skips the next non-flag token
+// so that the flag's value is not mistaken for the verb or sub-verb.
+// Example: ["rollout", "-n", "monitoring", "history", "deployment/foo"] —
+// without this set, "monitoring" would be seen as the sub-verb instead of
+// "history", causing valid commands to be wrongly rejected.
+var flagsConsumingNextToken = map[string]bool{
+	"-n": true, "--namespace": true,
+	"-v": true, "--v": true,
+	"-o": true, "--output": true,
+}
+
 func extractVerbs(argv []string) (verb, subVerb string) {
+	skipNext := false
 	for _, a := range argv {
+		if skipNext {
+			skipNext = false
+			continue
+		}
 		if strings.HasPrefix(a, "-") {
+			// Only set skipNext for the exact flag token (e.g. "-n"), not for
+			// the "--flag=value" form where the value is already embedded.
+			skipNext = flagsConsumingNextToken[a]
 			continue
 		}
 		if verb == "" {
