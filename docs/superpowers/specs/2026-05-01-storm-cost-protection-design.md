@@ -2,6 +2,7 @@
 
 **Date**: 2026-05-01
 **Status**: Approved (pending implementation plan)
+**Updated**: 2026-05-08 — Phase 2 implementation clarifications: failure-phase tracking via `phase` enum + tracker variable in `ProcessAlert` (not separate phase-typed errors); shared `NotifyAggregator` utility (one type, two instances for Storm + Breaker); circuit-breaker wired exclusively in `PipelineDeps` (not in `ClaudeClient`).
 **Scope**: Both analyzers (k8s-analyzer, checkmk-analyzer)
 
 ## Problem
@@ -126,7 +127,7 @@ func (p *AnalysisPolicy) IsDegraded() bool  // delegates to Storm.Count() > thre
 
 `ClaudeClient.Model` als Konstruktor-Feld entfällt. Stattdessen bekommen `Analyze(ctx, model, system, user)` und `RunToolLoop(ctx, model, system, user, tools, maxRounds, handler)` einen `model string`-Parameter. Aufrufstellen sind ausschließlich in den beiden Pipelines.
 
-`ClaudeClient` bekommt zusätzlich ein optionales `breaker *CircuitBreaker`-Feld (nil wenn deaktiviert). Wiring im Konstruktor.
+**Breaker-Wiring (klargestellt 2026-05-08)**: Der `CircuitBreaker` wird ausschließlich in `PipelineDeps` referenziert. `ClaudeClient` hat **kein** Breaker-Feld. Begründung: Gating muss auf logischer Analyse-Ebene liegen, sonst würde ein Tool-Loop pro HTTP-Roundtrip ein `BeforeCall`/`RecordResult` triggern und die Half-Open-Probe-Semantik (genau eine Probe = eine Analyse) wäre kaputt.
 
 ## Phase 1 — Quick Wins (eigener PR)
 
@@ -255,7 +256,26 @@ func (cm *CooldownManager) ClearGroup(groupKey string)  // für Failure-Cleanup
                                                 eine teure Re-Analyse macht keinen Sinn
 ```
 
-Implementierungs-Hinweis: Pipeline kapselt Phasen in benannte Funktionsschritte (`gatherContext`, `runAnalysis`, `publishNotification`) und gibt Phase-spezifische Fehler-Sentinels zurück (oder ein Phase-`enum` als Teil eines Wrapper-Errors). Der `defer` schaut auf die Phase, nicht nur auf den Fehlertyp.
+**Implementierung (klargestellt 2026-05-08)**: `ProcessAlert` führt eine lokale `phase` Variable vom Typ `failurePhase` (Enum: `phasePreAPI` | `phaseAPI` | `phasePostAPI`). Initialwert ist `phasePreAPI`. Nach erfolgreichem `gatherContext` und vor dem Breaker-Gate wechselt sie auf `phaseAPI`. Nach erfolgreichem `RecordResult(nil)` (Analyse erfolgreich) wechselt sie auf `phasePostAPI`. Der `defer` liest `phase` plus den `err`-Wert (named return) und entscheidet basierend auf Spec-Tabelle:
+
+```go
+defer func() {
+    if err == nil { return }
+    switch phase {
+    case phasePreAPI:
+        deps.Cooldown.Clear(alert.Fingerprint)
+        if groupKey != "" { deps.Cooldown.ClearGroup(groupKey) }
+    case phaseAPI:
+        if errors.Is(err, shared.ErrCircuitOpen) { return }  // Verstärker-Mitigation
+        deps.Cooldown.Clear(alert.Fingerprint)
+        if groupKey != "" { deps.Cooldown.ClearGroup(groupKey) }
+    case phasePostAPI:
+        return  // Analyse war erfolgreich, ntfy-Failure separat geloggt
+    }
+}()
+```
+
+Diese Form ist im Code lokaler und leichter zu lesen als drei separate Funktionen mit phase-typisierten Fehlern. Tests setzen `phase` über Mock-Schritte, die kontrolliert in jedem Stadium fehlschlagen.
 
 Empfohlener Wert: `GROUP_COOLDOWN_SECONDS=60`. Kurz genug dass legitime Folge-Alerts nach einer Minute durchkommen, lang genug um Storms zu absorbieren.
 
@@ -287,7 +307,7 @@ func (d *StormDetector) Count() int
 **Verhalten im Degraded-Mode**:
 - Pipeline setzt `rounds = 0` wenn `policy.IsDegraded()` — nur statische `Analyze`-Calls, kein Tool-Loop. Das ist der härteste Kosten- und Last-Hebel: kein Tool-Use, keine wachsende Konversationshistorie, ein einzelner Round-Trip pro Alert.
 - Group-Cooldown-Key bleibt unverändert (siehe 2.1) — nicht aggressiver, um operative Risiken durch Übermäßige Cluster-Dedup zu vermeiden
-- ntfy-Aggregator: pro `STORM_MODE_NOTIFY_INTERVAL` eine Sammelmeldung mit Counter und Beispiel-Alerts statt N Einzelnachrichten
+- ntfy-Aggregator: pro `STORM_MODE_NOTIFY_INTERVAL` eine Sammelmeldung mit Counter und Beispiel-Alerts statt N Einzelnachrichten — implementiert als Instance des shared `NotifyAggregator` (siehe 2.4)
 
 Neuer Gauge `storm_mode_active{source}` (0/1) für Operator-Alerting.
 
@@ -342,13 +362,46 @@ defer func() {
 
 Damit hämmert Alertmanager bei offenem Breaker nicht weiter — Fingerprint- und Group-Cooldown bleiben aktiv und absorbieren die Last.
 
-ntfy-Aggregator: pro `CIRCUIT_BREAKER_NOTIFY_INTERVAL` eine Sammel-Notiz „API rate-limited, n alerts pending manual review".
+ntfy-Aggregator: pro `CIRCUIT_BREAKER_NOTIFY_INTERVAL` eine Sammel-Notiz „API rate-limited, n alerts pending manual review" — implementiert als zweite Instance des shared `NotifyAggregator` (siehe 2.4).
 
 Neuer Gauge `claude_circuit_breaker_state{source}` (0=closed, 1=half-open, 2=open).
 
 ENV: `CIRCUIT_BREAKER_THRESHOLD=0` (Default = aus, suggested: 5), `CIRCUIT_BREAKER_OPEN_SECONDS=60`, `CIRCUIT_BREAKER_NOTIFY_INTERVAL=300s`.
 
-### 2.4 Storm-Mode + Circuit-Breaker — Interaktions-Matrix
+### 2.4 Shared NotifyAggregator (klargestellt 2026-05-08)
+
+Storm-Mode und Circuit-Breaker brauchen beide dieselbe Mechanik: Alerts während eines Intervalls puffern und am Intervallende eine zusammengefasste ntfy-Nachricht emittieren. Statt zwei Implementierungen kommt **eine** generische Komponente in `internal/shared/notify_aggregator.go`:
+
+```go
+type NotifyAggregator struct {
+    publishers []Publisher
+    interval   time.Duration
+    titleFmt   string         // z.B. "Storm-mode active: %d alerts"
+    priority   string         // z.B. "4" für Storm, "5" für Breaker
+    mu         sync.Mutex
+    buffer     []string       // gesammelte Alert-Titel/Fingerprints
+    timer      *time.Timer    // nil wenn Buffer leer
+    done       chan struct{}  // für Stop()-Drain
+}
+
+func NewNotifyAggregator(pubs []Publisher, interval time.Duration, titleFmt, priority string) *NotifyAggregator
+func (a *NotifyAggregator) Add(alertTitle string)  // puffert + startet timer wenn nötig
+func (a *NotifyAggregator) Stop(ctx context.Context) error  // graceful drain auf shutdown
+```
+
+**Semantik**:
+- `Add()` pufft den Alert-Titel/Fingerprint. Wenn der Timer noch nicht läuft, wird er gestartet. Wenn er läuft, kein neuer Timer — der laufende sammelt weiter.
+- Beim Timer-Tick: Buffer wird unter Mutex gelesen+geleert, eine Sammelnachricht gebaut (`fmt.Sprintf(titleFmt, len(buffer))` als Title, Body listet bis zu N Beispiele), an alle `publishers` gesendet via `PublishAll`. Timer wird auf `nil` gesetzt — der nächste `Add()` startet einen frischen.
+- `Stop()` flusht den Buffer einmal final und schließt `done`. Wird von `cmd/*-analyzer/main.go` im SIGTERM-Pfad aufgerufen.
+
+**Wiring**:
+- Storm-Instance: `interval = STORM_MODE_NOTIFY_INTERVAL`, Title `"Storm-mode active: %d alerts in last interval"`, Priority `"4"`.
+- Breaker-Instance: `interval = CIRCUIT_BREAKER_NOTIFY_INTERVAL`, Title `"API rate-limited: %d alerts pending manual review"`, Priority `"5"`.
+- Beide Instanzen werden in `cmd/*-analyzer/main.go` konstruiert und in `PipelineDeps` gehängt; Pipelines rufen `StormNotify.Add(...)` bzw. `BreakerNotify.Add(...)` statt direkt `PublishAll`, wenn der entsprechende Modus aktiv ist.
+
+**Test-Strategie**: `notify_aggregator_test.go` mit `time.NewTimer` über injizierbarem `now func() time.Time` ist hier nicht nötig — stattdessen Tests mit echter `time.Duration` aber kurzem Interval (z.B. 50 ms), die das Verhalten in Echtzeit verifizieren. Mehr Wert für Concurrency-Sicherheit: 100 parallele `Add()`s + ein Flush-Tick → genau eine `PublishAll` mit allen 100 Items im Body.
+
+### 2.5 Storm-Mode + Circuit-Breaker — Interaktions-Matrix
 
 | Storm aktiv | Breaker-Zustand | Verhalten | Notification |
 |---|---|---|---|
