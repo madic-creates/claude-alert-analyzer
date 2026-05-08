@@ -150,6 +150,11 @@ func TestParseKubectlInput_VerbAllowlist(t *testing.T) {
 		`["rollout","-n","monitoring","history","deployment/foo"]`,
 		`["auth","--namespace","default","can-i","get","pods"]`,
 		`["rollout","-v","4","history","deployment/foo"]`,
+		// --timeout and --request-timeout before the sub-verb must not be
+		// mistaken for the sub-verb (their value token was previously treated
+		// as the sub-verb, causing "kubectl rollout 60s is not permitted").
+		`["rollout","--timeout","60s","history","deployment/foo"]`,
+		`["rollout","--request-timeout","30s","history","deployment/foo"]`,
 	}
 	for _, c := range allowed {
 		t.Run("allowed:"+c, func(t *testing.T) {

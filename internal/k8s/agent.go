@@ -130,6 +130,7 @@ var flagsConsumingNextToken = map[string]bool{
 	"-n": true, "--namespace": true,
 	"-v": true, "--v": true,
 	"-o": true, "--output": true,
+	"--timeout": true, "--request-timeout": true,
 }
 
 func extractVerbs(argv []string) (verb, subVerb string) {
