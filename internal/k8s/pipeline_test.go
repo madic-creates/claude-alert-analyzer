@@ -439,24 +439,32 @@ func TestProcessAlert_PanicClearsCooldown(t *testing.T) {
 	}
 }
 
-// TestProcessAlert_PriorityMapping verifies the severity → ntfy priority table
-// and that an unrecognised severity falls back to "3".
+// TestProcessAlert_PriorityMapping verifies the severity → ntfy priority table.
+// Priority is keyed on alert.SeverityLevel (the normalised enum), not the raw
+// alert.Severity label, so Alertmanager severity values like "page" (which
+// normalises to SeverityCritical) and "notice" (→ SeverityWarning) produce the
+// correct priority even though they do not appear literally in the map.
 func TestProcessAlert_PriorityMapping(t *testing.T) {
 	cases := []struct {
-		severity string
-		want     string
+		name          string
+		severityLevel shared.Severity
+		rawSeverity   string // Alertmanager label value; does NOT affect priority
+		want          string
 	}{
-		{"critical", "5"},
-		{"warning", "4"},
-		{"info", "2"},
-		{"unknown", "3"},  // not in the map → default
-		{"", "3"},         // empty → default
-		{"CRITICAL", "3"}, // case-sensitive → default
+		{"critical", shared.SeverityCritical, "critical", "5"},
+		{"warning", shared.SeverityWarning, "warning", "4"},
+		{"info", shared.SeverityInfo, "info", "2"},
+		{"unknown", shared.SeverityUnknown, "unknown", "3"},
+		// Non-standard Alertmanager labels that normalise to known severities.
+		// Previously these fell through to the default "3" because the raw label
+		// ("page", "notice") was used for the map lookup instead of SeverityLevel.
+		{"page_is_critical", shared.SeverityCritical, "page", "5"},
+		{"notice_is_warning", shared.SeverityWarning, "notice", "4"},
 	}
 
 	for _, tc := range cases {
 		tc := tc
-		t.Run(fmt.Sprintf("severity=%q", tc.severity), func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			pub := &mockPublisher{}
 			metrics := new(shared.AlertMetrics)
 
@@ -478,10 +486,11 @@ func TestProcessAlert_PriorityMapping(t *testing.T) {
 			}
 
 			alert := shared.AlertPayload{
-				Fingerprint: "fp-" + tc.severity,
-				Title:       "TestAlert",
-				Severity:    tc.severity,
-				Fields:      map[string]string{},
+				Fingerprint:   "fp-" + tc.name,
+				Title:         "TestAlert",
+				Severity:      tc.rawSeverity,
+				SeverityLevel: tc.severityLevel,
+				Fields:        map[string]string{},
 			}
 			ProcessAlert(context.Background(), deps, alert)
 

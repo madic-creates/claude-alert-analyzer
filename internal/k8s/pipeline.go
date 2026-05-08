@@ -205,8 +205,13 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	if namespace != "" {
 		title = fmt.Sprintf("Analysis: %s (%s)", alertname, namespace)
 	}
-	priorityMap := map[string]string{"critical": "5", "warning": "4", "info": "2"}
-	priority := priorityMap[alert.Severity]
+	// Use the normalized SeverityLevel (not the raw alert.Severity label) so
+	// that non-standard Alertmanager severity values such as "page" (→ critical)
+	// and "notice" (→ warning) map to the correct ntfy priority. alert.Severity
+	// holds the raw label from the webhook and may not match the priority-map
+	// keys; SeverityLevel is always one of the four normalized enum values.
+	priorityMap := map[string]string{"critical": "5", "warning": "4", "info": "2", "unknown": "3"}
+	priority := priorityMap[alert.SeverityLevel.String()]
 	if priority == "" {
 		priority = "3"
 	}
