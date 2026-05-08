@@ -193,8 +193,8 @@ func NewPrometheusMetrics(product Product) (*PrometheusMetrics, error) {
 
 	// Materialize the time series for bounded label combinations so dashboard
 	// queries like rate(alert_analyzer_webhooks_total[5m]) return 0 instead
-	// of "no data" before the first event arrives. CounterVec is lazy: a
-	// series only exists after the first WithLabelValues(...) call.
+	// of "no data" before the first event arrives. CounterVec / HistogramVec
+	// are lazy: a series only exists after the first WithLabelValues(...) call.
 	for _, outcome := range []WebhookOutcome{
 		WebhookAccepted, WebhookAuthFailed, WebhookPayloadInvalid,
 		WebhookPayloadTooLarge, WebhookUnavailable, WebhookInternalError,
@@ -207,14 +207,66 @@ func NewPrometheusMetrics(product Product) (*PrometheusMetrics, error) {
 	} {
 		pm.AlertsDropped.WithLabelValues(string(reason))
 	}
-	for _, sev := range []Severity{SeverityUnknown, SeverityInfo, SeverityWarning, SeverityCritical} {
+	for _, sev := range allSeverities {
 		pm.AlertsProcessed.WithLabelValues(sev.String())
 	}
 	for _, agg := range []string{"storm", "breaker"} {
 		pm.NotifyAggregatorDrops.WithLabelValues(agg)
 	}
+	// Agent tool labels: pre-materialize the union of tool names across both
+	// products. Unused names stay at 0 — small cardinality, harmless.
+	for _, tool := range allAgentTools {
+		for _, outcome := range allAgentOutcomes {
+			pm.AgentToolCalls.WithLabelValues(tool, outcome)
+		}
+		pm.AgentToolDuration.WithLabelValues(tool)
+	}
 
 	return pm, nil
+}
+
+// allSeverities is the closed set of Severity values the registry uses for
+// pre-materialization. Keep in sync with severity.go.
+var allSeverities = []Severity{SeverityUnknown, SeverityInfo, SeverityWarning, SeverityCritical}
+
+// allAgentTools is the union of agent tool names across k8s (kubectl_exec,
+// promql_query) and checkmk (execute_command). Pre-materialized on every
+// product registry; unused names just stay at 0.
+var allAgentTools = []string{"kubectl_exec", "promql_query", "execute_command"}
+
+// allAgentOutcomes is the closed set of outcome label values produced by the
+// agent loops in both products. See internal/k8s/agent.go and
+// internal/checkmk/agent.go for the emission sites.
+var allAgentOutcomes = []string{
+	"ok", "exec_error", "rejected_validation", "rejected_verb",
+	"nonzero_exit", "timeout",
+}
+
+// allTokenKinds is the closed set of kind label values for ClaudeTokens.
+var allTokenKinds = []string{"input", "output", "cache_creation", "cache_read"}
+
+// MaterializeClaudeTokensForModels pre-materializes the
+// alert_analyzer_claude_tokens_total series for every (kind, severity, model)
+// combination so dashboard queries return 0 instead of "no data" before the
+// first Claude call. The model label is config-driven, so callers must pass
+// the configured model set (typically AnalysisPolicy.AllModels()) — the
+// registry constructor cannot know the values up front.
+//
+// Safe to call multiple times; WithLabelValues is idempotent.
+func (p *PrometheusMetrics) MaterializeClaudeTokensForModels(models []string) {
+	if p == nil || p.ClaudeTokens == nil {
+		return
+	}
+	for _, sev := range allSeverities {
+		for _, model := range models {
+			if model == "" {
+				continue
+			}
+			for _, kind := range allTokenKinds {
+				p.ClaudeTokens.WithLabelValues(kind, sev.String(), model)
+			}
+		}
+	}
 }
 
 // Registry returns the underlying prometheus.Registry for promhttp.HandlerFor.

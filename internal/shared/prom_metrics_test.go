@@ -23,6 +23,8 @@ func TestNewPrometheusMetrics_PrematerializedSeries(t *testing.T) {
 		{"AlertsDropped (4 reasons)", testutil.CollectAndCount(pm.AlertsDropped), 4},
 		{"AlertsProcessed (4 severities)", testutil.CollectAndCount(pm.AlertsProcessed), 4},
 		{"NotifyAggregatorDrops (2 aggregators)", testutil.CollectAndCount(pm.NotifyAggregatorDrops), 2},
+		{"AgentToolCalls (3 tools x 6 outcomes)", testutil.CollectAndCount(pm.AgentToolCalls), 18},
+		{"AgentToolDuration (3 tools)", testutil.CollectAndCount(pm.AgentToolDuration), 3},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -60,5 +62,66 @@ func TestNewPrometheusMetrics_PrematerializedSeries(t *testing.T) {
 		if v != 0 {
 			t.Errorf("AlertsProcessed[severity=%q] = %v, want 0", sev, v)
 		}
+	}
+}
+
+// TestMaterializeClaudeTokensForModels verifies that the dynamic-model
+// materialization API populates kind × severity × model series at zero so
+// dashboard queries return 0 instead of "no data" before the first Claude
+// call.
+func TestMaterializeClaudeTokensForModels(t *testing.T) {
+	pm := NewPrometheusMetricsForTest(ProductK8s)
+
+	// Before: no claude_tokens series
+	if got := testutil.CollectAndCount(pm.ClaudeTokens); got != 0 {
+		t.Errorf("ClaudeTokens series before MaterializeClaudeTokensForModels = %d, want 0", got)
+	}
+
+	pm.MaterializeClaudeTokensForModels([]string{"claude-opus-4-7", "claude-haiku-4-5"})
+
+	// After: 4 kinds × 4 severities × 2 models = 32
+	if got := testutil.CollectAndCount(pm.ClaudeTokens); got != 32 {
+		t.Errorf("ClaudeTokens series after = %d, want 32 (4 kinds x 4 severities x 2 models)", got)
+	}
+
+	// Empty model strings are skipped
+	pmEmpty := NewPrometheusMetricsForTest(ProductK8s)
+	pmEmpty.MaterializeClaudeTokensForModels([]string{"", "claude-opus-4-7", ""})
+	if got := testutil.CollectAndCount(pmEmpty.ClaudeTokens); got != 16 {
+		t.Errorf("ClaudeTokens with empty models filtered = %d, want 16 (4x4x1)", got)
+	}
+
+	// Idempotent
+	pm.MaterializeClaudeTokensForModels([]string{"claude-opus-4-7", "claude-haiku-4-5"})
+	if got := testutil.CollectAndCount(pm.ClaudeTokens); got != 32 {
+		t.Errorf("ClaudeTokens after second call = %d, want 32 (idempotent)", got)
+	}
+
+	// Nil receiver is a no-op
+	var nilPM *PrometheusMetrics
+	nilPM.MaterializeClaudeTokensForModels([]string{"x"}) // must not panic
+}
+
+// TestAnalysisPolicy_AllModels verifies the helper used by cmd/* to feed
+// MaterializeClaudeTokensForModels.
+func TestAnalysisPolicy_AllModels(t *testing.T) {
+	p := &AnalysisPolicy{
+		DefaultModel: "claude-opus-4-7",
+		ModelOverrides: map[Severity]string{
+			SeverityCritical: "claude-opus-4-7", // dup of default — must not appear twice
+			SeverityWarning:  "claude-haiku-4-5",
+			SeverityInfo:     "", // empty — must be skipped
+		},
+	}
+	got := p.AllModels()
+	if len(got) != 2 {
+		t.Errorf("AllModels = %v, want 2 unique entries", got)
+	}
+	seen := map[string]bool{}
+	for _, m := range got {
+		seen[m] = true
+	}
+	if !seen["claude-opus-4-7"] || !seen["claude-haiku-4-5"] {
+		t.Errorf("AllModels missing expected models: %v", got)
 	}
 }

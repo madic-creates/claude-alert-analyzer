@@ -28,6 +28,30 @@ func (p *AnalysisPolicy) ModelFor(sev Severity) string {
 	return p.DefaultModel
 }
 
+// AllModels returns the deduplicated set of every model the policy may emit.
+// Used at startup to pre-materialize alert_analyzer_claude_tokens_total series
+// so dashboard queries return 0 instead of "no data" before the first Claude
+// call.
+func (p *AnalysisPolicy) AllModels() []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	add := func(m string) {
+		if m == "" {
+			return
+		}
+		if _, ok := seen[m]; ok {
+			return
+		}
+		seen[m] = struct{}{}
+		out = append(out, m)
+	}
+	add(p.DefaultModel)
+	for _, m := range p.ModelOverrides {
+		add(m)
+	}
+	return out
+}
+
 // MaxRoundsFor returns the configured tool-loop round budget for a given
 // severity, falling back to DefaultMaxRounds. A return value of 0 means
 // "static-only analysis" (caller uses Analyze, not RunToolLoop).

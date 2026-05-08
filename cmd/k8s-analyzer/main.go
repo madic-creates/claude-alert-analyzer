@@ -139,6 +139,7 @@ func main() {
 		slog.Error("metrics init failed", "error", err)
 		os.Exit(1)
 	}
+	prom.MaterializeClaudeTokensForModels(policy.AllModels())
 	metrics := shared.NewAlertMetrics(prom)
 	slog.Info("metrics initialized",
 		"prefix", "alert_analyzer_*",
