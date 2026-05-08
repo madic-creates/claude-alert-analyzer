@@ -8,14 +8,12 @@ Instead of staring at a 3 AM "DiskPressure" alert and manually running ten `kube
 
 <br clear="left">
 
-## Blog Posts
-
-Background and development story (in German):
+## Blog posts (German)
 
 - [KI-gestützte Alert-Analyse für Kubernetes und CheckMK](https://www.geekbundle.org/ki-gestuetzte-alert-analyse-fuer-kubernetes-und-checkmk/)
 - [Claude Analyzer — Entwicklung](https://www.geekbundle.org/claude-analyzer-entwicklung/)
 
-## How It Works
+## How it works
 
 ```
 Alert fires → Webhook → Gather diagnostics → Claude / LLM API → ntfy notification
@@ -30,16 +28,42 @@ Two independent analyzers share a common library but run as separate binaries:
 
 Both deduplicate repeat alerts (configurable cooldown) and process work concurrently (5 workers, queue depth 20). All diagnostic output is passed through a secret-redaction filter before leaving the analyzer.
 
-# Operations
+## Quick start (Docker — CheckMK)
 
-## Prerequisites
+The fastest way to try the **checkmk-analyzer**. For Kubernetes, see [`docs/install-k8s.md`](docs/install-k8s.md).
 
-- An [Anthropic API key](https://console.anthropic.com/) (`ANTHROPIC_API_KEY` → `x-api-key` header), **or** an OpenRouter / compatible-provider token (`ANTHROPIC_AUTH_TOKEN` → `Authorization: Bearer` header) — exactly one of the two
-- An [ntfy](https://ntfy.sh) server for receiving analysis results
-- **k8s-analyzer**: Kubernetes cluster with Alertmanager
-- **checkmk-analyzer**: CheckMK instance with an automation user, and SSH access to monitored hosts
+You need:
 
-## Container Images
+- An [Anthropic API key](https://console.anthropic.com/) or compatible token
+- An [ntfy](https://ntfy.sh) server
+- SSH key + `known_hosts` for the monitored hosts (unprivileged user)
+- A CheckMK automation user
+
+```bash
+mkdir -p ./ssh
+cp /path/to/id_ed25519  ./ssh/id_ed25519
+cp /path/to/known_hosts ./ssh/known_hosts
+chmod 600 ./ssh/id_ed25519
+
+docker run -d --name checkmk-analyzer \
+  --restart unless-stopped --read-only --cap-drop ALL --user 65534:65534 \
+  -p 127.0.0.1:8080:8080 -p 127.0.0.1:9101:9101 \
+  -v "$(pwd)/ssh:/ssh:ro" \
+  -e WEBHOOK_SECRET="change-me" \
+  -e ANTHROPIC_API_KEY="sk-ant-..." \
+  -e CHECKMK_API_URL="https://checkmk.example.com/mysite/check_mk/api/1.0/" \
+  -e CHECKMK_API_USER="automation" \
+  -e CHECKMK_API_SECRET="..." \
+  -e NTFY_PUBLISH_URL="https://ntfy.example.com" \
+  -e NTFY_PUBLISH_TOPIC="checkmk-analysis" \
+  ghcr.io/madic-creates/claude-alert-checkmk-analyzer:latest
+
+curl -sf http://127.0.0.1:8080/health
+```
+
+Then install the CheckMK notification script and create a notification rule — full steps in [`docs/install-checkmk.md`](docs/install-checkmk.md).
+
+## Container images
 
 Pre-built images are published to GHCR on every push to `main`:
 
@@ -55,419 +79,24 @@ Both are also tagged with the short commit SHA (e.g. `:a1b2c3d`) for pinning.
 | `claude-alert-kubernetes-analyzer` | `scratch` | ~13 MB |
 | `claude-alert-checkmk-analyzer` | `alpine:3.23` | ~25 MB (includes `openssh-client`) |
 
-## Installation — K8s Analyzer
+## Documentation
 
-### 1. Deploy the analyzer
+**Install**
 
-Deploy `ghcr.io/madic-creates/claude-alert-kubernetes-analyzer:latest` into your cluster. The analyzer uses in-cluster config (`rest.InClusterConfig()`) and must therefore run inside the cluster it is analyzing.
+- [`docs/install-k8s.md`](docs/install-k8s.md) — Kubernetes deployment (Kustomize manifests, Alertmanager wiring, RBAC)
+- [`docs/install-checkmk.md`](docs/install-checkmk.md) — CheckMK deployment (Docker / Compose, notification script, rules, optional `ai_context` host attribute)
 
-Minimum required environment variables:
+**Operations**
 
-- `WEBHOOK_SECRET` — bearer token that Alertmanager must present
-- `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` — Anthropic API key or compatible provider token
-- `PROMETHEUS_URL` — only if your Prometheus isn't at the default address
+- [`docs/configuration.md`](docs/configuration.md) — full env-var reference (shared, k8s, checkmk, LLM provider, storm robustness)
+- [`docs/observability.md`](docs/observability.md) — API endpoints, Prometheus metrics, scrape config, logging
+- [`docs/security.md`](docs/security.md) — hardening summary, agentic-loop guardrails, RBAC and SSH details
+- [`docs/cost-and-storm-protection.md`](docs/cost-and-storm-protection.md) — operator guide for prompt caching, severity-based routing, token-cost dashboards, storm-mode and circuit-breaker rollout
 
-The analyzer needs read access to cluster resources (events, pods, pod logs) — bind it to a ServiceAccount with a read-only ClusterRole. The agent enforces a verb allowlist (read-only built-ins only) and rejects identity-overriding flags before invoking `kubectl`, but RBAC is the authoritative gate — exclude `secrets` from the role to keep credentials out of reach.
+**Development & maintenance**
 
-Example manifests (Deployment, ServiceAccount + RBAC, Service, Secret template, Kustomization) live in [`deploy/k8s-analyzer/`](deploy/k8s-analyzer/). To deploy:
-
-```bash
-# 1. Fill in secrets
-cp deploy/k8s-analyzer/secret.example.yaml deploy/k8s-analyzer/secret.yaml
-$EDITOR deploy/k8s-analyzer/secret.yaml
-# then uncomment `- secret.yaml` in deploy/k8s-analyzer/kustomization.yaml
-
-# 2. Apply
-kubectl apply -k deploy/k8s-analyzer/
-```
-
-The manifests target namespace `monitoring` and apply the same hardening as the Docker image (non-root UID 65534, read-only root FS, all capabilities dropped, `RuntimeDefault` seccomp). Review them before applying — in particular `PROMETHEUS_URL`, `MAX_AGENT_ROUNDS`, and resource limits.
-
-### 2. Configure Alertmanager
-
-Add a webhook receiver pointing at the analyzer's `/webhook` endpoint with the matching bearer token:
-
-```yaml
-routes:
-  - receiver: claude-analyzer
-    matchers:
-      - severity =~ "warning|critical"
-    continue: true
-  - receiver: claude-analyzer
-    matchers:
-      - alertname = "CPUThrottlingHigh"
-receivers:
-  - name: claude-analyzer
-    webhook_configs:
-      - url: http://claude-k8s-analyzer.monitoring:8080/webhook
-        http_config:
-          authorization:
-            type: Bearer
-            credentials: <WEBHOOK_SECRET>
-```
-
-## Installation — CheckMK Analyzer
-
-### 1. Deploy the analyzer
-
-Deploy `ghcr.io/madic-creates/claude-alert-checkmk-analyzer:latest`:
-
-- Required env vars: `WEBHOOK_SECRET`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, `CHECKMK_API_USER`, `CHECKMK_API_SECRET`
-- SSH private key mounted at `/ssh/id_ed25519`
-- SSH `known_hosts` file mounted at `/ssh/known_hosts` (strict host checking — no TOFU)
-
-The SSH user (`SSH_USER`, default `nagios`) must be an **unprivileged** account. The analyzer enforces a command denylist on top of that as defense in depth.
-
-Example — starting the analyzer with plain Docker:
-
-```bash
-# Prepare SSH material (private key + known_hosts) in a local directory
-mkdir -p ./ssh
-cp /path/to/id_ed25519  ./ssh/id_ed25519
-cp /path/to/known_hosts ./ssh/known_hosts
-chmod 600 ./ssh/id_ed25519
-
-docker run -d \
-  --name checkmk-analyzer \
-  --restart unless-stopped \
-  --read-only \
-  --cap-drop ALL \
-  --user 65534:65534 \
-  -p 127.0.0.1:8080:8080 \
-  -p 127.0.0.1:9101:9101 \
-  -v "$(pwd)/ssh:/ssh:ro" \
-  -e WEBHOOK_SECRET="change-me" \
-  -e ANTHROPIC_API_KEY="sk-ant-..." \
-  -e CHECKMK_API_URL="https://checkmk.example.com/mysite/check_mk/api/1.0/" \
-  -e CHECKMK_API_USER="automation" \
-  -e CHECKMK_API_SECRET="..." \
-  -e NTFY_PUBLISH_URL="https://ntfy.example.com" \
-  -e NTFY_PUBLISH_TOPIC="checkmk-analysis" \
-  ghcr.io/madic-creates/claude-alert-checkmk-analyzer:latest
-
-# Tail logs
-docker logs -f checkmk-analyzer
-
-# Smoke-test the health endpoint
-curl -sf http://127.0.0.1:8080/health
-```
-
-Or the equivalent with Docker Compose (`docker-compose.yaml`):
-
-```yaml
-services:
-  checkmk-analyzer:
-    image: ghcr.io/madic-creates/claude-alert-checkmk-analyzer:latest
-    restart: unless-stopped
-    read_only: true
-    cap_drop: [ALL]
-    user: "65534:65534"
-    ports:
-      - "127.0.0.1:8080:8080"
-      - "127.0.0.1:9101:9101"
-    volumes:
-      - ./ssh:/ssh:ro
-    environment:
-      WEBHOOK_SECRET: "change-me"
-      ANTHROPIC_API_KEY: "sk-ant-..."
-      CHECKMK_API_URL: "https://checkmk.example.com/mysite/check_mk/api/1.0/"
-      CHECKMK_API_USER: "automation"
-      CHECKMK_API_SECRET: "..."
-      NTFY_PUBLISH_URL: "https://ntfy.example.com"
-      NTFY_PUBLISH_TOPIC: "checkmk-analysis"
-```
-
-Start with `docker compose up -d`. See [Configuration](#configuration) for the full environment-variable reference.
-
-### 2. Install the notification script
-
-The script at `deploy/scripts/claude-analyzer-notify.sh` bridges CheckMK notifications to the analyzer webhook:
-
-```bash
-cp deploy/scripts/claude-analyzer-notify.sh \
-  /omd/sites/<site>/local/share/check_mk/notifications/
-chmod +x /omd/sites/<site>/local/share/check_mk/notifications/claude-analyzer-notify.sh
-```
-
-For containerized CheckMK deployments, mount the script via a ConfigMap.
-
-### 3. Create a notification rule in CheckMK
-
-1. Go to **Setup > Notifications > Add rule**
-2. Notification method: **Custom script** `claude-analyzer-notify.sh`
-3. Parameter 1: Webhook URL (default: `http://claude-checkmk-analyzer.monitoring:8080/webhook`)
-4. Parameter 2: Webhook secret (must match `WEBHOOK_SECRET`)
-5. **Enable "Recovery" as a notification event** — required for cooldown deduplication to work correctly.
-
-Script exit codes: `0` = success, `1` = 503/queue full (CheckMK will retry), `2` = fatal error.
-
-> **Why Recovery notifications are required:** When a service fires, a cooldown prevents duplicate analysis. If the service recovers and fails again inside the cooldown window, the second failure would be silently suppressed without a Recovery notification to clear the cooldown. Enabling Recovery ensures any subsequent PROBLEM after a recovery is analyzed immediately.
-
-### 4. (Optional) Host context via custom attribute
-
-The checkmk-analyzer can inject operator-provided host notes into the Claude prompt, giving the model host-specific context (OS, config paths, operational hints) before it starts investigating. This saves SSH rounds spent discovering basics.
-
-Setup in CheckMK:
-
-1. **Setup > Custom host attributes > Create new attribute**
-2. Name: `ai_context`, Topic: Custom attributes, Data type: Simple Text
-3. Tick "Show in host tables"
-
-Example value:
-
-```
-Debian 12, Nginx reverse proxy. Config: /etc/nginx/sites-enabled/. On disk-alerts first check /var/log/nginx.
-```
-
-When set, the attribute appears as a "Host Context (operator-provided)" section in the prompt, before alert details. Content is sanitized (control chars stripped, trimmed, truncated at 2 KB). Hosts without the attribute behave exactly as before.
-
-## Configuration
-
-### Shared environment variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `WEBHOOK_SECRET` | **(required)** | Bearer token for webhook authentication |
-| `ANTHROPIC_API_KEY` | **(one of)** | Anthropic API key (sets `x-api-key` header). Exactly one of this or `ANTHROPIC_AUTH_TOKEN` must be set; both-set is a fatal error at startup |
-| `ANTHROPIC_AUTH_TOKEN` | **(one of)** | OpenRouter or compatible API token (sets `Authorization: Bearer` header) |
-| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/` | LLM API endpoint base. The SDK appends `/v1/messages` itself, so do not include the path here |
-| `CLAUDE_MODEL` | `claude-sonnet-4-6` | Model ID for analysis |
-| `PORT` | `8080` | HTTP listen port for `/health` and `/webhook` |
-| `METRICS_PORT` | `9101` | Port for the Prometheus `/metrics` endpoint |
-| `COOLDOWN_SECONDS` | `300` | Seconds before re-analyzing the same alert |
-| `NTFY_PUBLISH_URL` | `https://ntfy.example.com` | ntfy server URL |
-| `NTFY_PUBLISH_TOPIC` | *(varies per analyzer)* | ntfy topic name |
-| `NTFY_PUBLISH_TOKEN` | *(empty)* | ntfy auth token (optional) |
-| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
-| `MAX_AGENT_ROUNDS` | `10` | Max tool-loop rounds per agentic analysis (1–50). Per-severity overrides (`MAX_AGENT_ROUNDS_<SEVERITY>`) accept `0` for static-only mode — see [docs/cost-and-storm-protection.md](docs/cost-and-storm-protection.md) |
-
-### K8s analyzer
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PROMETHEUS_URL` | `http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090` | Prometheus endpoint |
-| `MAX_LOG_BYTES` | `2048` | Per-pod log truncation limit |
-| `SKIP_RESOLVED` | `true` | Ignore resolved alerts |
-| `NTFY_PUBLISH_TOPIC` | `kubernetes-analysis` | Default ntfy topic |
-
-### CheckMK analyzer
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CHECKMK_API_URL` | `http://checkmk-service.monitoring:5000/cmk/check_mk/api/1.0/` | CheckMK REST API URL |
-| `CHECKMK_API_USER` | **(required)** | CheckMK automation user |
-| `CHECKMK_API_SECRET` | **(required)** | CheckMK automation secret |
-| `SSH_ENABLED` | `true` | Enable agentic SSH diagnostics (`false` = analyze without SSH) |
-| `SSH_USER` | `nagios` | SSH user for host diagnostics |
-| `SSH_KEY_PATH` | `/ssh/id_ed25519` | Path to SSH private key |
-| `SSH_KNOWN_HOSTS_PATH` | `/ssh/known_hosts` | Path to known_hosts file |
-| `SSH_DENIED_COMMANDS` | *(built-in default)* | Comma-separated denylist. Empty = no guardrails. See [`DefaultDeniedCommands`](internal/checkmk/agent.go) for the current default list |
-| `NTFY_PUBLISH_TOPIC` | `checkmk-analysis` | Default ntfy topic |
-
-The default denylist is defined in [`internal/checkmk/agent.go`](internal/checkmk/agent.go) as `DefaultDeniedCommands` — consult the source for the authoritative, always-current list. It covers destructive filesystem commands, privilege escalation, process/user management, networking and mount tools, shells and interpreters, and similar classes.
-
-`systemctl` is a special case: when denied, read-only subcommands (`status`, `show`, `is-active`, `is-failed`, `is-enabled`, `list-units`, `list-unit-files`, `list-timers`, `list-sockets`, `list-dependencies`) are still allowed.
-
-### LLM provider
-
-The analyzer talks to the Anthropic Messages API via the official `anthropic-sdk-go` client. Configure auth via env vars:
-
-- `ANTHROPIC_API_KEY` — sets `x-api-key` header (Anthropic's native scheme)
-- `ANTHROPIC_AUTH_TOKEN` — sets `Authorization: Bearer` header (required for OpenRouter)
-- `ANTHROPIC_BASE_URL` — optional; default is the Anthropic API. Set to `https://openrouter.ai/api` for OpenRouter.
-
-Exactly one of `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` must be set at startup. Response tokens are capped at 2048 (`Analyze`) / 4096 (tool-loop rounds).
-
-### Cost & storm protection
-
-The analyzers ship with prompt caching (always on), severity-based model routing, severity-based tool-round budgets, and three opt-in storm-robustness protections (group-cooldown, storm-mode, circuit-breaker). Token-cost Prometheus counters expose cache-hit rate and per-model spend.
-
-Operator-facing details — setup recommendations, PromQL queries for cache-hit-rate and cost dashboards, alerting examples, rollout playbook, and troubleshooting — live in [docs/cost-and-storm-protection.md](docs/cost-and-storm-protection.md). Architecture and component reference in [docs/cost-and-storm-protection-internals.md](docs/cost-and-storm-protection-internals.md).
-
-#### Storm robustness env vars (optional, default disabled)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `GROUP_COOLDOWN_SECONDS` | `0` | Coarser dedup: alertname+namespace (k8s) / host+service (checkmk). `0` = disabled |
-| `STORM_MODE_THRESHOLD` | `0` | Alerts/5min before forcing rounds=0 + aggregated ntfy. `0` = disabled |
-| `STORM_MODE_NOTIFY_INTERVAL` | `60s` | Storm-aggregator emit interval |
-| `CIRCUIT_BREAKER_THRESHOLD` | `0` | Consecutive analysis failures before open. `0` = disabled |
-| `CIRCUIT_BREAKER_OPEN_SECONDS` | `60` | Open-state duration |
-| `CIRCUIT_BREAKER_MAX_PROBE_SECONDS` | `60` | Half-open probe watchdog timeout |
-| `CIRCUIT_BREAKER_NOTIFY_INTERVAL` | `300s` | Breaker-aggregator emit interval |
-
-See [docs/cost-and-storm-protection.md](docs/cost-and-storm-protection.md) for the recommended rollout sequence.
-
-## API Endpoints
-
-Both analyzers expose two HTTP servers:
-
-**Main server** (`PORT`, default `8080`)
-
-- `GET /health` — liveness probe, returns `200 ok`
-- `POST /webhook` — alert receiver, requires `Authorization: Bearer <WEBHOOK_SECRET>`
-
-**Metrics server** (`METRICS_PORT`, default `9101`)
-
-- `GET /metrics` — Prometheus metrics, no authentication required
-
-## Observability
-
-### Metrics
-
-The `/metrics` endpoint exposes Prometheus-format data in two sections.
-
-**Operational counters** (unlabeled, always present):
-
-| Metric | Type | Description |
-|--------|------|-------------|
-| `alert_analyzer_webhooks_received_total` | counter | Total webhook requests received |
-| `alert_analyzer_alerts_queued_total` | counter | Alerts enqueued for processing |
-| `alert_analyzer_alerts_queue_full_total` | counter | Alerts dropped because queue was full |
-| `alert_analyzer_alerts_cooldown_total` | counter | Alerts skipped due to active cooldown |
-| `alert_analyzer_alerts_processed_total` | counter | Alerts successfully analyzed and published |
-| `alert_analyzer_alerts_failed_total` | counter | Alerts where analysis or publishing failed |
-| `alert_analyzer_processing_duration_seconds` | summary | Processing time per alert |
-
-**Labeled metrics** (with `source` and/or `severity`):
-
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `alerts_analyzed_total` | counter | `source`, `severity` | Alerts successfully analyzed |
-| `alerts_cooldown_total` | counter | `source` | Alerts skipped due to active cooldown |
-| `queue_depth` | gauge | `source` | Current alerts waiting in the work queue |
-| `claude_api_duration_seconds` | histogram | — | Claude API call latency |
-| `claude_api_errors_total` | counter | `source` | Claude API errors |
-| `ntfy_publish_errors_total` | counter | `source` | ntfy publish failures |
-| `claude_input_tokens_total` | counter | `source`, `severity`, `model` | Claude API input tokens (excluding cache hits) |
-| `claude_output_tokens_total` | counter | `source`, `severity`, `model` | Claude API output tokens |
-| `claude_cache_creation_tokens_total` | counter | `source`, `severity`, `model` | Tokens that created cache entries (~25% surcharge) |
-| `claude_cache_read_tokens_total` | counter | `source`, `severity`, `model` | Tokens served from cache (~10% of regular input cost) |
-
-`source` is `k8s` or `checkmk`. The four `claude_*_tokens_total` counters drive cache-hit-rate and cost dashboards — see [docs/cost-and-storm-protection.md](docs/cost-and-storm-protection.md) for ready-made PromQL queries.
-
-Example scrape config:
-
-```yaml
-- job_name: claude-alert-analyzer
-  static_configs:
-    - targets: ['claude-alert-analyzer.monitoring:9101']
-```
-
-### Logging
-
-Structured JSON logs to stdout via Go's `slog`. Verbosity is controlled by `LOG_LEVEL` (`debug`, `info`, `warn`, `error`). Collect with whichever log pipeline you already use.
-
-## Security
-
-### Both analyzers
-
-- Non-root execution (UID 65534)
-- Read-only root filesystem
-- All Linux capabilities dropped
-- Fail-closed webhook auth (missing/invalid token → rejected)
-- All gathered output passes through a secret-redaction filter before being sent to Claude (passwords, tokens, API keys, PEM blocks, emails)
-- Claude response tokens capped at 2048
-
-### CheckMK analyzer (additional)
-
-- **Host validation**: both `hostname` and `host_address` from the alert must match a known CheckMK host before any SSH connection is attempted
-- **Strict SSH**: `known_hosts` mounted from a ConfigMap (no TOFU), key mounted as a volume (not via env var), no `ForwardAgent`
-- **Command denylist**: destructive/privileged commands blocked (defense in depth on top of an unprivileged SSH user)
-- **No shell**: commands run via SSH `exec` (argv), not through an interpreter
-- **No privilege escalation**: SSH user is unprivileged; no `sudo`, `su`, `dmesg`, or `pkexec`
-
-### Operational diagnostics (agentic loops)
-
-Both analyzers drive an agentic Claude tool-loop capped at `MAX_AGENT_ROUNDS` (default 10) rounds per analysis. The checkmk-analyzer uses SSH; the k8s-analyzer uses `kubectl_exec` and `promql_query`.
-
-**Allowed** — any read-only diagnostic command (`df`, `free`, `top`, `ps`, `journalctl`, `cat`/`tail`/`head` on logs, `ss`, `ip`, `du`, `lsblk`, `lsof`, `find`, `systemctl status/show`, …)
-
-**Denied** — destructive / state-modifying commands, defined in [`DefaultDeniedCommands`](internal/checkmk/agent.go). Configurable via `SSH_DENIED_COMMANDS`; set empty to disable all guardrails.
-
-Command output is redacted and truncated per command before being sent to Claude.
-
-## Maintenance
-
-### Image updates
-
-The [`build.yaml`](.github/workflows/build.yaml) workflow rebuilds and pushes both images on every push to `main` that touches `cmd/`, `internal/`, `Dockerfile`, `go.mod`, or `go.sum`. The workflow runs `go vet`, `go test -race`, and `golangci-lint` before publishing. Images are tagged with both the short commit SHA and `latest`.
-
-To pin a specific build, reference the SHA tag in your deployment manifest.
-
-### Dependency updates
-
-Renovate runs daily against Go modules, Docker base images, GitHub Actions, and pre-commit hook versions. Patch and minor updates automerge; major updates require manual approval. See [docs/renovate.md](docs/renovate.md) for configuration details and manual runs.
-
-### GHCR image cleanup
-
-A weekly workflow prunes old tags — keeps the newest `KEEP_TAGGED` (default 10) tagged versions and deletes all untagged/dangling manifests. See [docs/cleanup-ghcr.md](docs/cleanup-ghcr.md) for tuning.
-
-# Development
-
-Everything below is only relevant if you want to build, test, or modify the analyzer itself. For running it, the sections above are sufficient.
-
-## Prerequisites
-
-- Go 1.26+ (no CGO)
-- Docker (for container builds)
-
-## Build
-
-```bash
-# Build both binaries
-CGO_ENABLED=0 go build -o k8s-analyzer ./cmd/k8s-analyzer/
-CGO_ENABLED=0 go build -o checkmk-analyzer ./cmd/checkmk-analyzer/
-
-# Multi-stage Docker build (two targets)
-docker build --target k8s-analyzer      -t claude-alert-kubernetes-analyzer .
-docker build --target checkmk-analyzer  -t claude-alert-checkmk-analyzer .
-```
-
-## Test
-
-```bash
-# All tests
-go test ./...
-
-# Specific package
-go test ./internal/shared/
-go test ./internal/checkmk/
-
-# Race detector (as in CI)
-go test -race -count=1 ./...
-```
-
-## Project Layout
-
-- `internal/shared/` — common types (`AlertPayload`, `BaseConfig`, `AnalysisContext`), Claude API client, ntfy publisher, cooldown manager, secret redaction, HTTP server scaffolding, metrics
-- `internal/k8s/` — Alertmanager webhook handler, Prometheus queries, Kubernetes context gathering (events, pod status, logs), agentic tool-loop runner (`RunAgenticDiagnostics` in `agent.go`)
-- `internal/checkmk/` — CheckMK webhook handler, CheckMK REST API client, agentic SSH runner with alert-category detection (CPU/disk/memory/service)
-- `cmd/k8s-analyzer/` and `cmd/checkmk-analyzer/` — entrypoints: config loading, worker pool, HTTP server, graceful shutdown
-
-## Key Patterns
-
-- **Alert normalization** — both sources convert into `shared.AlertPayload` with a `Fields map[string]string` for source-specific data. k8s uses `label:` and `annotation:` prefixed keys.
-- **Context gathering** — each analyzer exposes `GatherContext(...)` returning `shared.AnalysisContext` (a list of named sections rendered into the prompt). Data collection runs concurrently: k8s fans out Prometheus + kube context; checkmk fans out host services + SSH.
-- **Agentic loops** — after static context gathering, both analyzers run `RunAgenticDiagnostics` which drives a multi-turn Claude tool-use loop. k8s exposes `kubectl_exec` and `promql_query`; checkmk exposes SSH command execution. Round budget is capped by `MAX_AGENT_ROUNDS`.
-- **Cooldown dedup** — `CooldownManager` prevents re-analyzing the same alert within the configured TTL. The cooldown is cleared on analysis failure so retries work.
-- **Provider flexibility** — the Claude client routes through `anthropic-sdk-go`. Either Anthropic's native `x-api-key` (`ANTHROPIC_API_KEY`) or OpenRouter-style `Authorization: Bearer` (`ANTHROPIC_AUTH_TOKEN`) is supported; the SDK selects the right header based on which env var is set.
-- **Cost routing** — `internal/shared/policy.go` (`AnalysisPolicy`) maps `Severity` → model + tool-loop rounds. Pipelines branch on `MaxRoundsFor() == 0` to call `Analyze` instead of `RunToolLoop`. Prompt caching is set at three breakpoints in `internal/shared/claude.go` (system, last tool, last `tool_result` per round).
-
-## Pre-commit
-
-This repo uses [pre-commit](https://pre-commit.com/) for local hygiene (trailing whitespace, line endings, private-key detection, smart-quote fixup, `golangci-lint --new-from-rev HEAD --fix`, `go test` on staged packages). Install once with `pre-commit install`. See [docs/pre-commit.md](docs/pre-commit.md).
-
-## CI/CD
-
-GitHub Actions (`.github/workflows/build.yaml`) runs tests and lint, then builds and pushes both images to GHCR on every qualifying push to `main`:
-
-- `ghcr.io/madic-creates/claude-alert-kubernetes-analyzer:{sha,latest}`
-- `ghcr.io/madic-creates/claude-alert-checkmk-analyzer:{sha,latest}`
-
-Further docs:
-
-- [docs/cost-and-storm-protection.md](docs/cost-and-storm-protection.md) — operator guide for prompt caching, severity-based routing, token-cost dashboards, and rollout playbook
-- [docs/pre-commit.md](docs/pre-commit.md) — pre-commit hook configuration
-- [docs/renovate.md](docs/renovate.md) — dependency update automation
-- [docs/cleanup-ghcr.md](docs/cleanup-ghcr.md) — GHCR tag retention
+- [`docs/development.md`](docs/development.md) — build, test, project layout, key patterns, CI/CD
+- [`docs/cost-and-storm-protection-internals.md`](docs/cost-and-storm-protection-internals.md) — architecture and component reference for the cost/storm features
+- [`docs/pre-commit.md`](docs/pre-commit.md) — pre-commit hook configuration
+- [`docs/renovate.md`](docs/renovate.md) — dependency update automation
+- [`docs/cleanup-ghcr.md`](docs/cleanup-ghcr.md) — GHCR tag retention
