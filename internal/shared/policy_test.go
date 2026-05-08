@@ -176,3 +176,21 @@ func TestAnalysisPolicy_IsDegradedAboveThreshold(t *testing.T) {
 		t.Fatal("count=11 > threshold=10: IsDegraded should be true")
 	}
 }
+
+// TestAnalysisPolicy_IsDegradedAtThreshold verifies that IsDegraded returns
+// false when the alert count equals the threshold exactly. IsDegraded uses
+// strict greater-than (count > threshold), so count == threshold is not
+// degraded — the alert rate must strictly exceed the threshold to engage
+// storm-mode. This pin test guards against a future refactor accidentally
+// changing > to >=, which would cause count-at-threshold to falsely suppress
+// agentic analysis.
+func TestAnalysisPolicy_IsDegradedAtThreshold(t *testing.T) {
+	storm := NewStormDetector(10, time.Now)
+	p := &AnalysisPolicy{Storm: storm}
+	for i := 0; i < 10; i++ {
+		storm.Record()
+	}
+	if p.IsDegraded() {
+		t.Fatal("count=10 == threshold=10: IsDegraded should be false (uses >, not >=)")
+	}
+}
