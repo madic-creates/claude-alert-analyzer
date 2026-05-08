@@ -201,6 +201,42 @@ func TestHandleWebhook_ResolvedClearsCooldown(t *testing.T) {
 	}
 }
 
+func TestHandleWebhook_ResolvedClearsGroupCooldown(t *testing.T) {
+	cfg := makeConfig()
+	cfg.SkipResolved = true
+	cfg.CooldownSeconds = 60
+	cfg.GroupCooldownTTL = time.Minute
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	}, nil, nil)
+
+	// Step 1: fire alert with fingerprint fp-a, sets both FP and group cooldowns.
+	alertA := Alert{Fingerprint: "fp-a", Labels: map[string]string{"alertname": "PodCrashLooping", "namespace": "prod", "severity": "warning"}, Status: "firing"}
+	postWebhook(t, handler, "test-secret", makeWebhook([]Alert{alertA}))
+	if enqueued.Load() != 1 {
+		t.Fatalf("step 1: expected 1 enqueued, got %d", enqueued.Load())
+	}
+
+	// Step 2: resolve alert fp-a → must clear BOTH fingerprint and group cooldowns.
+	alertAResolved := Alert{Fingerprint: "fp-a", Labels: alertA.Labels, Status: "resolved"}
+	postWebhook(t, handler, "test-secret", makeWebhook([]Alert{alertAResolved}))
+	if enqueued.Load() != 1 {
+		t.Fatalf("step 2: resolved should not enqueue, got %d", enqueued.Load())
+	}
+
+	// Step 3: new alert with DIFFERENT fingerprint but SAME alertname+namespace (same group key).
+	// Before the fix, the group cooldown was not cleared on resolution, so this would be
+	// silently suppressed even though the original alert resolved.
+	alertB := Alert{Fingerprint: "fp-b", Labels: alertA.Labels, Status: "firing"}
+	postWebhook(t, handler, "test-secret", makeWebhook([]Alert{alertB}))
+	if enqueued.Load() != 2 {
+		t.Errorf("step 3: expected 2 enqueued after group-cooldown cleared by resolution, got %d (group cooldown not cleared by resolved alert)", enqueued.Load())
+	}
+}
+
 func TestHandleWebhook_EnqueuesFiringAlert(t *testing.T) {
 	cfg := makeConfig()
 	cd := shared.NewCooldownManager()

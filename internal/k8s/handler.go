@@ -81,9 +81,15 @@ func HandleWebhook(
 			}
 
 			if cfg.SkipResolved && alert.Status == "resolved" {
-				// Clear the cooldown so that if the same alert fires again within
-				// the TTL window it is not silently suppressed.
+				// Clear both the fingerprint and group cooldowns so that if the
+				// same alert (or another alert in the same alertname+namespace group)
+				// fires again within the TTL window it is not silently suppressed.
+				// Without clearing the group cooldown, a subsequent alert with a
+				// different fingerprint but the same alertname+namespace would be
+				// blocked by the lingering group entry even though the original alert
+				// resolved.
 				cooldown.Clear(alert.Fingerprint)
+				cooldown.ClearGroup(groupKeyFromLabels(alert.Labels))
 				slog.Info("skipping resolved, cleared cooldown", "alertname", alert.Labels["alertname"])
 				continue
 			}
