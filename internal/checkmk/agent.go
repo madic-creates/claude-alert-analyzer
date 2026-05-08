@@ -939,7 +939,7 @@ func RunAgenticDiagnostics(
 			outcome = "exec_error"
 		case strings.HasPrefix(out, "Invalid command: "):
 			outcome = "rejected_validation"
-		case strings.HasPrefix(out, "Command denied"), strings.HasPrefix(out, "command denied"):
+		case strings.HasPrefix(out, "Command denied"):
 			outcome = "rejected_verb"
 		// Distinguish SSH timeout and context-cancellation from ordinary non-zero
 		// exits. runSSHCommand encodes timeouts as "timeout after <d>" and context

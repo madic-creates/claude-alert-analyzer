@@ -3366,3 +3366,43 @@ func TestRunAgenticDiagnostics_PanicRecovery(t *testing.T) {
 		t.Errorf("missing exec_error metric for panicked call; body:\n%s", body)
 	}
 }
+
+// TestRunAgenticDiagnostics_RejectedVerbMetricClassification verifies that
+// wrappedHandleTool records outcome="rejected_verb" when a command is blocked
+// by the denylist. denyReason always returns strings starting with "Command
+// denied" (capital C); this test confirms that the outcome switch matches that
+// prefix and increments the correct counter.
+func TestRunAgenticDiagnostics_RejectedVerbMetricClassification(t *testing.T) {
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+
+	runner := &driverToolLoopRunner{
+		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
+			// "rm" is in DefaultDeniedCommands; denyReason will return a string
+			// starting with "Command denied" which should map to rejected_verb.
+			result, err := handleTool("execute_command", json.RawMessage(`{"command":["rm","-rf","/tmp/test"]}`))
+			if err != nil {
+				t.Errorf("wrappedHandleTool returned unexpected error: %v", err)
+			}
+			if !strings.HasPrefix(result, "Command denied") {
+				t.Errorf("expected result to start with %q, got: %q", "Command denied", result)
+			}
+			return "analysis", nil
+		},
+	}
+
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, nilDialer{}, metrics, "host1", "10.0.0.1", "ctx", 10, "test-model",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	metrics.MetricsHandler()(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `agent_tool_calls_total{outcome="rejected_verb",source="checkmk",tool="execute_command"} 1`) {
+		t.Errorf("expected rejected_verb metric for denied command; body:\n%s", body)
+	}
+}
