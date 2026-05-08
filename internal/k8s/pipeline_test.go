@@ -994,3 +994,61 @@ type pipelineFakeClock struct {
 
 func (c *pipelineFakeClock) Now() time.Time          { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
 func (c *pipelineFakeClock) advance(d time.Duration) { c.mu.Lock(); c.t = c.t.Add(d); c.mu.Unlock() }
+
+// TestVerstaerkerBug_OpenBreakerKeepsCooldown_NoSecondAnalysis is the most
+// important behavioral test of the storm/cost-protection spec: an open
+// circuit-breaker plus a re-fired Alertmanager webhook must NOT result in a
+// second analysis attempt. The cooldown layer absorbs Alertmanager retries
+// so the closed breaker is not hammered.
+func TestVerstaerkerBug_OpenBreakerKeepsCooldown_NoSecondAnalysis(t *testing.T) {
+	// 1. Setup: cooldown manager + breaker with threshold=1 (already failed once below).
+	cm := shared.NewCooldownManager()
+	clk := &pipelineFakeClock{t: time.Unix(0, 0)}
+	breaker := shared.NewCircuitBreaker(1, time.Hour, time.Hour, clk.Now)
+	// Pre-fail the breaker so it's open.
+	p, _ := breaker.Acquire()
+	p.Done(errors.New("seed failure"))
+
+	an := &mockAnalyzer{returnAnalysis: "ok"}
+	tr := &mockToolRunner{}
+
+	pub := &pipelineFakePublisher{}
+	breakerNotify := shared.NewNotifyAggregator([]shared.Publisher{pub}, time.Hour, "Aggregate: %d", "5", nil)
+	defer breakerNotify.Stop(context.Background())
+
+	deps := PipelineDeps{
+		Cooldown:      cm,
+		Breaker:       breaker,
+		BreakerNotify: breakerNotify,
+		Metrics:       &shared.AlertMetrics{},
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "x", DefaultMaxRounds: 0},
+		GatherContext: func(_ context.Context, _ shared.AlertPayload) shared.AnalysisContext { return shared.AnalysisContext{} },
+		Analyzer:      an,
+		ToolRunner:    tr,
+		Publishers:    []shared.Publisher{pub},
+	}
+
+	// 2. Set the cooldown as if a previous webhook had set it.
+	cm.CheckAndSet("fp1", time.Hour)
+	cm.CheckAndSetGroup("g1", time.Hour)
+
+	// 3. ProcessAlert with breaker open → ErrCircuitOpen → cooldowns must remain.
+	alert := shared.AlertPayload{Fingerprint: "fp1", GroupKey: "g1", SeverityLevel: shared.SeverityWarning}
+	ProcessAlert(context.Background(), deps, alert)
+
+	if cm.CheckAndSet("fp1", time.Second) {
+		t.Fatal("after ErrCircuitOpen: fp1 cooldown should still be set")
+	}
+	if cm.CheckAndSetGroup("g1", time.Second) {
+		t.Fatal("after ErrCircuitOpen: g1 cooldown should still be set")
+	}
+	if an.calls != 0 || tr.calls != 0 {
+		t.Fatalf("Claude must NOT have been called; analyzer=%d tool=%d", an.calls, tr.calls)
+	}
+
+	// 4. Simulate Alertmanager retry at the pipeline level — same alert, breaker still open.
+	ProcessAlert(context.Background(), deps, alert)
+	if an.calls != 0 || tr.calls != 0 {
+		t.Fatalf("retry: Claude must STILL not have been called; analyzer=%d tool=%d", an.calls, tr.calls)
+	}
+}
