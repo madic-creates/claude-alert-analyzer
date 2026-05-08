@@ -68,6 +68,12 @@ k8s optional: `MAX_LOG_BYTES`, `PROMETHEUS_URL`, `SKIP_RESOLVED`.
 
 Severity-based overrides (`CLAUDE_MODEL_<SEVERITY>`, `MAX_AGENT_ROUNDS_<SEVERITY>`) are operator-facing and documented in [`docs/cost-and-storm-protection.md`](docs/cost-and-storm-protection.md).
 
+Phase 2 optional: `GROUP_COOLDOWN_SECONDS` (default 0 = disabled),
+`STORM_MODE_THRESHOLD` (default 0), `STORM_MODE_NOTIFY_INTERVAL` (default 60s),
+`CIRCUIT_BREAKER_THRESHOLD` (default 0), `CIRCUIT_BREAKER_OPEN_SECONDS` (default 60),
+`CIRCUIT_BREAKER_MAX_PROBE_SECONDS` (default 60),
+`CIRCUIT_BREAKER_NOTIFY_INTERVAL` (default 300s).
+
 k8s-analyzer runs in-cluster only (`rest.InClusterConfig()`).
 
 ## Cost & Storm Protection
@@ -80,7 +86,15 @@ Phase 1 ships three operator-facing features: prompt caching (always on), severi
 - Pipelines (`internal/k8s/pipeline.go`, `internal/checkmk/pipeline.go`) branch on `policy.MaxRoundsFor(...) == 0` to call `Analyzer.Analyze` (static-only) instead of `RunAgenticDiagnostics`.
 
 
-Phase 2 (storm-mode, circuit-breaker, group-cooldown) is designed but not yet implemented — see `docs/superpowers/specs/2026-05-01-storm-cost-protection-design.md` for the full design.
+- **Phase 2 (storm-mode + circuit-breaker + group-cooldown)**: Three new
+  components in `internal/shared/`: `StormDetector` (sliding-window),
+  `CircuitBreaker` (Permit-Token + Watchdog), `NotifyAggregator`
+  (Single-Owner-Goroutine + Request/Reply Stop). Pipeline tracks `phase` +
+  `analysisErr` for failure-phase-differentiated cooldown cleanup. All
+  features default disabled. See `docs/cost-and-storm-protection.md` for
+  operator guidance.
+
+Full design spec: `docs/superpowers/specs/2026-05-01-storm-cost-protection-design.md`.
 
 ## CI & Deployment
 

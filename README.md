@@ -282,7 +282,23 @@ Exactly one of `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` must be set at star
 
 The analyzers ship with prompt caching (always on), severity-based model routing, and severity-based tool-round budgets — all driven by optional environment variables. Token-cost Prometheus counters expose cache-hit rate and per-model spend.
 
+Phase 2 layers on three opt-in storm-robustness protections (group-cooldown, storm-mode, circuit-breaker), all default disabled.
+
 Operator-facing details: setup recommendations, PromQL queries for cache-hit-rate and cost dashboards, alerting examples, rollout playbook, and troubleshooting live in [docs/cost-and-storm-protection.md](docs/cost-and-storm-protection.md).
+
+#### Phase 2 — Storm robustness (optional, default disabled)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GROUP_COOLDOWN_SECONDS` | `0` | Coarser dedup: alertname+namespace (k8s) / host+service (checkmk). `0` = disabled |
+| `STORM_MODE_THRESHOLD` | `0` | Alerts/5min before forcing rounds=0 + aggregated ntfy. `0` = disabled |
+| `STORM_MODE_NOTIFY_INTERVAL` | `60s` | Storm-aggregator emit interval |
+| `CIRCUIT_BREAKER_THRESHOLD` | `0` | Consecutive analysis failures before open. `0` = disabled |
+| `CIRCUIT_BREAKER_OPEN_SECONDS` | `60` | Open-state duration |
+| `CIRCUIT_BREAKER_MAX_PROBE_SECONDS` | `60` | Half-open probe watchdog timeout |
+| `CIRCUIT_BREAKER_NOTIFY_INTERVAL` | `300s` | Breaker-aggregator emit interval |
+
+See [docs/cost-and-storm-protection.md](docs/cost-and-storm-protection.md) for the recommended migration sequence.
 
 ## API Endpoints
 

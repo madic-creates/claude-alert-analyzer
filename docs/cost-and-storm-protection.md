@@ -2,8 +2,8 @@
 
 Practical guide for operators running the alert analyzers under cost or load
 pressure. Phase 1 ships with prompt caching, severity-based routing, and
-token-cost metrics. Phase 2 (storm-mode, circuit-breaker, group-cooldown) is
-not yet implemented.
+token-cost metrics. Phase 2 adds storm-mode, circuit-breaker, and
+group-cooldown — all opt-in, default disabled.
 
 ## At a glance
 
@@ -262,21 +262,121 @@ unset ANTHROPIC_API_KEY  # only one of API_KEY / AUTH_TOKEN may be set
 
 The SDK uses `Authorization: Bearer $ANTHROPIC_AUTH_TOKEN` against this base URL, which is OpenRouter's expected auth shape.
 
-## Phase 2 (planned, not shipped)
+## Phase 2 — Storm Robustness
 
-Three additional protections are designed but not yet implemented:
+Phase 2 adds three opt-in protections that close two attack surfaces left
+open by Phase 1: high cost from re-analyzing every distinct fingerprint
+during a storm, and the Storm-Verstärker-Bug where API failures clear
+cooldowns, causing Alertmanager to retry into a degraded API.
 
-- **Group-cooldown**: dedup at `alertname+namespace` (k8s) /
-  `host+service` (checkmk) granularity in addition to fingerprint.
-  Storms from many similar alerts collapse to one analysis.
-- **Storm-mode**: sliding-window detector that forces `rounds=0` cluster-
-  wide when alert rate exceeds a threshold, plus an aggregated ntfy
-  notification instead of per-alert messages.
-- **Circuit-breaker**: opens after consecutive Anthropic API failures,
-  blocks further calls for a cooldown window, half-open probe on recovery.
-  Gates at the analysis level so a probe is exactly one analysis (not one
-  HTTP round-trip).
+All Phase 2 features default to disabled (`THRESHOLD=0` / `SECONDS=0`).
+Enable each independently after observing the Phase 1 metrics.
 
-When Phase 2 ships, this document will gain corresponding env-var
-references and rollout steps. Spec lives at
+### Group-Cooldown
+
+Set `GROUP_COOLDOWN_SECONDS=60` (suggested). Both analyzers will treat alerts
+with the same group key as a single alert during the TTL window:
+
+- k8s: `groupKey = alertname:namespace`  (empty namespace → `alertname:_cluster_`)
+- CheckMK: `groupKey = host:service`     (empty service → `host:_host_`)
+
+Group-cooldown sits next to (not in place of) the existing fingerprint
+cooldown. The handler uses the atomic `CooldownManager.CheckAndSetWithGroup`
+to set both at once, with rollback if either is already in cooldown.
+
+### Storm-Mode
+
+Set `STORM_MODE_THRESHOLD=50` (alerts/5min, suggested). When the sliding
+5-minute window exceeds the threshold, the analyzer enters degraded mode:
+
+- All severities are forced to `rounds=0` (no tool-loop) — saves the most
+  cost per alert.
+- Group-key remains unchanged (storm mode doesn't widen dedup; that's
+  operator policy via `GROUP_COOLDOWN_SECONDS`).
+- Aggregated ntfy via the shared `NotifyAggregator`: one summary per
+  `STORM_MODE_NOTIFY_INTERVAL` (default 60s) instead of N per-alert messages.
+
+Gauge: `storm_mode_active{source}` (0/1) — page operators on `1` for >5min.
+
+### Circuit-Breaker
+
+Set `CIRCUIT_BREAKER_THRESHOLD=5` (consecutive failures, suggested). When
+5 logical analyses in a row fail, the breaker opens for
+`CIRCUIT_BREAKER_OPEN_SECONDS` (default 60). All `Acquire()` calls during
+that window return `ErrCircuitOpen` — alerts get aggregated into the
+breaker-aggregator instead of triggering API calls.
+
+After the open period the breaker enters half-open: exactly one probe
+analysis is allowed (with `rounds=0`). On success → closed; on failure →
+open again.
+
+A probe-watchdog (`CIRCUIT_BREAKER_MAX_PROBE_SECONDS`, default 60s)
+prevents stuck-state if the probe goroutine hangs without calling
+`permit.Done()`.
+
+Gauge: `claude_circuit_breaker_state{source}` (0=closed, 1=open, 2=half-open).
+
+### Storm-Verstärker-Bug Mitigation
+
+The pipeline tracks the failure phase (Pre-API / API / Post-API) and the
+analysis error in separate variables. Cooldowns are cleared only for
+Pre-API and API-phase failures that are NOT `ErrCircuitOpen`. With an
+open breaker, cooldowns remain set so Alertmanager-retries hit cooldowns
+on subsequent webhooks instead of hammering the degraded API.
+
+### Notify-Aggregator Drop Metric
+
+`notify_aggregator_drops_total{aggregator}` (counter, labels: `storm`,
+`breaker`) reports alerts that were dropped because:
+
+- the aggregator's in-channel was full (back-pressure),
+- the aggregator was already stopped (post-shutdown), or
+- the tick-flush failed to publish (e.g. ntfy unavailable).
+
+Sustained non-zero drops indicate the aggregation interval is too long
+for the current alert volume, or the publisher is failing. Aggregate
+notifications represent a lower bound on the input stream — the
+difference is in this metric.
+
+### Migration sequence
+
+1. Phase 1 PR is merged and stable. Observe `claude_input_tokens_total`,
+   `claude_cache_read_tokens_total`, etc.
+2. Enable `GROUP_COOLDOWN_SECONDS=60`. Observe `alerts_cooldown_total{source}`.
+3. After 1 week: enable `CIRCUIT_BREAKER_THRESHOLD=5`. Observe
+   `claude_circuit_breaker_state` and
+   `notify_aggregator_drops_total{aggregator="breaker"}`.
+4. Last: enable `STORM_MODE_THRESHOLD=50`. Observe `storm_mode_active`
+   and `notify_aggregator_drops_total{aggregator="storm"}`.
+
+### Recommended PromQL
+
+```
+# Cache-hit rate (Phase 1, Phase 2 contextual)
+sum(rate(claude_cache_read_tokens_total[5m]))
+  / sum(rate(claude_cache_read_tokens_total[5m])
+       + rate(claude_cache_creation_tokens_total[5m])
+       + rate(claude_input_tokens_total[5m]))
+
+# Storm-mode dwell-time (alerts on storm_mode_active=1 for >5min)
+storm_mode_active{source="k8s"} == 1
+
+# Breaker-open dwell-time (alerts on state=1 for >2min)
+claude_circuit_breaker_state{source="checkmk"} == 1
+
+# Aggregator-drop rate
+sum by (aggregator) (rate(notify_aggregator_drops_total[5m]))
+```
+
+### Multi-replica caveat
+
+All Phase 2 state (cooldown, storm-detector, circuit-breaker) is
+in-memory and pod-local. Running multiple replicas (HPA) fragments the
+mitigations: Alertmanager-retries can land on different pods and bypass
+the cooldown, the storm threshold is per-pod (so the effective storm
+threshold is N × THRESHOLD for N replicas), and breaker state is not
+shared. Operators with HPA should keep replica-count=1 unless absolutely
+necessary; scale up only on sustained load.
+
+Spec lives at
 `docs/superpowers/specs/2026-05-01-storm-cost-protection-design.md`.
