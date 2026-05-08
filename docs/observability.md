@@ -21,10 +21,6 @@ Standard Go runtime and process collectors (`go_*`, `process_*`) are also
 registered on the same registry with the same `product` label so the entire
 metric surface is uniformly addressable.
 
-> **Migrating from a previous release?** See
-> [`metrics-migration.md`](metrics-migration.md) for the full old → new
-> rename map and PromQL substitution examples.
-
 ### Pipeline
 
 | Metric | Type | Per-call labels | Description |
