@@ -991,6 +991,50 @@ func TestProcessAlert_AnalyzerErrorOpensBreaker(t *testing.T) {
 	}
 }
 
+// TestProcessAlert_ToolLoopPanicOpensBreaker verifies that a panic in the
+// agentic (rounds > 0) path is correctly reported through the permit so the
+// circuit breaker opens. This is the agentic-path counterpart to
+// TestProcessAlert_AnalyzerPanicOpensBreaker (which covers rounds==0).
+//
+// The cleanup-defer ordering — recover() runs first, sets analysisErr, then
+// permit.Done(analysisErr) — must hold for both the static and agentic paths.
+// Without it, permit.Done would observe analysisErr==nil and record a success
+// for the panicked tool-loop round, leaving the breaker closed.
+func TestProcessAlert_ToolLoopPanicOpensBreaker(t *testing.T) {
+	cm := shared.NewCooldownManager()
+	clk := &pipelineFakeClock{t: time.Unix(0, 0)}
+	breaker := shared.NewCircuitBreaker(1, time.Hour, time.Hour, clk.Now)
+
+	deps := PipelineDeps{
+		Cooldown: cm,
+		Breaker:  breaker,
+		Metrics:  &shared.AlertMetrics{},
+		Policy:   &shared.AnalysisPolicy{DefaultModel: "x", DefaultMaxRounds: 1},
+		GatherContext: func(_ context.Context, _ shared.AlertPayload) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		Analyzer: &mockAnalyzer{returnAnalysis: "ok"},
+		ToolRunner: &fakeToolLoopRunner{
+			driver: func(_ func(string, json.RawMessage) (string, error)) (string, error) {
+				panic("simulated tool-loop panic")
+			},
+		},
+		KubectlRunner: &fakeKubectlRunner{},
+		Prom:          &fakePromQLQuerier{},
+		Publishers:    []shared.Publisher{&pipelineFakePublisher{}},
+	}
+
+	// One panicked agentic analysis with threshold=1 should open the breaker.
+	func() {
+		defer func() { _ = recover() }() // swallow the re-panic so the test continues
+		ProcessAlert(context.Background(), deps, shared.AlertPayload{Fingerprint: "fp1"})
+	}()
+
+	if _, err := breaker.Acquire(); !errors.Is(err, shared.ErrCircuitOpen) {
+		t.Fatalf("breaker should be open after agentic-path tool-loop panic; Acquire returned err=%v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Test fixtures for Phase 2 pipeline tests.
 // Names are prefixed/suffixed to avoid collision with Phase 1 helpers above.
