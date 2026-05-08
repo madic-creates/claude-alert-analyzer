@@ -897,6 +897,53 @@ func TestProcessAlert_StormDegradedForcesRoundsZero(t *testing.T) {
 	}
 }
 
+// TestProcessAlert_AnalyzerPanicOpensBreaker verifies that a PANIC during
+// analysis is reported as a failure through the permit so the breaker can
+// open. Without the cleanup-defer ordering fix (permit.Done after recover()),
+// the closure-form `defer func() { permit.Done(analysisErr) }()` would run
+// FIRST in the LIFO defer chain — observing analysisErr=nil because the
+// assignment never completed — and the breaker would record a SUCCESS for
+// the panicked analysis. Final-review regression test.
+func TestProcessAlert_AnalyzerPanicOpensBreaker(t *testing.T) {
+	cm := shared.NewCooldownManager()
+	clk := &pipelineFakeClock{t: time.Unix(0, 0)}
+	breaker := shared.NewCircuitBreaker(1, time.Hour, time.Hour, clk.Now)
+
+	// Mock that panics inside Analyze. Use the existing mockAnalyzer struct
+	// from the file's fixtures by wrapping its Analyze with a panic.
+	panicAnalyzer := &panicMockAnalyzer{msg: "boom"}
+
+	deps := PipelineDeps{
+		Cooldown:      cm,
+		Breaker:       breaker,
+		Metrics:       &shared.AlertMetrics{},
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "x", DefaultMaxRounds: 0},
+		GatherContext: func(_ context.Context, _ shared.AlertPayload) shared.AnalysisContext { return shared.AnalysisContext{} },
+		Analyzer:      panicAnalyzer,
+		ToolRunner:    &mockToolRunner{},
+		Publishers:    []shared.Publisher{&pipelineFakePublisher{}},
+	}
+
+	// One panicked analysis with threshold=1 should open the breaker.
+	func() {
+		defer func() { _ = recover() }() // swallow the re-panic so the test continues
+		ProcessAlert(context.Background(), deps, shared.AlertPayload{Fingerprint: "fp1"})
+	}()
+
+	if _, err := breaker.Acquire(); !errors.Is(err, shared.ErrCircuitOpen) {
+		t.Fatalf("breaker should be open after a panicked analysis; Acquire returned err=%v", err)
+	}
+}
+
+// panicMockAnalyzer panics in Analyze(); used by TestProcessAlert_AnalyzerPanicOpensBreaker.
+type panicMockAnalyzer struct {
+	msg string
+}
+
+func (p *panicMockAnalyzer) Analyze(_ context.Context, _, _, _ string) (string, error) {
+	panic(p.msg)
+}
+
 // TestProcessAlert_AnalyzerErrorOpensBreaker verifies that an analysis failure
 // is correctly reported through the permit so that the breaker's
 // consecFailures counter increments and the breaker eventually opens.

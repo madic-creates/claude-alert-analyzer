@@ -67,6 +67,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	var (
 		phase       = phasePreAPI
 		analysisErr error
+		permit      *shared.Permit
 	)
 
 	defer func() {
@@ -75,14 +76,21 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	}()
 
 	defer func() {
-		// Phase-differentiated cooldown cleanup.
-		// Panic-recovery: capture the panic value into analysisErr so the
-		// switch below applies, then re-panic AFTER cleanup runs.
+		// Panic-recovery: capture the panic value into analysisErr so it flows
+		// into permit.Done() AND the phase-switch cooldown cleanup.
+		// Without this ordering, a panic between Acquire() and the assignment
+		// to analysisErr would leave analysisErr=nil and cause permit.Done(nil)
+		// — the breaker would record a SUCCESS for a panicked analysis.
 		if r := recover(); r != nil {
 			if analysisErr == nil {
 				analysisErr = fmt.Errorf("panic recovered: %v", r)
 			}
-			defer panic(r) // re-panic AFTER the cleanup deferred call runs
+			defer panic(r) // re-panic AFTER the cleanup body completes
+		}
+		// Settle the breaker permit FIRST so the breaker observes panics + late
+		// errors. permit may be nil if Acquire() failed in the API phase.
+		if permit != nil {
+			permit.Done(analysisErr)
 		}
 		switch phase {
 		case phasePreAPI:
@@ -156,7 +164,8 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 
 	// === Acquire breaker permit ===
 	phase = phaseAPI
-	permit, err := deps.Breaker.Acquire()
+	var err error
+	permit, err = deps.Breaker.Acquire()
 	if err != nil {
 		analysisErr = err
 		// Aggregate the alert into the breaker-aggregator instead of per-alert ntfy.
@@ -164,15 +173,14 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 			deps.BreakerNotify.Add(safeTitle)
 		}
 		slog.Warn("breaker open, dropping analysis", "hostname", hostname)
-		deps.Metrics.RecordClaudeAPIError(alert.Source)
+		// Note: claude_api_errors_total is NOT incremented here — ErrCircuitOpen
+		// is a pre-flight rejection, not a Claude-API failure. The
+		// claude_circuit_breaker_state gauge plus notify_aggregator_drops_total
+		// {aggregator="breaker"} cover this case for operators.
 		return
 	}
-	// Closure (NOT defer permit.Done(analysisErr)) so analysisErr is read at
-	// execution time, not at defer-registration time. With a direct argument,
-	// analysisErr would always be nil (we passed the err==nil check above)
-	// and the breaker would never see a failure → consecFailures stays 0 →
-	// breaker never opens.
-	defer func() { permit.Done(analysisErr) }()
+	// Settling the permit happens in the cleanup defer above so the breaker
+	// observes panics that occur between this point and the analysis assignment.
 
 	model := deps.Policy.ModelFor(alert.SeverityLevel)
 	rounds := deps.Policy.MaxRoundsFor(alert.SeverityLevel)
