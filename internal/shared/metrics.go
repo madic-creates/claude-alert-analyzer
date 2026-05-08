@@ -216,3 +216,35 @@ func newBufferedResponseWriter(buf *bytes.Buffer) *bufferedResponseWriter {
 func (w *bufferedResponseWriter) Header() http.Header         { return w.header }
 func (w *bufferedResponseWriter) WriteHeader(code int)        { w.code = code }
 func (w *bufferedResponseWriter) Write(b []byte) (int, error) { return w.buf.Write(b) }
+
+// SetStormMode sets the storm_mode_active gauge for the given source.
+// active=true → 1, active=false → 0. No-op when Prom is nil.
+func (m *AlertMetrics) SetStormMode(source string, active bool) {
+	if m == nil || m.Prom == nil {
+		return
+	}
+	v := 0.0
+	if active {
+		v = 1
+	}
+	m.Prom.StormModeActive.WithLabelValues(source).Set(v)
+}
+
+// SetBreakerState sets the claude_circuit_breaker_state gauge for the given
+// source. state: 0=closed, 1=open, 2=half-open. No-op when Prom is nil.
+func (m *AlertMetrics) SetBreakerState(source string, state int) {
+	if m == nil || m.Prom == nil {
+		return
+	}
+	m.Prom.ClaudeCircuitBreakerState.WithLabelValues(source).Set(float64(state))
+}
+
+// AggregatorDropsCounter returns the prometheus.Counter for the given
+// aggregator kind ("storm" or "breaker"). Returns nil when Prom is nil.
+// Constructed once at startup; safe to pass into NewNotifyAggregator.
+func (m *AlertMetrics) AggregatorDropsCounter(kind string) prometheus.Counter {
+	if m == nil || m.Prom == nil {
+		return nil
+	}
+	return m.Prom.NotifyAggregatorDrops.WithLabelValues(kind)
+}

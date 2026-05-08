@@ -21,7 +21,14 @@ const maxWebhookBodyBytes = 1 << 20 // 1 MiB
 // HandleWebhook returns an HTTP handler that receives CheckMK webhook payloads,
 // validates auth, applies cooldown, and enqueues alerts for processing.
 // metrics may be nil, in which case no counters are incremented by the handler.
-func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(shared.AlertPayload) bool, metrics *shared.AlertMetrics) http.HandlerFunc {
+// storm may be nil (storm-mode disabled).
+func HandleWebhook(
+	cfg Config,
+	cooldown *shared.CooldownManager,
+	enqueue func(shared.AlertPayload) bool,
+	metrics *shared.AlertMetrics,
+	storm *shared.StormDetector,
+) http.HandlerFunc {
 	cooldownTTL := time.Duration(cfg.CooldownSeconds) * time.Second
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +72,7 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "DOWNTIMECANCELLED", state))
 				cooldown.Clear(fingerprint(notif.Hostname, notif.ServiceDescription, "CUSTOM", state))
 			}
+			cooldown.ClearGroup(groupKeyFromNotif(notif))
 			slog.Info("skipping recovery, cleared alert cooldowns",
 				"hostname", notif.Hostname, "service", notif.ServiceDescription)
 			w.WriteHeader(http.StatusOK)
@@ -73,9 +81,10 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 		}
 
 		fp := fingerprint(notif.Hostname, notif.ServiceDescription, notif.NotificationType, notif.ServiceState)
+		groupKey := groupKeyFromNotif(notif)
 
-		if !cooldown.CheckAndSet(fp, cooldownTTL) {
-			slog.Info("in cooldown", "hostname", notif.Hostname, "service", notif.ServiceDescription)
+		if !cooldown.CheckAndSetWithGroup(fp, cooldownTTL, groupKey, cfg.GroupCooldownTTL) {
+			slog.Info("in cooldown", "hostname", notif.Hostname, "service", notif.ServiceDescription, "groupKey", groupKey)
 			if metrics != nil {
 				metrics.AlertsCooldown.Add(1)
 				metrics.RecordCooldown("checkmk")
@@ -84,6 +93,9 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 			fmt.Fprint(w, "in cooldown")
 			return
 		}
+
+		// Storm-mode counter: only counts alerts that pass the cooldown check.
+		storm.Record() // nil-safe
 
 		severity := "warning"
 		switch notif.ServiceState {
@@ -116,6 +128,7 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 			Severity:      severity,
 			SeverityLevel: shared.SeverityFromCheckMK(notif.ServiceState, notif.HostState),
 			Source:        "checkmk",
+			GroupKey:      groupKey,
 			Fields: map[string]string{
 				"hostname":            notif.Hostname,
 				"host_address":        notif.HostAddress,
@@ -136,10 +149,23 @@ func HandleWebhook(cfg Config, cooldown *shared.CooldownManager, enqueue func(sh
 		} else {
 			slog.Warn("queue full", "hostname", notif.Hostname)
 			cooldown.Clear(fp)
+			cooldown.ClearGroup(groupKey)
 			w.WriteHeader(http.StatusServiceUnavailable)
 			fmt.Fprint(w, "queue full")
 		}
 	}
+}
+
+// groupKeyFromNotif derives the group cooldown key from a CheckMK notification.
+// Empty service description (host-level events) is replaced with the sentinel
+// "_host_" so they don't collide with each other or with services that
+// happen to have an empty description.
+func groupKeyFromNotif(n CheckMKNotification) string {
+	svc := n.ServiceDescription
+	if svc == "" {
+		svc = "_host_"
+	}
+	return n.Hostname + ":" + svc
 }
 
 // fingerprint hashes the supplied parts using length-prefixed encoding so that

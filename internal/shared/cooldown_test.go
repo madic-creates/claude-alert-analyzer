@@ -2,6 +2,8 @@ package shared
 
 import (
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -42,9 +44,9 @@ func TestCooldown_ExpiredEntriesFullyEvicted(t *testing.T) {
 	// A new call must trigger eviction of ALL 150 expired entries.
 	cd.CheckAndSet("trigger", ttl)
 
-	cd.mu.Lock()
-	remaining := len(cd.entries)
-	cd.mu.Unlock()
+	cd.fpMu.Lock()
+	remaining := len(cd.fpEntries)
+	cd.fpMu.Unlock()
 
 	// Only "trigger" should remain.
 	if remaining != 1 {
@@ -82,5 +84,100 @@ func TestCooldown_LongTTLEntryNotEvictedByShortTTLSweep(t *testing.T) {
 	// fp-long must still be in cooldown — it was stored with a 10-second TTL.
 	if cd.CheckAndSet("fp-long", 10*time.Second) {
 		t.Error("fp-long was incorrectly evicted by the short-TTL sweep; it should still be in cooldown")
+	}
+}
+
+func TestCooldownManager_CheckAndSetGroup_FirstAndRepeat(t *testing.T) {
+	cm := NewCooldownManager()
+	if !cm.CheckAndSetGroup("g1", time.Second) {
+		t.Fatal("first call should set")
+	}
+	if cm.CheckAndSetGroup("g1", time.Second) {
+		t.Fatal("second call should be blocked")
+	}
+}
+
+func TestCooldownManager_ClearGroup(t *testing.T) {
+	cm := NewCooldownManager()
+	cm.CheckAndSetGroup("g1", time.Hour)
+	cm.ClearGroup("g1")
+	if !cm.CheckAndSetGroup("g1", time.Second) {
+		t.Fatal("after Clear, set should succeed again")
+	}
+}
+
+func TestCooldownManager_CheckAndSetWithGroup_BothEmpty(t *testing.T) {
+	cm := NewCooldownManager()
+	if !cm.CheckAndSetWithGroup("fp1", time.Second, "g1", time.Second) {
+		t.Fatal("first combined call should set both")
+	}
+	if cm.CheckAndSet("fp1", time.Second) {
+		t.Fatal("fingerprint should be blocked after combined set")
+	}
+	if cm.CheckAndSetGroup("g1", time.Second) {
+		t.Fatal("group should be blocked after combined set")
+	}
+}
+
+func TestCooldownManager_CheckAndSetWithGroup_GroupBlocksRollbackFP(t *testing.T) {
+	cm := NewCooldownManager()
+	cm.CheckAndSetGroup("g1", time.Hour)
+
+	if cm.CheckAndSetWithGroup("fp1", time.Second, "g1", time.Hour) {
+		t.Fatal("combined call should fail when group blocks")
+	}
+	if !cm.CheckAndSet("fp1", time.Second) {
+		t.Fatal("fingerprint should NOT have been set when group blocked")
+	}
+}
+
+func TestCooldownManager_CheckAndSetWithGroup_FPBlocksRollbackGroup(t *testing.T) {
+	cm := NewCooldownManager()
+	cm.CheckAndSet("fp1", time.Hour)
+
+	if cm.CheckAndSetWithGroup("fp1", time.Second, "g1", time.Hour) {
+		t.Fatal("combined call should fail when fingerprint blocks")
+	}
+	if !cm.CheckAndSetGroup("g1", time.Second) {
+		t.Fatal("group should NOT have been set when fingerprint blocked")
+	}
+}
+
+func TestCooldownManager_CheckAndSetWithGroup_EmptyGroupSkipsGroup(t *testing.T) {
+	cm := NewCooldownManager()
+	if !cm.CheckAndSetWithGroup("fp1", time.Second, "", time.Second) {
+		t.Fatal("empty group should not block fingerprint set")
+	}
+	if cm.CheckAndSet("fp1", time.Second) {
+		t.Fatal("fingerprint should now be set")
+	}
+	if !cm.CheckAndSetGroup("any", time.Second) {
+		t.Fatal("group map should be empty")
+	}
+}
+
+func TestCooldownManager_CheckAndSetWithGroup_ConcurrentAtomic(t *testing.T) {
+	cm := NewCooldownManager()
+	const N = 50
+	var ok int64
+	var fail int64
+	var wg sync.WaitGroup
+	wg.Add(N)
+	for i := 0; i < N; i++ {
+		go func(i int) {
+			defer wg.Done()
+			if cm.CheckAndSetWithGroup(fmt.Sprintf("fp-%d", i), time.Second, "shared-group", time.Second) {
+				atomic.AddInt64(&ok, 1)
+			} else {
+				atomic.AddInt64(&fail, 1)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if ok != 1 {
+		t.Fatalf("expected exactly 1 winner, got %d (rest=%d)", ok, fail)
+	}
+	if fail != N-1 {
+		t.Fatalf("expected %d losers, got %d", N-1, fail)
 	}
 }

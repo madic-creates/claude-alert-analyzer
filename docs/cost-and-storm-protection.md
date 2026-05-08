@@ -1,21 +1,27 @@
 # Cost & Storm Protection — Operations Guide
 
-Practical guide for operators running the alert analyzers under cost or load
-pressure. Phase 1 ships with prompt caching, severity-based routing, and
-token-cost metrics. Phase 2 (storm-mode, circuit-breaker, group-cooldown) is
-not yet implemented.
+Practical guide for operators running the alert analyzers under cost or
+load pressure. The analyzers ship with prompt caching, severity-based
+routing, token-cost metrics, group-cooldown, storm-mode, and a Claude-API
+circuit-breaker — most disabled by default and opt-in via env var.
+
+For architecture, component reference, and developer notes, see
+[`cost-and-storm-protection-internals.md`](cost-and-storm-protection-internals.md).
 
 ## At a glance
 
 | What | Default | How to enable |
 |---|---|---|
 | Prompt caching | **On** (transparent) | Always active — no opt-in |
+| Token-cost metrics | **On** | Always exposed on `:METRICS_PORT/metrics` |
 | Severity-based model routing | Off | Set any `CLAUDE_MODEL_<SEVERITY>` env var |
 | Severity-based agent rounds | Off | Set any `MAX_AGENT_ROUNDS_<SEVERITY>` env var |
-| Token-cost metrics | **On** | Always exposed on `:METRICS_PORT/metrics` |
+| Group-cooldown | Off | `GROUP_COOLDOWN_SECONDS=60` |
+| Storm-mode | Off | `STORM_MODE_THRESHOLD=50` |
+| Circuit-breaker | Off | `CIRCUIT_BREAKER_THRESHOLD=5` |
 
-Defaults preserve previous behavior. After upgrading without setting the new
-env vars, the only observable change is that Anthropic's prompt-cache
+Defaults preserve previous behavior. After upgrading without setting any
+opt-in env vars, the only observable change is that Anthropic's prompt-cache
 discount kicks in and the four `claude_*_tokens_total` metrics start
 populating.
 
@@ -121,10 +127,9 @@ Watch the analysis quality on a sample of warnings before fully committing.
 
 ## Metrics & dashboards
 
-Four new counters, all on `:METRICS_PORT/metrics`. Labels:
-`{source, severity, model}`. (Phase 1 records `severity="all"` because
-per-call severity isn't threaded into the API client yet — refined in a
-later iteration.)
+Four token counters, all on `:METRICS_PORT/metrics`. Labels:
+`{source, severity, model}`. (Severity is recorded as `"all"` because
+per-call severity isn't threaded into the API client yet — to be refined.)
 
 | Metric | Meaning |
 |---|---|
@@ -186,14 +191,17 @@ sum(rate(claude_input_tokens_total[5m]))
 
 ```promql
 # Output tokens climbing without input — probably an analysis loop
-# that's burning rounds. Phase 2 will gate this with the circuit-breaker.
+# that's burning rounds. Enable the circuit-breaker to gate this.
 rate(claude_output_tokens_total[5m]) /
   rate(claude_input_tokens_total[5m]) > 0.15
 ```
 
 ## Rollout playbook
 
-For a fresh deploy of the Phase 1 changes:
+Recommended sequence after a fresh deploy. Each step is independently
+revertible — just remove the env var and redeploy.
+
+**Cost first** (most operators stop here):
 
 1. **Deploy with no new env vars.** Caching alone reduces cost; behavior is
    otherwise identical.
@@ -205,11 +213,24 @@ For a fresh deploy of the Phase 1 changes:
    warning analyses for quality regressions.
 4. **Enable static-only mode for info.** Add `MAX_AGENT_ROUNDS_INFO=0`.
    Redeploy. Info alerts now skip the tool loop entirely.
-5. **Tighten if needed.** If cost is still a concern after step 4, consider
-   `MAX_AGENT_ROUNDS_WARNING=0` (aggressive setup). Otherwise stop here.
+5. **Tighten if needed.** If cost is still a concern, consider
+   `MAX_AGENT_ROUNDS_WARNING=0` (aggressive setup).
 
-Each step is independently revertible — just remove the env var and
-redeploy.
+**Then storm robustness**, only if you've seen alert bursts or
+Anthropic-API outages cause issues:
+
+6. **Enable group-cooldown** with `GROUP_COOLDOWN_SECONDS=60`. Watch
+   `alerts_cooldown_total{source}` rise during deployment thrashes.
+7. **Enable circuit-breaker** with `CIRCUIT_BREAKER_THRESHOLD=5`. The
+   breaker only fires under sustained Claude-API failure; in normal
+   operation `claude_circuit_breaker_state` stays at 0.
+8. **Enable storm-mode last** with `STORM_MODE_THRESHOLD=50`. This is the
+   loudest behavior change — all severities drop to `rounds=0` while the
+   threshold is exceeded. Tune the threshold based on your normal alert
+   volume.
+
+See the [Storm Robustness](#storm-robustness) section below for what each
+of those features does.
 
 ## Troubleshooting
 
@@ -262,21 +283,111 @@ unset ANTHROPIC_API_KEY  # only one of API_KEY / AUTH_TOKEN may be set
 
 The SDK uses `Authorization: Bearer $ANTHROPIC_AUTH_TOKEN` against this base URL, which is OpenRouter's expected auth shape.
 
-## Phase 2 (planned, not shipped)
+## Storm Robustness
 
-Three additional protections are designed but not yet implemented:
+Three opt-in protections against alert bursts and Anthropic-API outages.
+They close two attack surfaces that caching and severity routing alone do
+not address: high cost from re-analyzing every distinct fingerprint during
+a storm, and the Storm-Verstärker-Bug where API failures used to clear
+cooldowns and cause Alertmanager to retry into a degraded API.
 
-- **Group-cooldown**: dedup at `alertname+namespace` (k8s) /
-  `host+service` (checkmk) granularity in addition to fingerprint.
-  Storms from many similar alerts collapse to one analysis.
-- **Storm-mode**: sliding-window detector that forces `rounds=0` cluster-
-  wide when alert rate exceeds a threshold, plus an aggregated ntfy
-  notification instead of per-alert messages.
-- **Circuit-breaker**: opens after consecutive Anthropic API failures,
-  blocks further calls for a cooldown window, half-open probe on recovery.
-  Gates at the analysis level so a probe is exactly one analysis (not one
-  HTTP round-trip).
+All three default to disabled (`THRESHOLD=0` / `SECONDS=0`). Enable each
+independently after observing the cost-and-cache metrics above.
 
-When Phase 2 ships, this document will gain corresponding env-var
-references and rollout steps. Spec lives at
-`docs/superpowers/specs/2026-05-01-storm-cost-protection-design.md`.
+### Group-Cooldown
+
+Set `GROUP_COOLDOWN_SECONDS=60` (suggested). Both analyzers will treat alerts
+with the same group key as a single alert during the TTL window:
+
+- k8s: `groupKey = alertname:namespace`  (empty namespace → `alertname:_cluster_`)
+- CheckMK: `groupKey = host:service`     (empty service → `host:_host_`)
+
+Group-cooldown sits next to (not in place of) the existing fingerprint
+cooldown. The handler uses the atomic `CooldownManager.CheckAndSetWithGroup`
+to set both at once, with rollback if either is already in cooldown.
+
+### Storm-Mode
+
+Set `STORM_MODE_THRESHOLD=50` (alerts/5min, suggested). When the sliding
+5-minute window exceeds the threshold, the analyzer enters degraded mode:
+
+- All severities are forced to `rounds=0` (no tool-loop) — saves the most
+  cost per alert.
+- Group-key remains unchanged (storm mode doesn't widen dedup; that's
+  operator policy via `GROUP_COOLDOWN_SECONDS`).
+- Aggregated ntfy via the shared `NotifyAggregator`: one summary per
+  `STORM_MODE_NOTIFY_INTERVAL` (default 60s) instead of N per-alert messages.
+
+Gauge: `storm_mode_active{source}` (0/1) — page operators on `1` for >5min.
+
+### Circuit-Breaker
+
+Set `CIRCUIT_BREAKER_THRESHOLD=5` (consecutive failures, suggested). When
+5 logical analyses in a row fail, the breaker opens for
+`CIRCUIT_BREAKER_OPEN_SECONDS` (default 60). All `Acquire()` calls during
+that window return `ErrCircuitOpen` — alerts get aggregated into the
+breaker-aggregator instead of triggering API calls.
+
+After the open period the breaker enters half-open: exactly one probe
+analysis is allowed (with `rounds=0`). On success → closed; on failure →
+open again.
+
+A probe-watchdog (`CIRCUIT_BREAKER_MAX_PROBE_SECONDS`, default 60s)
+prevents stuck-state if the probe goroutine hangs without calling
+`permit.Done()`.
+
+Gauge: `claude_circuit_breaker_state{source}` (0=closed, 1=open, 2=half-open).
+
+### Storm-Verstärker-Bug Mitigation
+
+The pipeline tracks the failure phase (Pre-API / API / Post-API) and the
+analysis error in separate variables. Cooldowns are cleared only for
+Pre-API and API-phase failures that are NOT `ErrCircuitOpen`. With an
+open breaker, cooldowns remain set so Alertmanager-retries hit cooldowns
+on subsequent webhooks instead of hammering the degraded API.
+
+### Notify-Aggregator Drop Metric
+
+`notify_aggregator_drops_total{aggregator}` (counter, labels: `storm`,
+`breaker`) reports alerts that were dropped because:
+
+- the aggregator's in-channel was full (back-pressure),
+- the aggregator was already stopped (post-shutdown), or
+- the tick-flush failed to publish (e.g. ntfy unavailable).
+
+Sustained non-zero drops indicate the aggregation interval is too long
+for the current alert volume, or the publisher is failing. Aggregate
+notifications represent a lower bound on the input stream — the
+difference is in this metric.
+
+### Recommended PromQL
+
+```
+# Cache-hit rate
+sum(rate(claude_cache_read_tokens_total[5m]))
+  / sum(rate(claude_cache_read_tokens_total[5m])
+       + rate(claude_cache_creation_tokens_total[5m])
+       + rate(claude_input_tokens_total[5m]))
+
+# Storm-mode dwell-time (alerts on storm_mode_active=1 for >5min)
+storm_mode_active{source="k8s"} == 1
+
+# Breaker-open dwell-time (alerts on state=1 for >2min)
+claude_circuit_breaker_state{source="checkmk"} == 1
+
+# Aggregator-drop rate
+sum by (aggregator) (rate(notify_aggregator_drops_total[5m]))
+```
+
+### Multi-replica caveat
+
+All cooldown, storm-detector, and circuit-breaker state is in-memory and
+pod-local. Running multiple replicas (HPA) fragments the mitigations:
+Alertmanager-retries can land on different pods and bypass the cooldown,
+the storm threshold is per-pod (so the effective storm threshold is
+N × THRESHOLD for N replicas), and breaker state is not shared. Operators
+with HPA should keep `replicaCount=1` unless absolutely necessary; scale up
+only on sustained load.
+
+For component-level architecture and developer notes, see
+[`cost-and-storm-protection-internals.md`](cost-and-storm-protection-internals.md).

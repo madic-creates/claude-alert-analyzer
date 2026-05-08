@@ -8,14 +8,15 @@ import (
 )
 
 // AnalysisPolicy is a thin decision layer that maps alert severity to model
-// and tool-loop budget. It holds no mutable fields of its own; Phase 2 will
-// add a Storm pointer for IsDegraded().
+// and tool-loop budget. Storm is an optional pointer to a StormDetector;
+// nil ↔ storm-mode disabled.
 type AnalysisPolicy struct {
 	DefaultModel     string
 	ModelOverrides   map[Severity]string
 	DefaultMaxRounds int
 	RoundsOverrides  map[Severity]int
-	GroupCooldownTTL time.Duration // unused in Phase 1; field reserved for Phase 2 group dedup
+	GroupCooldownTTL time.Duration  // 0 ↔ group-cooldown disabled
+	Storm            *StormDetector // nil ↔ storm-mode disabled
 }
 
 // ModelFor returns the configured model for a given severity, falling back
@@ -37,9 +38,21 @@ func (p *AnalysisPolicy) MaxRoundsFor(sev Severity) int {
 	return p.DefaultMaxRounds
 }
 
+// IsDegraded reports whether the analyzer is currently in storm-mode.
+// Returns false when Storm is nil (storm-mode disabled).
+func (p *AnalysisPolicy) IsDegraded() bool {
+	if p == nil || p.Storm == nil {
+		return false
+	}
+	return p.Storm.Count() > p.Storm.Threshold()
+}
+
 // LoadPolicy builds an AnalysisPolicy from a BaseConfig and the optional
-// severity-specific environment variables defined in the spec. Returns
-// an error if any override fails validation.
+// Phase 1 + Phase 2 environment variables. Phase 2 vars (all optional):
+//   - GROUP_COOLDOWN_SECONDS         (default 0 = disabled)
+//   - STORM_MODE_THRESHOLD           (default 0 = disabled)
+//
+// Returns an error if any value fails range validation.
 func LoadPolicy(base BaseConfig) (*AnalysisPolicy, error) {
 	defaultRounds, err := ParseIntEnv("MAX_AGENT_ROUNDS", "10", 1, 50)
 	if err != nil {
@@ -73,10 +86,27 @@ func LoadPolicy(base BaseConfig) (*AnalysisPolicy, error) {
 		roundsOverrides[sev] = v
 	}
 
+	// Phase 2: group cooldown
+	groupSecs, err := ParseIntEnv("GROUP_COOLDOWN_SECONDS", "0", 0, 86400)
+	if err != nil {
+		return nil, fmt.Errorf("policy: %w", err)
+	}
+
+	// Phase 2: storm mode
+	stormThreshold, err := ParseIntEnv("STORM_MODE_THRESHOLD", "0", 0, 100000)
+	if err != nil {
+		return nil, fmt.Errorf("policy: %w", err)
+	}
+	// NewStormDetector returns nil when threshold <= 0 — that is the
+	// disabled-default and the Storm field stays nil so IsDegraded() → false.
+	storm := NewStormDetector(stormThreshold, time.Now)
+
 	return &AnalysisPolicy{
 		DefaultModel:     base.ClaudeModel,
 		ModelOverrides:   modelOverrides,
 		DefaultMaxRounds: defaultRounds,
 		RoundsOverrides:  roundsOverrides,
+		GroupCooldownTTL: time.Duration(groupSecs) * time.Second,
+		Storm:            storm,
 	}, nil
 }

@@ -49,19 +49,20 @@ type PromResult struct {
 
 // Config holds all configuration for the K8s alert analyzer.
 type Config struct {
-	PrometheusURL   string
-	ClaudeModel     string
-	CooldownSeconds int
-	SkipResolved    bool
-	Port            string
-	MetricsPort     string
-	WebhookSecret   string
-	MaxLogBytes     int           // Per-pod log truncation limit
-	APIBaseURL      string        // Claude API endpoint (supports Anthropic and OpenRouter)
-	APIKey          string        // API key for authentication
-	AuthToken       string        // ANTHROPIC_AUTH_TOKEN (sets Authorization: Bearer)
-	KubeAPITimeout  time.Duration // Timeout for Kubernetes API context gathering (0 = default 30s)
-	PromTimeout     time.Duration // Timeout for Prometheus context gathering (0 = default 30s)
+	PrometheusURL    string
+	ClaudeModel      string
+	CooldownSeconds  int
+	SkipResolved     bool
+	Port             string
+	MetricsPort      string
+	WebhookSecret    string
+	MaxLogBytes      int           // Per-pod log truncation limit
+	APIBaseURL       string        // Claude API endpoint (supports Anthropic and OpenRouter)
+	APIKey           string        // API key for authentication
+	AuthToken        string        // ANTHROPIC_AUTH_TOKEN (sets Authorization: Bearer)
+	KubeAPITimeout   time.Duration // Timeout for Kubernetes API context gathering (0 = default 30s)
+	PromTimeout      time.Duration // Timeout for Prometheus context gathering (0 = default 30s)
+	GroupCooldownTTL time.Duration // 0 == group-cooldown disabled
 }
 
 // BaseConfig returns a shared.BaseConfig derived from this Config.

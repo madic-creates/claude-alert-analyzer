@@ -42,6 +42,8 @@ type AlertPayload struct {
 	SeverityLevel Severity          // normalized, used for AnalysisPolicy routing
 	Source        string            // "k8s" or "checkmk"
 	Fields        map[string]string // source-specific key-value pairs
+	// GroupKey is the group-cooldown key set by the handler; empty if group cooldown disabled
+	GroupKey string
 }
 
 // BaseConfig holds configuration shared by all analyzers.

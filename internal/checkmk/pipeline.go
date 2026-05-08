@@ -2,11 +2,22 @@ package checkmk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
+)
+
+// failurePhase tracks how far ProcessAlert progressed when an error occurred,
+// so the deferred cleanup decides correctly whether to clear cooldowns.
+type failurePhase int
+
+const (
+	phasePreAPI failurePhase = iota
+	phaseAPI
+	phasePostAPI
 )
 
 // PipelineDeps holds all dependencies for CheckMK alert processing.
@@ -15,6 +26,9 @@ import (
 // and ValidateHost must all be non-nil. SSHDialer must be non-nil when
 // SSHEnabled is true. Construction in cmd/checkmk-analyzer validates this
 // at startup; the pipeline does not re-check at runtime.
+//
+// Breaker, StormNotify, and BreakerNotify are optional Phase 2 fields. nil is
+// the disabled-default and all access sites are nil-safe.
 type PipelineDeps struct {
 	// Analyzer is used for the static-only path (rounds==0 or sshOK==false):
 	// no SSH tool, just the gathered context. In production both Analyzer and
@@ -24,33 +38,89 @@ type PipelineDeps struct {
 	Publishers []shared.Publisher
 	Cooldown   *shared.CooldownManager
 	Metrics    *shared.AlertMetrics
-	SSHEnabled bool
-	SSHDialer  Dialer
-	SSHConfig  Config
 	// Policy decides per-alert model and tool-loop budget keyed on
 	// alert.SeverityLevel. A round budget of 0 routes to Analyzer.Analyze
 	// even when SSH is available.
-	Policy        *shared.AnalysisPolicy
+	Policy *shared.AnalysisPolicy
+	// Breaker gates logical analysis attempts. nil ↔ disabled (no-op permits).
+	Breaker *shared.CircuitBreaker
+	// StormNotify aggregates per-alert notifications during storm-mode.
+	// nil ↔ no aggregation (per-alert publish on the success path).
+	StormNotify *shared.NotifyAggregator
+	// BreakerNotify aggregates per-alert notifications when the breaker is open.
+	// nil ↔ no aggregation (alert silently dropped on ErrCircuitOpen).
+	BreakerNotify *shared.NotifyAggregator
+	SSHEnabled    bool
+	SSHDialer     Dialer
+	SSHConfig     Config
 	GatherContext func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext
 	ValidateHost  func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error)
 }
 
 // ProcessAlert gathers context, optionally runs agentic SSH diagnostics, and publishes results.
+//
+// Failure-phase cleanup: a separate analysisErr variable is used inside the
+// defer so a post-API publish error cannot flip the phase decision.
+// See spec section 2.1.
 func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayload) {
 	start := time.Now()
+	var (
+		phase       = phasePreAPI
+		analysisErr error
+		permit      *shared.Permit
+	)
+
 	defer func() {
 		deps.Metrics.ProcessingDurationSum.Add(time.Since(start).Microseconds())
 		deps.Metrics.ProcessingDurationCount.Add(1)
 	}()
-	// If any step panics, clear the cooldown so the next webhook triggers a
-	// retry instead of silently skipping the alert for the entire TTL.
+
 	defer func() {
+		// Panic-recovery: capture the panic value into analysisErr so it flows
+		// into permit.Done() AND the phase-switch cooldown cleanup.
+		// Without this ordering, a panic between Acquire() and the assignment
+		// to analysisErr would leave analysisErr=nil and cause permit.Done(nil)
+		// — the breaker would record a SUCCESS for a panicked analysis.
 		if r := recover(); r != nil {
+			if analysisErr == nil {
+				analysisErr = fmt.Errorf("panic recovered: %v", r)
+			}
+			defer panic(r) // re-panic AFTER the cleanup body completes
+		}
+		// Settle the breaker permit FIRST so the breaker observes panics + late
+		// errors. permit may be nil if Acquire() failed in the API phase.
+		if permit != nil {
+			permit.Done(analysisErr)
+		}
+		switch phase {
+		case phasePreAPI:
 			deps.Cooldown.Clear(alert.Fingerprint)
+			if alert.GroupKey != "" {
+				deps.Cooldown.ClearGroup(alert.GroupKey)
+			}
+			if analysisErr != nil {
+				deps.Metrics.AlertsFailed.Add(1)
+			}
+		case phaseAPI:
+			if analysisErr == nil {
+				return
+			}
+			if errors.Is(analysisErr, shared.ErrCircuitOpen) {
+				// Verstärker-Mitigation: keep cooldowns to absorb retries.
+				deps.Metrics.AlertsFailed.Add(1)
+				return
+			}
+			deps.Cooldown.Clear(alert.Fingerprint)
+			if alert.GroupKey != "" {
+				deps.Cooldown.ClearGroup(alert.GroupKey)
+			}
 			deps.Metrics.AlertsFailed.Add(1)
-			panic(r) // re-panic so safeProcess can log the stack trace
+		case phasePostAPI:
+			// Analysis succeeded; ntfy-failure is logged separately.
+			return
 		}
 	}()
+
 	hostname := alert.Fields["hostname"]
 	hostAddress := alert.Fields["host_address"]
 	// Sanitize the alert title once here so that all downstream uses —
@@ -65,6 +135,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 
 	slog.Info("processing CheckMK alert", "hostname", hostname, "service", alert.Fields["service_description"])
 
+	// === Pre-API phase ===
 	hostInfo, validationErr := deps.ValidateHost(ctx, hostname, hostAddress)
 	if validationErr != nil {
 		slog.Warn("host validation failed", "error", validationErr, "hostname", hostname, "host_address", hostAddress)
@@ -84,54 +155,83 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 		alertContext += "\n## Note\nSSH diagnostics unavailable: host validation failed\n"
 	}
 
+	// Update breaker-state and storm-mode metrics on every alert so Grafana
+	// sees the gauges fresh.
+	if deps.Breaker != nil {
+		deps.Metrics.SetBreakerState("checkmk", deps.Breaker.State())
+	}
+	deps.Metrics.SetStormMode("checkmk", deps.Policy.IsDegraded())
+
+	// === Acquire breaker permit ===
+	phase = phaseAPI
+	var err error
+	permit, err = deps.Breaker.Acquire()
+	if err != nil {
+		analysisErr = err
+		// Aggregate the alert into the breaker-aggregator instead of per-alert ntfy.
+		if deps.BreakerNotify != nil {
+			deps.BreakerNotify.Add(safeTitle)
+		}
+		slog.Warn("breaker open, dropping analysis", "hostname", hostname)
+		// Note: claude_api_errors_total is NOT incremented here — ErrCircuitOpen
+		// is a pre-flight rejection, not a Claude-API failure. The
+		// claude_circuit_breaker_state gauge plus notify_aggregator_drops_total
+		// {aggregator="breaker"} cover this case for operators.
+		return
+	}
+	// Settling the permit happens in the cleanup defer above so the breaker
+	// observes panics that occur between this point and the analysis assignment.
+
 	model := deps.Policy.ModelFor(alert.SeverityLevel)
 	rounds := deps.Policy.MaxRoundsFor(alert.SeverityLevel)
-
-	var (
-		analysis string
-		err      error
-	)
-	if rounds > 0 && sshOK {
-		analysis, err = RunAgenticDiagnostics(ctx, deps.SSHConfig, deps.ToolRunner, deps.SSHDialer, deps.Metrics, hostname, hostInfo.VerifiedIP, alertContext, rounds, model)
-	} else {
-		analysis, err = deps.Analyzer.Analyze(ctx, model, StaticAnalysisSystemPrompt, alertContext)
+	if deps.Policy.IsDegraded() || permit.IsProbe() {
+		rounds = 0
 	}
-	if err != nil {
-		slog.Error("analysis failed", "hostname", hostname, "error", err)
+
+	var analysis string
+	if rounds > 0 && sshOK {
+		analysis, analysisErr = RunAgenticDiagnostics(ctx, deps.SSHConfig, deps.ToolRunner, deps.SSHDialer, deps.Metrics, hostname, hostInfo.VerifiedIP, alertContext, rounds, model)
+	} else {
+		analysis, analysisErr = deps.Analyzer.Analyze(ctx, model, StaticAnalysisSystemPrompt, alertContext)
+	}
+	if analysisErr != nil {
+		slog.Error("analysis failed", "hostname", hostname, "error", analysisErr)
 		deps.Metrics.RecordClaudeAPIError(alert.Source)
 		if notifyErr := shared.PublishAll(ctx, deps.Publishers,
 			fmt.Sprintf("Analysis FAILED: %s", safeTitle), "5",
-			fmt.Sprintf("**Analysis failed** for %s: %v\n\nManual investigation needed.", safeTitle, err)); notifyErr != nil {
+			fmt.Sprintf("**Analysis failed** for %s: %v\n\nManual investigation needed.", safeTitle, analysisErr)); notifyErr != nil {
 			slog.Warn("failed to publish failure notification", "hostname", hostname, "error", notifyErr)
 		}
-		deps.Cooldown.Clear(alert.Fingerprint)
-		deps.Metrics.AlertsFailed.Add(1)
 		return
 	}
-
 	if analysis == "" {
+		analysisErr = errors.New("empty analysis")
 		slog.Warn("analysis returned empty result, treating as failure", "hostname", hostname)
 		if notifyErr := shared.PublishAll(ctx, deps.Publishers,
 			fmt.Sprintf("Analysis FAILED: %s", safeTitle), "5",
 			fmt.Sprintf("**Analysis produced empty result** for %s.\n\nManual investigation needed.", safeTitle)); notifyErr != nil {
 			slog.Warn("failed to publish failure notification", "hostname", hostname, "error", notifyErr)
 		}
-		deps.Cooldown.Clear(alert.Fingerprint)
-		deps.Metrics.AlertsFailed.Add(1)
 		return
 	}
+
+	// === Post-API phase ===
+	phase = phasePostAPI
 
 	priorityMap := map[string]string{"critical": "5", "warning": "4", "unknown": "3", "ok": "2"}
 	priority := priorityMap[alert.Severity]
 	if priority == "" {
 		priority = "3"
 	}
-
 	title := fmt.Sprintf("Analysis: %s", safeTitle)
-	if err := shared.PublishAll(ctx, deps.Publishers, title, priority, analysis); err != nil {
-		slog.Error("failed to publish analysis", "hostname", hostname, "error", err)
+
+	if deps.Policy.IsDegraded() && deps.StormNotify != nil {
+		deps.StormNotify.Add(safeTitle)
+	} else if pubErr := shared.PublishAll(ctx, deps.Publishers, title, priority, analysis); pubErr != nil {
+		slog.Error("failed to publish analysis", "hostname", hostname, "error", pubErr)
 		deps.Metrics.RecordNtfyPublishError(alert.Source)
-		deps.Cooldown.Clear(alert.Fingerprint)
+		// Phase is already phasePostAPI — defer keeps cooldowns. AlertsFailed
+		// counter is the operator-visible signal.
 		deps.Metrics.AlertsFailed.Add(1)
 		return
 	}
