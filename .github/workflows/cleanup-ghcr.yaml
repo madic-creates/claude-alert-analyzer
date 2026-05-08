@@ -46,11 +46,15 @@ jobs:
           total=$(jq 'length' versions.json)
           echo "Total versions: $total"
 
-          # Candidates: all untagged + tagged beyond the KEEP_TAGGED most recent.
-          # 'latest' sits on the newest push, so it is always in the kept top-N.
+          # Protected: any version with a semver-shaped tag (v0.2.6, 0.2.6, 0.2).
+          # Date-shaped tags like 2026.5.8 also match — accepted false-positive
+          # toward retention. Unprotected versions (sha-tagged, untagged,
+          # latest-only) follow KEEP_TAGGED.
           jq -r --argjson keep "$KEEP_TAGGED" '
-            ([.[] | select(.tags | length == 0)]
-            + [.[] | select(.tags | length > 0)][$keep:])
+            def semver_protected:
+              any(.tags[]?; test("^(v?[0-9]+\\.[0-9]+\\.[0-9]+|[0-9]+\\.[0-9]+)$"));
+            [ .[] | select(semver_protected | not) ] as $candidates
+            | ($candidates[$keep:] // [])
             | .[] | "\(.id)\t\(.created_at)\t\(.tags | join(","))"
           ' versions.json > to_delete.tsv
 
