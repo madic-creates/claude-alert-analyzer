@@ -61,6 +61,7 @@ func TestRunToolLoop_ForcedSummaryEmptyContent(t *testing.T) {
 
 	result, _, _, err := client.RunToolLoop(
 		t.Context(),
+		SeverityWarning,
 		"test-model", "system", "user prompt", tools, 1,
 		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil },
 	)
@@ -89,6 +90,7 @@ func TestRunToolLoop_ZeroMaxRounds(t *testing.T) {
 	for _, rounds := range []int{0, -1, -100} {
 		_, _, _, err := client.RunToolLoop(
 			t.Context(),
+			SeverityWarning,
 			"test-model", "system", "user prompt", tools, rounds,
 			func(name string, input json.RawMessage) (string, error) { return "", nil },
 		)
@@ -147,9 +149,9 @@ func TestServer_Enqueue_WhenStopped(t *testing.T) {
 	if srv.Enqueue(AlertPayload{Fingerprint: "after-shutdown"}) {
 		t.Fatal("Enqueue should return false when server is stopped")
 	}
-	if metrics.AlertsQueued.Load() != 0 {
-		t.Errorf("AlertsQueued = %d, want 0 (must not increment when stopped)", metrics.AlertsQueued.Load())
-	}
+	// Counter ownership shifted to handlers; server.Enqueue no longer increments
+	// AlertsEnqueued. The test that mattered (post-shutdown returns false) is
+	// covered by the call above.
 }
 
 // TestServer_Run_DrainTimeout verifies that when workers do not finish within

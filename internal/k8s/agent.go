@@ -464,6 +464,7 @@ func RunAgenticDiagnostics(
 	kc KubectlRunner,
 	prom PromQLQuerier,
 	metrics *shared.AlertMetrics,
+	severity shared.Severity,
 	userPrompt string,
 	maxRounds int,
 	model string,
@@ -489,7 +490,7 @@ func RunAgenticDiagnostics(
 			if r := recover(); r != nil {
 				slog.Error("agent tool handler panicked", "tool", name, "recover", r)
 				if metrics != nil {
-					metrics.RecordAgentToolCall("k8s", name, outcomeExecError, 0)
+					metrics.RecordAgentToolCall(name, outcomeExecError, 0)
 				}
 				result = fmt.Sprintf("Tool %s panicked: %v — continue with a different command", name, r)
 				err = nil
@@ -500,6 +501,7 @@ func RunAgenticDiagnostics(
 
 	analysis, rounds, exhausted, err := runner.RunToolLoop(
 		ctx,
+		severity,
 		model,
 		agentSystemPromptForRounds(maxRounds),
 		userPrompt,
@@ -508,7 +510,7 @@ func RunAgenticDiagnostics(
 		safeHandleTool,
 	)
 	if metrics != nil {
-		metrics.RecordAgentRounds("k8s", rounds, exhausted)
+		metrics.RecordAgentRounds(rounds, exhausted)
 	}
 	slog.Info("agentic k8s diagnostics complete",
 		"rounds", rounds, "exhausted", exhausted)
@@ -599,7 +601,7 @@ func recordToolCall(metrics *shared.AlertMetrics, tool, outcome string, dur time
 	}
 	slog.Info("agent tool call", attrs...)
 	if metrics != nil {
-		metrics.RecordAgentToolCall("k8s", tool, outcome, dur)
+		metrics.RecordAgentToolCall(tool, outcome, dur)
 	}
 }
 

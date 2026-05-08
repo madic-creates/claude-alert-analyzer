@@ -21,7 +21,6 @@ type ClaudeClient struct {
 	sdk     *anthropic.Client
 	Model   string
 	metrics *AlertMetrics // nil/empty in tests that do not assert metrics
-	source  string
 }
 
 // NewClaudeClient wires the SDK against transport (body-size capping and
@@ -46,9 +45,8 @@ func NewClaudeClient(cfg BaseConfig, transport http.RoundTripper) *ClaudeClient 
 }
 
 // WithPrometheusMetrics attaches the AlertMetrics for token-usage recording.
-func (c *ClaudeClient) WithPrometheusMetrics(m *AlertMetrics, source string) *ClaudeClient {
+func (c *ClaudeClient) WithPrometheusMetrics(m *AlertMetrics) *ClaudeClient {
 	c.metrics = m
-	c.source = source
 	return c
 }
 
@@ -84,8 +82,10 @@ func extractText(msg *anthropic.Message) string {
 	return strings.Join(parts, "\n")
 }
 
-// Analyze sends a single-turn analysis request. If model is empty, c.Model is used.
-func (c *ClaudeClient) Analyze(ctx context.Context, model, systemPrompt, userPrompt string) (string, error) {
+// Analyze sends a single-turn analysis request. severity threads through to
+// token-usage recording. If model is empty, c.Model is used.
+func (c *ClaudeClient) Analyze(ctx context.Context, severity Severity,
+	model, systemPrompt, userPrompt string) (string, error) {
 	if model == "" {
 		model = c.Model
 	}
@@ -103,7 +103,7 @@ func (c *ClaudeClient) Analyze(ctx context.Context, model, systemPrompt, userPro
 		"cacheCreationTokens", msg.Usage.CacheCreationInputTokens,
 		"cacheReadTokens", msg.Usage.CacheReadInputTokens)
 
-	c.metrics.RecordClaudeUsage(c.source, "all", model,
+	c.metrics.RecordClaudeUsage(severity, model,
 		int(msg.Usage.InputTokens), int(msg.Usage.OutputTokens),
 		int(msg.Usage.CacheCreationInputTokens), int(msg.Usage.CacheReadInputTokens))
 	if msg.StopReason != "" && msg.StopReason != anthropic.StopReasonEndTurn {
@@ -151,8 +151,10 @@ func appendToolResultsAndCacheTail(messages []anthropic.MessageParam, results []
 
 // RunToolLoop runs a multi-turn Claude conversation with tool use. After
 // maxRounds of tool calls, a final tool-less request forces a text response.
+// severity threads through to token-usage recording.
 // maxRounds must be at least 1; 0 or negative returns an error immediately.
-func (c *ClaudeClient) RunToolLoop(ctx context.Context, model, systemPrompt, userPrompt string,
+func (c *ClaudeClient) RunToolLoop(ctx context.Context, severity Severity,
+	model, systemPrompt, userPrompt string,
 	tools []anthropic.ToolUnionParam, maxRounds int,
 	handleTool func(name string, input json.RawMessage) (string, error),
 ) (string, int, bool, error) {
@@ -167,7 +169,7 @@ func (c *ClaudeClient) RunToolLoop(ctx context.Context, model, systemPrompt, use
 
 	var totalInput, totalOutput, totalCacheCreation, totalCacheRead int64
 	defer func() {
-		c.metrics.RecordClaudeUsage(c.source, "all", model,
+		c.metrics.RecordClaudeUsage(severity, model,
 			int(totalInput), int(totalOutput), int(totalCacheCreation), int(totalCacheRead))
 	}()
 

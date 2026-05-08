@@ -20,6 +20,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // TestQuery_RequestCreateError verifies that the query function returns the
@@ -322,7 +323,7 @@ func (e *k8sErrorReader) Read(_ []byte) (int, error) {
 func TestK8sProcessAlert_AnalysisFails_PublishFailureNotification(t *testing.T) {
 	failPub := &mockPublisher{err: fmt.Errorf("ntfy unreachable")}
 	cooldown := shared.NewCooldownManager()
-	metrics := new(shared.AlertMetrics)
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
 
 	deps := PipelineDeps{
 		ToolRunner: &fakeToolLoopRunner{
@@ -351,8 +352,8 @@ func TestK8sProcessAlert_AnalysisFails_PublishFailureNotification(t *testing.T) 
 	// Must not panic even when both analysis and failure-notification publish fail.
 	ProcessAlert(context.Background(), deps, alert)
 
-	if metrics.AlertsFailed.Load() != 1 {
-		t.Errorf("AlertsFailed = %d, want 1", metrics.AlertsFailed.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)) != 1 {
+		t.Errorf("AlertsFailed = %d, want 1", int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)))
 	}
 	// The failure notification publish was attempted.
 	if len(failPub.calls) != 1 {
@@ -451,7 +452,7 @@ func TestGetKubeContext_PodLogsGoroutinePanicRecovery(t *testing.T) {
 func TestK8sProcessAlert_EmptyAnalysis_PublishFailureNotification(t *testing.T) {
 	failPub := &mockPublisher{err: fmt.Errorf("ntfy down")}
 	cooldown := shared.NewCooldownManager()
-	metrics := new(shared.AlertMetrics)
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
 
 	deps := PipelineDeps{
 		ToolRunner: &fakeToolLoopRunner{
@@ -479,8 +480,8 @@ func TestK8sProcessAlert_EmptyAnalysis_PublishFailureNotification(t *testing.T) 
 
 	ProcessAlert(context.Background(), deps, alert)
 
-	if metrics.AlertsFailed.Load() != 1 {
-		t.Errorf("AlertsFailed = %d, want 1", metrics.AlertsFailed.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)) != 1 {
+		t.Errorf("AlertsFailed = %d, want 1", int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)))
 	}
 }
 
@@ -1005,7 +1006,7 @@ func TestProcessAlert_AlertFieldsArePromptInjectionSafe(t *testing.T) {
 	}
 	pub := &mockPublisher{}
 	cooldown := shared.NewCooldownManager()
-	metrics := new(shared.AlertMetrics)
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
 
 	deps := PipelineDeps{
 		ToolRunner:    runner,

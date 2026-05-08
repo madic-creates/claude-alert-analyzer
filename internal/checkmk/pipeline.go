@@ -71,8 +71,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	)
 
 	defer func() {
-		deps.Metrics.ProcessingDurationSum.Add(time.Since(start).Microseconds())
-		deps.Metrics.ProcessingDurationCount.Add(1)
+		deps.Metrics.ObserveProcessingDuration(time.Since(start))
 	}()
 
 	defer func() {
@@ -99,7 +98,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 				deps.Cooldown.ClearGroup(alert.GroupKey)
 			}
 			if analysisErr != nil {
-				deps.Metrics.AlertsFailed.Add(1)
+				deps.Metrics.RecordFailed()
 			}
 		case phaseAPI:
 			if analysisErr == nil {
@@ -107,14 +106,14 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 			}
 			if errors.Is(analysisErr, shared.ErrCircuitOpen) {
 				// Verstärker-Mitigation: keep cooldowns to absorb retries.
-				deps.Metrics.AlertsFailed.Add(1)
+				deps.Metrics.RecordFailed()
 				return
 			}
 			deps.Cooldown.Clear(alert.Fingerprint)
 			if alert.GroupKey != "" {
 				deps.Cooldown.ClearGroup(alert.GroupKey)
 			}
-			deps.Metrics.AlertsFailed.Add(1)
+			deps.Metrics.RecordFailed()
 		case phasePostAPI:
 			// Analysis succeeded; ntfy-failure is logged separately.
 			return
@@ -158,9 +157,9 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	// Update breaker-state and storm-mode metrics on every alert so Grafana
 	// sees the gauges fresh.
 	if deps.Breaker != nil {
-		deps.Metrics.SetBreakerState("checkmk", deps.Breaker.State())
+		deps.Metrics.SetBreakerState(deps.Breaker.State())
 	}
-	deps.Metrics.SetStormMode("checkmk", deps.Policy.IsDegraded())
+	deps.Metrics.SetStormMode(deps.Policy.IsDegraded())
 
 	// === Acquire breaker permit ===
 	phase = phaseAPI
@@ -190,13 +189,13 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 
 	var analysis string
 	if rounds > 0 && sshOK {
-		analysis, analysisErr = RunAgenticDiagnostics(ctx, deps.SSHConfig, deps.ToolRunner, deps.SSHDialer, deps.Metrics, hostname, hostInfo.VerifiedIP, alertContext, rounds, model)
+		analysis, analysisErr = RunAgenticDiagnostics(ctx, deps.SSHConfig, deps.ToolRunner, deps.SSHDialer, deps.Metrics, alert.SeverityLevel, hostname, hostInfo.VerifiedIP, alertContext, rounds, model)
 	} else {
-		analysis, analysisErr = deps.Analyzer.Analyze(ctx, model, StaticAnalysisSystemPrompt, alertContext)
+		analysis, analysisErr = deps.Analyzer.Analyze(ctx, alert.SeverityLevel, model, StaticAnalysisSystemPrompt, alertContext)
 	}
 	if analysisErr != nil {
 		slog.Error("analysis failed", "hostname", hostname, "error", analysisErr)
-		deps.Metrics.RecordClaudeAPIError(alert.Source)
+		deps.Metrics.RecordClaudeAPIError()
 		if notifyErr := shared.PublishAll(ctx, deps.Publishers,
 			fmt.Sprintf("Analysis FAILED: %s", safeTitle), "5",
 			fmt.Sprintf("**Analysis failed** for %s: %v\n\nManual investigation needed.", safeTitle, analysisErr)); notifyErr != nil {
@@ -229,14 +228,13 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 		deps.StormNotify.Add(safeTitle)
 	} else if pubErr := shared.PublishAll(ctx, deps.Publishers, title, priority, analysis); pubErr != nil {
 		slog.Error("failed to publish analysis", "hostname", hostname, "error", pubErr)
-		deps.Metrics.RecordNtfyPublishError(alert.Source)
-		// Phase is already phasePostAPI — defer keeps cooldowns. AlertsFailed
-		// counter is the operator-visible signal.
-		deps.Metrics.AlertsFailed.Add(1)
+		deps.Metrics.RecordNtfyPublishError()
+		// Phase is already phasePostAPI — defer keeps cooldowns. RecordFailed
+		// is the operator-visible signal.
+		deps.Metrics.RecordFailed()
 		return
 	}
 
-	deps.Metrics.AlertsProcessed.Add(1)
-	deps.Metrics.RecordAnalyzed(alert.Source, alert.Severity)
+	deps.Metrics.RecordProcessed(alert.SeverityLevel)
 	slog.Info("analysis complete", "hostname", hostname)
 }

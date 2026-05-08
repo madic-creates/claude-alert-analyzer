@@ -845,6 +845,7 @@ func RunAgenticDiagnostics(
 	client shared.ToolLoopRunner,
 	dialer Dialer,
 	metrics *shared.AlertMetrics,
+	severity shared.Severity,
 	hostname string,
 	verifiedIP string,
 	alertContext string,
@@ -926,7 +927,7 @@ func RunAgenticDiagnostics(
 			if r := recover(); r != nil {
 				slog.Error("agent tool handler panicked", "tool", name, "recover", r)
 				if metrics != nil {
-					metrics.RecordAgentToolCall("checkmk", name, "exec_error", 0)
+					metrics.RecordAgentToolCall(name, "exec_error", 0)
 				}
 				result = fmt.Sprintf("Tool %s panicked: %v — continue with a different command", name, r)
 				err = nil
@@ -959,17 +960,17 @@ func RunAgenticDiagnostics(
 			outcome = "nonzero_exit"
 		}
 		if metrics != nil {
-			metrics.RecordAgentToolCall("checkmk", name, outcome, time.Since(start))
+			metrics.RecordAgentToolCall(name, outcome, time.Since(start))
 		}
 		return out, callErr
 	}
 
 	analysis, rounds, exhausted, err := client.RunToolLoop(
-		ctx, model, agentSystemPromptForRounds(maxRounds), alertContext,
+		ctx, severity, model, agentSystemPromptForRounds(maxRounds), alertContext,
 		[]anthropic.ToolUnionParam{sshTool}, maxRounds, wrappedHandleTool,
 	)
 	if metrics != nil {
-		metrics.RecordAgentRounds("checkmk", rounds, exhausted)
+		metrics.RecordAgentRounds(rounds, exhausted)
 	}
 	if err != nil {
 		return "", fmt.Errorf("agentic loop failed: %w", err)

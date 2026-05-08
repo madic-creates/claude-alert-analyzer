@@ -147,10 +147,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
-	hist := metrics.Prom.ClaudeAPIDuration.WithLabelValues("checkmk")
-	transport := shared.NewLimitedTransport(http.DefaultTransport, hist)
-	claudeClient := shared.NewClaudeClient(cfg.BaseConfig(), transport).WithPrometheusMetrics(metrics, "checkmk")
+	prom, err := shared.NewPrometheusMetrics(shared.ProductCheckMK)
+	if err != nil {
+		slog.Error("metrics init failed", "error", err)
+		os.Exit(1)
+	}
+	metrics := shared.NewAlertMetrics(prom)
+	slog.Info("metrics initialized",
+		"prefix", "alert_analyzer_*",
+		"product", shared.ProductCheckMK.String())
+	transport := shared.NewLimitedTransport(http.DefaultTransport, prom.ClaudeAPIDuration)
+	claudeClient := shared.NewClaudeClient(cfg.BaseConfig(), transport).WithPrometheusMetrics(metrics)
 	apiClient := checkmk.NewAPIClient(cfg)
 	cooldownMgr := shared.NewCooldownManager()
 	publishers := []shared.Publisher{
@@ -220,7 +227,6 @@ func main() {
 		WorkerCount:  5,
 		QueueSize:    20,
 		DrainTimeout: 25 * time.Second,
-		Source:       "checkmk",
 	}, metrics, func(ctx context.Context, alert shared.AlertPayload) {
 		checkmk.ProcessAlert(ctx, deps, alert)
 	})

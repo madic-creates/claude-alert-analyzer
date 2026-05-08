@@ -32,9 +32,15 @@ func HandleWebhook(
 	cooldownTTL := time.Duration(cfg.CooldownSeconds) * time.Second
 
 	return func(w http.ResponseWriter, r *http.Request) {
+		httpStatus := http.StatusOK
+		defer func() {
+			metrics.RecordWebhookOutcome(shared.OutcomeForStatus(httpStatus))
+		}()
+
 		expected := []byte("Bearer " + cfg.WebhookSecret)
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), expected) != 1 {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			httpStatus = http.StatusUnauthorized
+			http.Error(w, "unauthorized", httpStatus)
 			return
 		}
 
@@ -43,16 +49,19 @@ func HandleWebhook(
 		if err != nil {
 			var maxErr *http.MaxBytesError
 			if errors.As(err, &maxErr) {
-				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+				httpStatus = http.StatusRequestEntityTooLarge
+				http.Error(w, "request body too large", httpStatus)
 				return
 			}
-			http.Error(w, "bad request", http.StatusBadRequest)
+			httpStatus = http.StatusBadRequest
+			http.Error(w, "bad request", httpStatus)
 			return
 		}
 
 		var notif CheckMKNotification
 		if err := json.Unmarshal(body, &notif); err != nil {
-			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			httpStatus = http.StatusBadRequest
+			http.Error(w, "invalid JSON", httpStatus)
 			return
 		}
 
@@ -75,6 +84,7 @@ func HandleWebhook(
 			cooldown.ClearGroup(groupKeyFromNotif(notif))
 			slog.Info("skipping recovery, cleared alert cooldowns",
 				"hostname", notif.Hostname, "service", notif.ServiceDescription)
+			metrics.RecordResolved()
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, "skipped recovery")
 			return
@@ -83,12 +93,18 @@ func HandleWebhook(
 		fp := fingerprint(notif.Hostname, notif.ServiceDescription, notif.NotificationType, notif.ServiceState)
 		groupKey := groupKeyFromNotif(notif)
 
-		if !cooldown.CheckAndSetWithGroup(fp, cooldownTTL, groupKey, cfg.GroupCooldownTTL).Accepted() {
-			slog.Info("in cooldown", "hostname", notif.Hostname, "service", notif.ServiceDescription, "groupKey", groupKey)
-			if metrics != nil {
-				metrics.AlertsCooldown.Add(1)
-				metrics.RecordCooldown("checkmk")
-			}
+		switch outcome := cooldown.CheckAndSetWithGroup(fp, cooldownTTL, groupKey, cfg.GroupCooldownTTL); outcome {
+		case shared.CooldownAccepted:
+			// proceed
+		case shared.CooldownFingerprint:
+			slog.Info("in cooldown (fingerprint)", "hostname", notif.Hostname, "service", notif.ServiceDescription, "groupKey", groupKey)
+			metrics.RecordDropped(shared.DropReasonCooldown)
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, "in cooldown")
+			return
+		case shared.CooldownGroup:
+			slog.Info("in cooldown (group)", "hostname", notif.Hostname, "service", notif.ServiceDescription, "groupKey", groupKey)
+			metrics.RecordDropped(shared.DropReasonGroupCooldown)
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, "in cooldown")
 			return
@@ -144,13 +160,16 @@ func HandleWebhook(
 		}
 
 		if enqueue(ap) {
+			metrics.RecordEnqueued()
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, "queued")
 		} else {
 			slog.Warn("queue full", "hostname", notif.Hostname)
 			cooldown.Clear(fp)
 			cooldown.ClearGroup(groupKey)
-			w.WriteHeader(http.StatusServiceUnavailable)
+			metrics.RecordDropped(shared.DropReasonQueueFull)
+			httpStatus = http.StatusServiceUnavailable
+			w.WriteHeader(httpStatus)
 			fmt.Fprint(w, "queue full")
 		}
 	}

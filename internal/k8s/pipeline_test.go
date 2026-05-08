@@ -61,7 +61,7 @@ func (m *mockToolRunnerAnalyzer) Reset() {
 	m.calls.runToolLoop = 0
 }
 
-func (m *mockToolRunnerAnalyzer) Analyze(_ context.Context, model, _, _ string) (string, error) {
+func (m *mockToolRunnerAnalyzer) Analyze(_ context.Context, _ shared.Severity, model, _, _ string) (string, error) {
 	m.gotModel = model
 	m.gotRounds = 0
 	m.calls.analyze++
@@ -69,7 +69,7 @@ func (m *mockToolRunnerAnalyzer) Analyze(_ context.Context, model, _, _ string) 
 }
 
 func (m *mockToolRunnerAnalyzer) RunToolLoop(
-	_ context.Context, model, _, _ string,
+	_ context.Context, _ shared.Severity, model, _, _ string,
 	_ []anthropic.ToolUnionParam, rounds int,
 	_ func(string, json.RawMessage) (string, error),
 ) (string, int, bool, error) {
@@ -98,7 +98,7 @@ func TestProcessAlert_UsesPolicyForModelAndRounds(t *testing.T) {
 		KubectlRunner: &fakeKubectlRunner{},
 		Prom:          &fakePromQLQuerier{},
 		Cooldown:      shared.NewCooldownManager(),
-		Metrics:       new(shared.AlertMetrics),
+		Metrics:       shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s)),
 		Policy:        policy,
 		GatherContext: func(context.Context, shared.AlertPayload) shared.AnalysisContext {
 			return shared.AnalysisContext{}
@@ -144,7 +144,7 @@ func TestProcessAlert_UsesPolicyForModelAndRounds(t *testing.T) {
 
 func TestProcessAlert_Success(t *testing.T) {
 	pub := &mockPublisher{}
-	metrics := new(shared.AlertMetrics)
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
 
 	deps := PipelineDeps{
 		ToolRunner: &fakeToolLoopRunner{
@@ -175,8 +175,8 @@ func TestProcessAlert_Success(t *testing.T) {
 
 	ProcessAlert(context.Background(), deps, alert)
 
-	if metrics.AlertsProcessed.Load() != 1 {
-		t.Errorf("AlertsProcessed = %d, want 1", metrics.AlertsProcessed.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsProcessed.WithLabelValues("unknown"))) != 1 {
+		t.Errorf("AlertsProcessed = %d, want 1", int64(testutil.ToFloat64(metrics.Prom.AlertsProcessed.WithLabelValues("unknown"))))
 	}
 	bodies := pub.published()
 	if len(bodies) != 1 {
@@ -190,7 +190,7 @@ func TestProcessAlert_Success(t *testing.T) {
 func TestProcessAlert_AnalysisFails(t *testing.T) {
 	pub := &mockPublisher{}
 	cooldown := shared.NewCooldownManager()
-	metrics := new(shared.AlertMetrics)
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
 
 	deps := PipelineDeps{
 		ToolRunner: &fakeToolLoopRunner{
@@ -212,8 +212,8 @@ func TestProcessAlert_AnalysisFails(t *testing.T) {
 	alert := shared.AlertPayload{Fingerprint: "abc", Title: "Test", Severity: "warning", Fields: map[string]string{}}
 	ProcessAlert(context.Background(), deps, alert)
 
-	if metrics.AlertsFailed.Load() != 1 {
-		t.Errorf("AlertsFailed = %d, want 1", metrics.AlertsFailed.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)) != 1 {
+		t.Errorf("AlertsFailed = %d, want 1", int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)))
 	}
 	// Cooldown should be cleared on failure
 	if !cooldown.CheckAndSet("abc", 300*1e9) {
@@ -229,7 +229,7 @@ func TestProcessAlert_AnalysisFails(t *testing.T) {
 func TestProcessAlert_PublishFails(t *testing.T) {
 	pub := &mockPublisher{err: fmt.Errorf("ntfy unavailable")}
 	cooldown := shared.NewCooldownManager()
-	metrics := new(shared.AlertMetrics)
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
 
 	deps := PipelineDeps{
 		ToolRunner: &fakeToolLoopRunner{
@@ -255,11 +255,11 @@ func TestProcessAlert_PublishFails(t *testing.T) {
 	alert := shared.AlertPayload{Fingerprint: "fp1", Title: "DiskFull", Severity: "critical", Fields: map[string]string{}}
 	ProcessAlert(context.Background(), deps, alert)
 
-	if metrics.AlertsFailed.Load() != 1 {
-		t.Errorf("AlertsFailed = %d, want 1", metrics.AlertsFailed.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)) != 1 {
+		t.Errorf("AlertsFailed = %d, want 1", int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)))
 	}
-	if metrics.AlertsProcessed.Load() != 0 {
-		t.Errorf("AlertsProcessed = %d, want 0", metrics.AlertsProcessed.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsProcessed.WithLabelValues("unknown"))) != 0 {
+		t.Errorf("AlertsProcessed = %d, want 0", int64(testutil.ToFloat64(metrics.Prom.AlertsProcessed.WithLabelValues("unknown"))))
 	}
 	// Post-API failure: cooldown must NOT be cleared.
 	if cooldown.CheckAndSet("fp1", time.Second) {
@@ -270,11 +270,11 @@ func TestProcessAlert_PublishFails(t *testing.T) {
 // TestProcessAlert_PublishFails_RecordsPrometheusCounter verifies that when
 // PublishAll returns an error and Prom is non-nil, the ntfy_publish_errors_total
 // Prometheus counter is incremented. The existing TestProcessAlert_PublishFails
-// uses new(shared.AlertMetrics) (Prom == nil) so RecordNtfyPublishError is a
+// uses shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s)) (Prom == nil) so RecordNtfyPublishError is a
 // no-op there; this test exercises the non-nil path.
 func TestProcessAlert_PublishFails_RecordsPrometheusCounter(t *testing.T) {
 	pub := &mockPublisher{err: fmt.Errorf("ntfy unavailable")}
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
 
 	deps := PipelineDeps{
 		ToolRunner: &fakeToolLoopRunner{
@@ -302,7 +302,7 @@ func TestProcessAlert_PublishFails_RecordsPrometheusCounter(t *testing.T) {
 	}
 	ProcessAlert(context.Background(), deps, alert)
 
-	got := testutil.ToFloat64(metrics.Prom.NtfyPublishErrors.WithLabelValues("k8s"))
+	got := testutil.ToFloat64(metrics.Prom.NtfyPublishErrors)
 	if got != 1 {
 		t.Errorf("ntfy_publish_errors_total{source=\"k8s\"} = %v, want 1", got)
 	}
@@ -315,7 +315,7 @@ func TestProcessAlert_PublishFails_RecordsPrometheusCounter(t *testing.T) {
 // is permanently zero.
 func TestProcessAlert_AnalysisFails_RecordsClaudeAPIErrorCounter(t *testing.T) {
 	pub := &mockPublisher{}
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
 
 	deps := PipelineDeps{
 		ToolRunner: &fakeToolLoopRunner{
@@ -343,7 +343,7 @@ func TestProcessAlert_AnalysisFails_RecordsClaudeAPIErrorCounter(t *testing.T) {
 	}
 	ProcessAlert(context.Background(), deps, alert)
 
-	got := testutil.ToFloat64(metrics.Prom.ClaudeAPIErrors.WithLabelValues("k8s"))
+	got := testutil.ToFloat64(metrics.Prom.ClaudeAPIErrors)
 	if got != 1 {
 		t.Errorf("claude_api_errors_total{source=\"k8s\"} = %v, want 1", got)
 	}
@@ -356,7 +356,7 @@ func TestProcessAlert_AnalysisFails_RecordsClaudeAPIErrorCounter(t *testing.T) {
 func TestProcessAlert_EmptyAnalysis(t *testing.T) {
 	pub := &mockPublisher{}
 	cooldown := shared.NewCooldownManager()
-	metrics := new(shared.AlertMetrics)
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
 
 	deps := PipelineDeps{
 		ToolRunner: &fakeToolLoopRunner{
@@ -378,11 +378,11 @@ func TestProcessAlert_EmptyAnalysis(t *testing.T) {
 	alert := shared.AlertPayload{Fingerprint: "fp-empty", Title: "EmptyAlert", Severity: "warning", Fields: map[string]string{}}
 	ProcessAlert(context.Background(), deps, alert)
 
-	if metrics.AlertsFailed.Load() != 1 {
-		t.Errorf("AlertsFailed = %d, want 1", metrics.AlertsFailed.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)) != 1 {
+		t.Errorf("AlertsFailed = %d, want 1", int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)))
 	}
-	if metrics.AlertsProcessed.Load() != 0 {
-		t.Errorf("AlertsProcessed = %d, want 0", metrics.AlertsProcessed.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsProcessed.WithLabelValues("unknown"))) != 0 {
+		t.Errorf("AlertsProcessed = %d, want 0", int64(testutil.ToFloat64(metrics.Prom.AlertsProcessed.WithLabelValues("unknown"))))
 	}
 	// Cooldown must be cleared so the next webhook can re-trigger analysis.
 	if !cooldown.CheckAndSet("fp-empty", 300*1e9) {
@@ -403,7 +403,7 @@ func TestProcessAlert_EmptyAnalysis(t *testing.T) {
 func TestProcessAlert_PanicClearsCooldown(t *testing.T) {
 	pub := &mockPublisher{}
 	cooldown := shared.NewCooldownManager()
-	metrics := new(shared.AlertMetrics)
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
 
 	deps := PipelineDeps{
 		ToolRunner: &fakeToolLoopRunner{
@@ -434,8 +434,8 @@ func TestProcessAlert_PanicClearsCooldown(t *testing.T) {
 	if !cooldown.CheckAndSet("panic-fp", 300*1e9) {
 		t.Error("cooldown not cleared after panic")
 	}
-	if metrics.AlertsFailed.Load() != 1 {
-		t.Errorf("AlertsFailed = %d, want 1", metrics.AlertsFailed.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)) != 1 {
+		t.Errorf("AlertsFailed = %d, want 1", int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)))
 	}
 }
 
@@ -458,7 +458,7 @@ func TestProcessAlert_PriorityMapping(t *testing.T) {
 		tc := tc
 		t.Run(fmt.Sprintf("severity=%q", tc.severity), func(t *testing.T) {
 			pub := &mockPublisher{}
-			metrics := new(shared.AlertMetrics)
+			metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
 
 			deps := PipelineDeps{
 				ToolRunner: &fakeToolLoopRunner{
@@ -506,7 +506,7 @@ func TestProcessAlert_StartsAtInPrompt(t *testing.T) {
 		},
 	}
 	pub := &mockPublisher{}
-	metrics := new(shared.AlertMetrics)
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
 
 	deps := PipelineDeps{
 		ToolRunner:    runner,
@@ -554,7 +554,7 @@ func TestProcessAlert_StartsAtInPrompt(t *testing.T) {
 // sanitize the body parameter (only the title header).
 func TestProcessAlert_FailureBodySanitizesTitle(t *testing.T) {
 	pub := &mockPublisher{}
-	metrics := new(shared.AlertMetrics)
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
 
 	deps := PipelineDeps{
 		ToolRunner: &fakeToolLoopRunner{
@@ -604,7 +604,7 @@ func TestProcessAlert_PromptSanitizesNamespace(t *testing.T) {
 		},
 	}
 	pub := &mockPublisher{}
-	metrics := new(shared.AlertMetrics)
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
 
 	deps := PipelineDeps{
 		ToolRunner:    runner,
@@ -662,7 +662,7 @@ func TestProcessAlert_TitleFormatting(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			pub := &mockPublisher{}
-			metrics := new(shared.AlertMetrics)
+			metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
 
 			deps := PipelineDeps{
 				ToolRunner: &fakeToolLoopRunner{
@@ -940,7 +940,7 @@ type panicMockAnalyzer struct {
 	msg string
 }
 
-func (p *panicMockAnalyzer) Analyze(_ context.Context, _, _, _ string) (string, error) {
+func (p *panicMockAnalyzer) Analyze(_ context.Context, _ shared.Severity, _, _, _ string) (string, error) {
 	panic(p.msg)
 }
 
@@ -993,7 +993,7 @@ type mockAnalyzer struct {
 	returnErr      error
 }
 
-func (m *mockAnalyzer) Analyze(ctx context.Context, model, system, user string) (string, error) {
+func (m *mockAnalyzer) Analyze(ctx context.Context, _ shared.Severity, model, system, user string) (string, error) {
 	m.calls++
 	if m.returnErr != nil {
 		return "", m.returnErr
@@ -1006,7 +1006,7 @@ type mockToolRunner struct {
 }
 
 func (m *mockToolRunner) RunToolLoop(
-	ctx context.Context, model, system, user string,
+	ctx context.Context, _ shared.Severity, model, system, user string,
 	tools []anthropic.ToolUnionParam, maxRounds int,
 	handleTool func(name string, input json.RawMessage) (string, error),
 ) (string, int, bool, error) {

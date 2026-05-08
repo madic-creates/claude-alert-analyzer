@@ -307,7 +307,7 @@ func TestCheckmkHandleWebhook_CooldownIncrementsMetric(t *testing.T) {
 	cfg := makeCheckmkConfig()
 	cfg.CooldownSeconds = 60
 	cd := shared.NewCooldownManager()
-	metrics := new(shared.AlertMetrics)
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductCheckMK))
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		return true
 	}, metrics, nil)
@@ -315,13 +315,13 @@ func TestCheckmkHandleWebhook_CooldownIncrementsMetric(t *testing.T) {
 	notif := makeNotification("host1", "CPU", "WARNING", "PROBLEM")
 
 	postCheckmkWebhook(t, handler, "test-secret", notif)
-	if metrics.AlertsCooldown.Load() != 0 {
-		t.Errorf("expected 0 cooldown skips after first request, got %d", metrics.AlertsCooldown.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsDropped.WithLabelValues("cooldown"))) != 0 {
+		t.Errorf("expected 0 cooldown skips after first request, got %d", int64(testutil.ToFloat64(metrics.Prom.AlertsDropped.WithLabelValues("cooldown"))))
 	}
 
 	postCheckmkWebhook(t, handler, "test-secret", notif)
-	if metrics.AlertsCooldown.Load() != 1 {
-		t.Errorf("expected 1 cooldown skip after duplicate request, got %d", metrics.AlertsCooldown.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsDropped.WithLabelValues("cooldown"))) != 1 {
+		t.Errorf("expected 1 cooldown skip after duplicate request, got %d", int64(testutil.ToFloat64(metrics.Prom.AlertsDropped.WithLabelValues("cooldown"))))
 	}
 }
 
@@ -329,14 +329,14 @@ func TestCheckmkHandleWebhook_CooldownIncrementsMetric(t *testing.T) {
 // an alert is blocked by the cooldown the labeled Prometheus counter
 // alerts_cooldown_total{source="checkmk"} is incremented via RecordCooldown.
 // The existing TestCheckmkHandleWebhook_CooldownIncrementsMetric uses
-// new(shared.AlertMetrics) (Prom == nil) so RecordCooldown is a no-op there;
+// shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)) (Prom == nil) so RecordCooldown is a no-op there;
 // this test exercises the non-nil path so that a mutation removing the
 // RecordCooldown call or using the wrong source label would be detected.
 func TestCheckmkHandleWebhook_CooldownIncrementsPrometheusCounter(t *testing.T) {
 	cfg := makeCheckmkConfig()
 	cfg.CooldownSeconds = 60
 	cd := shared.NewCooldownManager()
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)}
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, metrics, nil)
 
 	notif := makeNotification("host1", "CPU", "WARNING", "PROBLEM")
@@ -345,7 +345,7 @@ func TestCheckmkHandleWebhook_CooldownIncrementsPrometheusCounter(t *testing.T) 
 	// Second request: blocked by cooldown → RecordCooldown must be called.
 	postCheckmkWebhook(t, handler, "test-secret", notif)
 
-	got := testutil.ToFloat64(metrics.Prom.AlertsCooldown.WithLabelValues("checkmk"))
+	got := testutil.ToFloat64(metrics.Prom.AlertsDropped.WithLabelValues("cooldown"))
 	if got != 1 {
 		t.Errorf("alerts_cooldown_total{source=\"checkmk\"} = %v, want 1", got)
 	}
@@ -940,7 +940,7 @@ func TestHandleWebhook_GroupCooldownDeduplicates(t *testing.T) {
 	cm := shared.NewCooldownManager()
 	enqueued := 0
 	enqueue := func(shared.AlertPayload) bool { enqueued++; return true }
-	metrics := &shared.AlertMetrics{}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)}
 	cfg := Config{WebhookSecret: "s", CooldownSeconds: 60, GroupCooldownTTL: time.Minute}
 	h := HandleWebhook(cfg, cm, enqueue, metrics, nil)
 
@@ -955,8 +955,8 @@ func TestHandleWebhook_GroupCooldownDeduplicates(t *testing.T) {
 	if enqueued != 1 {
 		t.Fatalf("group-deduped: enqueued=%d, want 1", enqueued)
 	}
-	if metrics.AlertsCooldown.Load() != 1 {
-		t.Fatalf("AlertsCooldown=%d, want 1", metrics.AlertsCooldown.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsDropped.WithLabelValues("group_cooldown"))) != 1 {
+		t.Fatalf("AlertsDropped[group_cooldown]=%d, want 1", int64(testutil.ToFloat64(metrics.Prom.AlertsDropped.WithLabelValues("group_cooldown"))))
 	}
 }
 

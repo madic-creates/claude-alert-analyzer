@@ -40,9 +40,15 @@ func HandleWebhook(
 	cooldownTTL := time.Duration(cfg.CooldownSeconds) * time.Second
 
 	return func(w http.ResponseWriter, r *http.Request) {
+		httpStatus := http.StatusOK
+		defer func() {
+			metrics.RecordWebhookOutcome(shared.OutcomeForStatus(httpStatus))
+		}()
+
 		expected := []byte("Bearer " + cfg.WebhookSecret)
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), expected) != 1 {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			httpStatus = http.StatusUnauthorized
+			http.Error(w, "unauthorized", httpStatus)
 			return
 		}
 
@@ -51,21 +57,25 @@ func HandleWebhook(
 		if err != nil {
 			var maxErr *http.MaxBytesError
 			if errors.As(err, &maxErr) {
-				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+				httpStatus = http.StatusRequestEntityTooLarge
+				http.Error(w, "request body too large", httpStatus)
 				return
 			}
-			http.Error(w, "bad request", http.StatusBadRequest)
+			httpStatus = http.StatusBadRequest
+			http.Error(w, "bad request", httpStatus)
 			return
 		}
 
 		var payload AlertmanagerWebhook
 		if err := json.Unmarshal(body, &payload); err != nil {
-			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			httpStatus = http.StatusBadRequest
+			http.Error(w, "invalid JSON", httpStatus)
 			return
 		}
 
 		if len(payload.Alerts) > maxAlertsPerBatch {
-			http.Error(w, "too many alerts in batch", http.StatusRequestEntityTooLarge)
+			httpStatus = http.StatusRequestEntityTooLarge
+			http.Error(w, "too many alerts in batch", httpStatus)
 			return
 		}
 
@@ -74,9 +84,7 @@ func HandleWebhook(
 		for _, alert := range payload.Alerts {
 			if len(alert.Fingerprint) == 0 || len(alert.Fingerprint) > maxFingerprintLen {
 				slog.Warn("skipping alert with invalid fingerprint", "alertname", alert.Labels["alertname"])
-				if metrics != nil {
-					metrics.AlertsInvalidFingerprint.Add(1)
-				}
+				metrics.RecordDropped(shared.DropReasonInvalidFingerprint)
 				continue
 			}
 
@@ -91,18 +99,23 @@ func HandleWebhook(
 				cooldown.Clear(alert.Fingerprint)
 				cooldown.ClearGroup(groupKeyFromLabels(alert.Labels))
 				slog.Info("skipping resolved, cleared cooldown", "alertname", alert.Labels["alertname"])
+				metrics.RecordResolved()
 				continue
 			}
 
 			groupKey := groupKeyFromLabels(alert.Labels)
 
 			// Atomic combined check: either both cooldowns set, or neither.
-			if !cooldown.CheckAndSetWithGroup(alert.Fingerprint, cooldownTTL, groupKey, cfg.GroupCooldownTTL).Accepted() {
-				slog.Info("in cooldown", "alertname", alert.Labels["alertname"], "groupKey", groupKey)
-				if metrics != nil {
-					metrics.AlertsCooldown.Add(1)
-					metrics.RecordCooldown("k8s")
-				}
+			switch outcome := cooldown.CheckAndSetWithGroup(alert.Fingerprint, cooldownTTL, groupKey, cfg.GroupCooldownTTL); outcome {
+			case shared.CooldownAccepted:
+				// proceed
+			case shared.CooldownFingerprint:
+				slog.Info("in cooldown (fingerprint)", "alertname", alert.Labels["alertname"], "groupKey", groupKey)
+				metrics.RecordDropped(shared.DropReasonCooldown)
+				continue
+			case shared.CooldownGroup:
+				slog.Info("in cooldown (group)", "alertname", alert.Labels["alertname"], "groupKey", groupKey)
+				metrics.RecordDropped(shared.DropReasonGroupCooldown)
 				continue
 			}
 
@@ -129,18 +142,21 @@ func HandleWebhook(
 			ap.Fields["startsAt"] = alert.StartsAt.Format("2006-01-02T15:04:05Z07:00")
 
 			if enqueue(ap) {
+				metrics.RecordEnqueued()
 				queued++
 			} else {
 				slog.Warn("work queue full, rejecting", "alertname", alert.Labels["alertname"])
 				cooldown.Clear(alert.Fingerprint)
 				cooldown.ClearGroup(groupKey)
+				metrics.RecordDropped(shared.DropReasonQueueFull)
 				dropped++
 			}
 		}
 
 		if dropped > 0 {
 			// 503 triggers Alertmanager retry
-			w.WriteHeader(http.StatusServiceUnavailable)
+			httpStatus = http.StatusServiceUnavailable
+			w.WriteHeader(httpStatus)
 			fmt.Fprintf(w, "queued %d, dropped %d (queue full)", queued, dropped)
 			return
 		}

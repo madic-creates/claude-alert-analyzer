@@ -304,7 +304,7 @@ func TestHandleWebhook_CooldownIncrementsMetric(t *testing.T) {
 	cfg := makeConfig()
 	cfg.CooldownSeconds = 60
 	cd := shared.NewCooldownManager()
-	metrics := new(shared.AlertMetrics)
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		return true
 	}, metrics, nil)
@@ -312,13 +312,13 @@ func TestHandleWebhook_CooldownIncrementsMetric(t *testing.T) {
 	alerts := []Alert{makeAlert("fp-metric", "TestMetric", "firing")}
 
 	postWebhook(t, handler, "test-secret", makeWebhook(alerts))
-	if metrics.AlertsCooldown.Load() != 0 {
-		t.Errorf("expected 0 cooldown skips after first request, got %d", metrics.AlertsCooldown.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsDropped.WithLabelValues("cooldown"))) != 0 {
+		t.Errorf("expected 0 cooldown skips after first request, got %d", int64(testutil.ToFloat64(metrics.Prom.AlertsDropped.WithLabelValues("cooldown"))))
 	}
 
 	postWebhook(t, handler, "test-secret", makeWebhook(alerts))
-	if metrics.AlertsCooldown.Load() != 1 {
-		t.Errorf("expected 1 cooldown skip after duplicate request, got %d", metrics.AlertsCooldown.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsDropped.WithLabelValues("cooldown"))) != 1 {
+		t.Errorf("expected 1 cooldown skip after duplicate request, got %d", int64(testutil.ToFloat64(metrics.Prom.AlertsDropped.WithLabelValues("cooldown"))))
 	}
 }
 
@@ -326,14 +326,14 @@ func TestHandleWebhook_CooldownIncrementsMetric(t *testing.T) {
 // alert is blocked by the cooldown the labeled Prometheus counter
 // alerts_cooldown_total{source="k8s"} is incremented via RecordCooldown.
 // The existing TestHandleWebhook_CooldownIncrementsMetric uses
-// new(shared.AlertMetrics) (Prom == nil) so RecordCooldown is a no-op there;
+// shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s)) (Prom == nil) so RecordCooldown is a no-op there;
 // this test exercises the non-nil path so that a mutation removing the
 // RecordCooldown call in the handler would be detected.
 func TestHandleWebhook_CooldownIncrementsPrometheusCounter(t *testing.T) {
 	cfg := makeConfig()
 	cfg.CooldownSeconds = 60
 	cd := shared.NewCooldownManager()
-	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetrics()}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, metrics, nil)
 
 	alerts := []Alert{makeAlert("fp-prom-cd", "TestPrometheus", "firing")}
@@ -342,7 +342,7 @@ func TestHandleWebhook_CooldownIncrementsPrometheusCounter(t *testing.T) {
 	// Second request: blocked by cooldown → RecordCooldown must be called.
 	postWebhook(t, handler, "test-secret", makeWebhook(alerts))
 
-	got := testutil.ToFloat64(metrics.Prom.AlertsCooldown.WithLabelValues("k8s"))
+	got := testutil.ToFloat64(metrics.Prom.AlertsDropped.WithLabelValues("cooldown"))
 	if got != 1 {
 		t.Errorf("alerts_cooldown_total{source=\"k8s\"} = %v, want 1", got)
 	}
@@ -701,7 +701,7 @@ func TestHandler_PopulatesSeverityLevel(t *testing.T) {
 func TestHandleWebhook_InvalidFingerprintIncrementsMetric(t *testing.T) {
 	cfg := makeConfig()
 	cd := shared.NewCooldownManager()
-	metrics := new(shared.AlertMetrics)
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, metrics, nil)
 
 	// One alert with empty fingerprint, one with oversized fingerprint.
@@ -715,8 +715,8 @@ func TestHandleWebhook_InvalidFingerprintIncrementsMetric(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", rr.Code)
 	}
-	if metrics.AlertsInvalidFingerprint.Load() != 2 {
-		t.Errorf("expected AlertsInvalidFingerprint=2, got %d", metrics.AlertsInvalidFingerprint.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsDropped.WithLabelValues("invalid_fingerprint"))) != 2 {
+		t.Errorf("expected AlertsInvalidFingerprint=2, got %d", int64(testutil.ToFloat64(metrics.Prom.AlertsDropped.WithLabelValues("invalid_fingerprint"))))
 	}
 }
 
@@ -724,7 +724,7 @@ func TestHandleWebhook_GroupCooldownDeduplicates(t *testing.T) {
 	cm := shared.NewCooldownManager()
 	enqueued := 0
 	enqueue := func(shared.AlertPayload) bool { enqueued++; return true }
-	metrics := &shared.AlertMetrics{}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
 
 	cfg := Config{WebhookSecret: "s", CooldownSeconds: 60, GroupCooldownTTL: time.Minute}
 	h := HandleWebhook(cfg, cm, enqueue, metrics, nil) // nil StormDetector
@@ -747,8 +747,8 @@ func TestHandleWebhook_GroupCooldownDeduplicates(t *testing.T) {
 	if enqueued != 1 {
 		t.Fatalf("group-deduped second call should not enqueue; got enqueued=%d", enqueued)
 	}
-	if metrics.AlertsCooldown.Load() != 1 {
-		t.Fatalf("AlertsCooldown=%d, want 1", metrics.AlertsCooldown.Load())
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsDropped.WithLabelValues("group_cooldown"))) != 1 {
+		t.Fatalf("AlertsDropped[group_cooldown]=%d, want 1", int64(testutil.ToFloat64(metrics.Prom.AlertsDropped.WithLabelValues("group_cooldown"))))
 	}
 }
 
@@ -756,7 +756,7 @@ func TestHandleWebhook_GroupKeyEmptyNamespaceFallback(t *testing.T) {
 	cm := shared.NewCooldownManager()
 	enqueued := 0
 	enqueue := func(shared.AlertPayload) bool { enqueued++; return true }
-	metrics := &shared.AlertMetrics{}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
 	cfg := Config{WebhookSecret: "s", CooldownSeconds: 60, GroupCooldownTTL: time.Minute}
 	h := HandleWebhook(cfg, cm, enqueue, metrics, nil)
 
