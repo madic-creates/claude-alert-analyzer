@@ -197,3 +197,57 @@ func TestCircuitBreaker_ConcurrentHalfOpenAcquireGivesOnlyOneProbe(t *testing.T)
 		t.Fatalf("rejected=%d, want %d", rejected, N-1)
 	}
 }
+
+// TestCircuitBreaker_State verifies that State() returns the correct integer
+// for each breaker state and is nil-safe. State() is called by both pipeline
+// implementations to update the claude_circuit_breaker_state Prometheus gauge;
+// its three return values (0=closed, 1=open, 2=half-open) must be stable.
+func TestCircuitBreaker_State(t *testing.T) {
+	t.Run("nil_returns_closed", func(t *testing.T) {
+		var b *CircuitBreaker
+		if got := b.State(); got != 0 {
+			t.Fatalf("nil State() = %d, want 0 (closed)", got)
+		}
+	})
+
+	t.Run("fresh_breaker_is_closed", func(t *testing.T) {
+		clk := &fakeClock{t: time.Unix(0, 0)}
+		b := NewCircuitBreaker(2, time.Minute, time.Minute, clk.Now)
+		if got := b.State(); got != 0 {
+			t.Fatalf("closed State() = %d, want 0", got)
+		}
+	})
+
+	t.Run("open_after_threshold_failures", func(t *testing.T) {
+		clk := &fakeClock{t: time.Unix(0, 0)}
+		b := NewCircuitBreaker(2, time.Minute, time.Minute, clk.Now)
+
+		p, _ := b.Acquire()
+		p.Done(errors.New("fail"))
+		p, _ = b.Acquire()
+		p.Done(errors.New("fail"))
+
+		if got := b.State(); got != 1 {
+			t.Fatalf("open State() = %d, want 1", got)
+		}
+	})
+
+	t.Run("half_open_after_open_duration", func(t *testing.T) {
+		clk := &fakeClock{t: time.Unix(0, 0)}
+		b := NewCircuitBreaker(1, 10*time.Second, time.Minute, clk.Now)
+
+		p, _ := b.Acquire()
+		p.Done(errors.New("fail"))
+
+		clk.advance(11 * time.Second)
+		// Acquire() transitions open→half-open and issues the probe permit.
+		probe, err := b.Acquire()
+		if err != nil || !probe.IsProbe() {
+			t.Fatalf("expected probe permit: err=%v probe=%v", err, probe.IsProbe())
+		}
+
+		if got := b.State(); got != 2 {
+			t.Fatalf("half-open State() = %d, want 2", got)
+		}
+	})
+}
