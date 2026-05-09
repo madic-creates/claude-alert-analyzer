@@ -1088,6 +1088,52 @@ func TestHandleKubectlTool_TimeoutOutcomeViaErrString(t *testing.T) {
 	}
 }
 
+// TestHandleKubectlTool_CtxCancelledOutcomeIsTimeout verifies that when the
+// parent context is already cancelled, handleKubectlTool records
+// outcome="timeout" via the ctx.Err() != nil branch (line 553 of agent.go).
+// This is the kubectl analogue of TestHandlePromQLTool_TimeoutOutcome, which
+// covers the same cancellation path for the promql_query tool. Without this
+// branch, a pipeline-level context cancellation (e.g. drain timeout) would be
+// silently misclassified as outcome="nonzero_exit" in the metric.
+func TestHandleKubectlTool_CtxCancelledOutcomeIsTimeout(t *testing.T) {
+	kc := &fakeKubectlRunner{
+		// Simulate kubectl returning context.Canceled when its context is done.
+		// The fake ignores context, so we pair it with a pre-cancelled parent ctx.
+		err: context.Canceled,
+	}
+	pq := &fakePromQLQuerier{}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
+
+	// Pre-cancel the context before RunAgenticDiagnostics so that ctx.Err()
+	// is non-nil inside handleKubectlTool when kc.Exec returns.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	runner := &fakeToolLoopRunner{
+		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
+			result, err := handleTool("kubectl_exec", json.RawMessage(`{"command":["get","pods"]}`))
+			if err != nil {
+				t.Errorf("cancelled-context error should not propagate as Go error, got: %v", err)
+			}
+			if !strings.Contains(result, "exited:") {
+				t.Errorf("expected exit annotation in result, got: %q", result)
+			}
+			return "done", nil
+		},
+	}
+	if _, err := RunAgenticDiagnostics(ctx, runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="timeout",product="k8s",tool="kubectl_exec"} 1`) {
+		t.Errorf("expected timeout metric for cancelled parent context; body:\n%s", body)
+	}
+}
+
 // TestIsTimeoutErrTyped verifies that isTimeoutErr returns true for a
 // context.DeadlineExceeded error (both direct and wrapped), exercising the
 // errors.Is typed path added alongside the string-based "signal: killed" check.
