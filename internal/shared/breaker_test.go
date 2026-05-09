@@ -251,3 +251,88 @@ func TestCircuitBreaker_State(t *testing.T) {
 		}
 	})
 }
+
+// TestCircuitBreaker_SuccessResetsConsecutiveFailureCounter verifies that a
+// successful call resets the consecutive-failure counter. Without the reset,
+// non-consecutive failures could trip the breaker threshold when they should not.
+func TestCircuitBreaker_SuccessResetsConsecutiveFailureCounter(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(0, 0)}
+	b := NewCircuitBreaker(3, time.Minute, time.Minute, clk.Now)
+
+	// Two failures — not yet at threshold=3.
+	p, _ := b.Acquire()
+	p.Done(errors.New("fail"))
+	p, _ = b.Acquire()
+	p.Done(errors.New("fail"))
+
+	// One success must reset the counter to zero.
+	p, _ = b.Acquire()
+	p.Done(nil)
+
+	// Two more failures — only 2 consecutive since the reset, so the breaker
+	// must remain closed (threshold=3 requires 3 consecutive failures).
+	p, _ = b.Acquire()
+	p.Done(errors.New("fail"))
+	p, _ = b.Acquire()
+	p.Done(errors.New("fail"))
+	if _, err := b.Acquire(); err != nil {
+		t.Fatalf("expected closed breaker after 2 consecutive failures (threshold=3): %v", err)
+	}
+
+	// A third consecutive failure now trips the threshold.
+	p, _ = b.Acquire()
+	p.Done(errors.New("fail"))
+	if _, err := b.Acquire(); !errors.Is(err, ErrCircuitOpen) {
+		t.Fatalf("expected open breaker after 3 consecutive failures: %v", err)
+	}
+}
+
+// TestCircuitBreaker_NilPermitIsNilSafe verifies that IsProbe() and Done()
+// on a nil *Permit are no-ops. Both are called from pipeline defer blocks
+// where permit may still be nil if Acquire() was never reached.
+func TestCircuitBreaker_NilPermitIsNilSafe(t *testing.T) {
+	var p *Permit
+	if got := p.IsProbe(); got {
+		t.Fatal("nil.IsProbe() = true, want false")
+	}
+	p.Done(nil)
+	p.Done(errors.New("any"))
+}
+
+// TestCircuitBreaker_ZeroDurationDefaults verifies that NewCircuitBreaker
+// applies the 60-second defaults for zero openDuration and maxProbeDuration,
+// and that a nil now func defaults to time.Now.
+func TestCircuitBreaker_ZeroDurationDefaults(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(0, 0)}
+	// Both durations are 0 — each defaults to 60 seconds.
+	b := NewCircuitBreaker(1, 0, 0, clk.Now)
+
+	p, _ := b.Acquire()
+	p.Done(errors.New("fail")) // trips threshold=1 → open
+
+	// At 59s the open-duration default (60s) has not yet elapsed.
+	clk.advance(59 * time.Second)
+	if _, err := b.Acquire(); !errors.Is(err, ErrCircuitOpen) {
+		t.Fatalf("expected open at 59s with 60s default: %v", err)
+	}
+	// At 61s the breaker transitions to half-open and issues a probe.
+	clk.advance(2 * time.Second)
+	probe, err := b.Acquire()
+	if err != nil || !probe.IsProbe() {
+		t.Fatalf("expected probe at 61s (60s default): err=%v probe=%v", err, probe.IsProbe())
+	}
+}
+
+// TestCircuitBreaker_NilNowDefaultsToTimeNow verifies that passing nil for
+// the now func does not panic and produces a functional breaker.
+func TestCircuitBreaker_NilNowDefaultsToTimeNow(t *testing.T) {
+	b := NewCircuitBreaker(1, time.Minute, time.Minute, nil)
+	if b == nil {
+		t.Fatal("expected non-nil breaker")
+	}
+	p, err := b.Acquire()
+	if err != nil {
+		t.Fatalf("Acquire on fresh breaker: %v", err)
+	}
+	p.Done(nil) // success should not panic
+}
