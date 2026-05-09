@@ -1476,3 +1476,85 @@ func TestVerstaerkerBug_OpenBreakerKeepsCooldown_NoSecondAnalysis(t *testing.T) 
 		t.Fatalf("retry: Claude must STILL not have been called; analyze=%d runToolLoop=%d", mock.calls.analyze, mock.calls.runToolLoop)
 	}
 }
+
+// TestProcessAlert_AnalyzerPanicOpensBreaker verifies that when the static
+// analyzer panics, the deferred panic-recovery in ProcessAlert correctly sets
+// analysisErr and calls permit.Done(analysisErr), causing the circuit breaker
+// to record a failure and eventually open.
+//
+// Regression coverage for the panic-recovery → permit settlement path in the
+// checkmk pipeline. The k8s pipeline has an equivalent test; this ensures
+// parity so that a future refactor breaking permit settlement on panic is
+// caught for both analyzers.
+func TestProcessAlert_AnalyzerPanicOpensBreaker(t *testing.T) {
+	cm := shared.NewCooldownManager()
+	clk := &pipelineFakeClock{t: time.Unix(0, 0)}
+	breaker := shared.NewCircuitBreaker(1, time.Hour, time.Hour, clk.Now)
+
+	deps := PipelineDeps{
+		Cooldown:     cm,
+		Breaker:      breaker,
+		Metrics:      &shared.AlertMetrics{},
+		Policy:       &shared.AnalysisPolicy{DefaultModel: "x", DefaultMaxRounds: 0},
+		SSHEnabled:   false,
+		ValidateHost: validateHostNoop,
+		GatherContext: func(_ context.Context, _ shared.AlertPayload, _ *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		Analyzer:   &panicAnalyzer{},
+		ToolRunner: &mockAnalyzer{},
+		Publishers: []shared.Publisher{&pipelineFakePublisher{}},
+	}
+
+	// One panicked analysis with threshold=1 should open the breaker.
+	func() {
+		defer func() { _ = recover() }() // swallow re-panic so the test continues
+		ProcessAlert(context.Background(), deps, shared.AlertPayload{Fingerprint: "fp1"})
+	}()
+
+	if _, err := breaker.Acquire(); !errors.Is(err, shared.ErrCircuitOpen) {
+		t.Fatalf("breaker should be open after a panicked analysis; Acquire returned err=%v", err)
+	}
+}
+
+// TestProcessAlert_ToolLoopPanicOpensBreaker verifies that when the SSH
+// agentic tool loop panics, the deferred panic-recovery in ProcessAlert
+// correctly settles the circuit breaker permit with an error, causing the
+// breaker to open after the configured threshold.
+//
+// This is the agentic-path counterpart of TestProcessAlert_AnalyzerPanicOpensBreaker.
+func TestProcessAlert_ToolLoopPanicOpensBreaker(t *testing.T) {
+	cm := shared.NewCooldownManager()
+	clk := &pipelineFakeClock{t: time.Unix(0, 0)}
+	breaker := shared.NewCircuitBreaker(1, time.Hour, time.Hour, clk.Now)
+
+	deps := PipelineDeps{
+		Cooldown:   cm,
+		Breaker:    breaker,
+		Metrics:    &shared.AlertMetrics{},
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "x", DefaultMaxRounds: 10},
+		SSHEnabled: true,
+		SSHConfig:  Config{SSHDeniedCommands: DefaultDeniedCommands},
+		// SSHDialer is nil — RunAgenticDiagnostics panics before dialing via panicToolRunner.
+		ValidateHost: validateHostNoop,
+		GatherContext: func(_ context.Context, _ shared.AlertPayload, _ *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		Analyzer:   &mockAnalyzer{result: "fallback"},
+		ToolRunner: &panicToolRunner{},
+		Publishers: []shared.Publisher{&pipelineFakePublisher{}},
+	}
+
+	// One panicked tool loop with threshold=1 should open the breaker.
+	func() {
+		defer func() { _ = recover() }() // swallow re-panic so the test continues
+		ProcessAlert(context.Background(), deps, shared.AlertPayload{
+			Fingerprint: "fp2",
+			Fields:      map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+		})
+	}()
+
+	if _, err := breaker.Acquire(); !errors.Is(err, shared.ErrCircuitOpen) {
+		t.Fatalf("breaker should be open after a panicked tool loop; Acquire returned err=%v", err)
+	}
+}
