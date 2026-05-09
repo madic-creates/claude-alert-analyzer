@@ -215,17 +215,19 @@ func main() {
 	handler := k8s.HandleWebhook(cfg, cooldownMgr, srv.Enqueue, metrics, policy.Storm)
 
 	defer func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer stopCancel()
 		if stormNotify != nil {
-			if err := stormNotify.Stop(stopCtx); err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if err := stormNotify.Stop(ctx); err != nil {
 				slog.Warn("storm aggregator stop returned error", "error", err)
 			}
+			cancel()
 		}
 		if breakerNotify != nil {
-			if err := breakerNotify.Stop(stopCtx); err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if err := breakerNotify.Stop(ctx); err != nil {
 				slog.Warn("breaker aggregator stop returned error", "error", err)
 			}
+			cancel()
 		}
 	}()
 	srv.Run(handler)
