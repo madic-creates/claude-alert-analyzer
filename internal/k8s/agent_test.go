@@ -1254,3 +1254,14 @@ func TestNewKubectlSubprocess_NonExecutableBinary(t *testing.T) {
 		t.Errorf("runner.Path = %q, want %q", runner.Path, path)
 	}
 }
+
+func TestNewKubectlSubprocess_DefaultPath(t *testing.T) {
+	// Passing an empty string must fall back to defaultKubectlPath.
+	runner := NewKubectlSubprocess("")
+	if runner == nil {
+		t.Fatal("expected non-nil runner")
+	}
+	if runner.Path != defaultKubectlPath {
+		t.Errorf("runner.Path = %q, want %q (default)", runner.Path, defaultKubectlPath)
+	}
+}
