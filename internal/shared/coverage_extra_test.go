@@ -669,3 +669,36 @@ func TestServer_Run_MetricsListenAndServeFails(t *testing.T) {
 		t.Errorf("subprocess exit code = %d, want 1\nstderr: %s", exitErr.ExitCode(), stderr.String())
 	}
 }
+
+// TestAnalyze_TruncatedResponse covers the previously-untested branch in
+// Analyze (claude.go) where msg.StopReason is non-empty and not "end_turn"
+// (e.g. "max_tokens"). Claude can return a truncated response when the
+// output reaches the MaxTokens limit; the code logs a warning but still
+// returns whatever text was produced. This test verifies that:
+//  1. No error is returned — the caller receives the partial analysis.
+//  2. The returned text matches the content blocks in the response.
+//  3. The code path does not panic or swallow the content.
+func TestAnalyze_TruncatedResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id": "msg_trunc",
+			"type": "message",
+			"role": "assistant",
+			"content": [{"type": "text", "text": "partial analysis"}],
+			"stop_reason": "max_tokens",
+			"model": "test-model",
+			"usage": {"input_tokens": 100, "output_tokens": 2048}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv, "test-model", "test-key", 0)
+	result, err := client.Analyze(t.Context(), SeverityWarning, "test-model", "system prompt", "user prompt")
+	if err != nil {
+		t.Fatalf("expected nil error for truncated response, got: %v", err)
+	}
+	if result != "partial analysis" {
+		t.Errorf("expected 'partial analysis', got: %q", result)
+	}
+}
