@@ -74,8 +74,8 @@ ghcr.io/madic-creates/claude-alert-checkmk-analyzer:latest
 
 | Image | Base | Size |
 |-------|------|------|
-| `claude-alert-kubernetes-analyzer` | `scratch` | ~20 MB |
-| `claude-alert-checkmk-analyzer` | `alpine:3.23` | ~60 MB (includes `openssh-client`) |
+| `claude-alert-kubernetes-analyzer` | `scratch` | ~60 MB |
+| `claude-alert-checkmk-analyzer` | `alpine:3.23` | ~20 MB (includes `openssh-client`) |
 
 ## Documentation
 
