@@ -1016,6 +1016,138 @@ func TestRunAgenticDiagnostics_EmptyOutputError(t *testing.T) {
 	}
 }
 
+// TestHandleKubectlTool_ExecErrorOutcome verifies that when the kubectl binary
+// is not found, handleKubectlTool records outcome="exec_error" in the metric
+// and returns the failure as a tool result (not a Go error) so Claude can
+// self-correct instead of the agentic loop aborting.
+func TestHandleKubectlTool_ExecErrorOutcome(t *testing.T) {
+	kc := &fakeKubectlRunner{
+		err: fmt.Errorf("fork/exec /usr/local/bin/kubectl: no such file or directory"),
+	}
+	pq := &fakePromQLQuerier{}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
+
+	runner := &fakeToolLoopRunner{
+		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
+			result, err := handleTool("kubectl_exec", json.RawMessage(`{"command":["get","pods"]}`))
+			if err != nil {
+				t.Errorf("exec error should not propagate as Go error, got: %v", err)
+			}
+			if !strings.Contains(result, "exited:") {
+				t.Errorf("expected exit annotation in result, got: %q", result)
+			}
+			return "done", nil
+		},
+	}
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="exec_error",product="k8s",tool="kubectl_exec"} 1`) {
+		t.Errorf("expected exec_error metric for missing binary; body:\n%s", body)
+	}
+}
+
+// TestHandleKubectlTool_TimeoutOutcomeViaErrString verifies that when the
+// kubectl process is killed (signal: killed), handleKubectlTool records
+// outcome="timeout" via isTimeoutErr, distinct from the ctx.Err() path tested
+// by TestHandlePromQLTool_TimeoutOutcome.
+func TestHandleKubectlTool_TimeoutOutcomeViaErrString(t *testing.T) {
+	kc := &fakeKubectlRunner{
+		err: fmt.Errorf("signal: killed"),
+	}
+	pq := &fakePromQLQuerier{}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
+
+	runner := &fakeToolLoopRunner{
+		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
+			result, err := handleTool("kubectl_exec", json.RawMessage(`{"command":["get","pods"]}`))
+			if err != nil {
+				t.Errorf("timeout error should not propagate as Go error, got: %v", err)
+			}
+			if !strings.Contains(result, "exited:") {
+				t.Errorf("expected exit annotation in result, got: %q", result)
+			}
+			return "done", nil
+		},
+	}
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="timeout",product="k8s",tool="kubectl_exec"} 1`) {
+		t.Errorf("expected timeout metric for killed process; body:\n%s", body)
+	}
+}
+
+// TestHandlePromQLTool_RejectedValidOutcome verifies that parsePromQLInput
+// failure (empty query) records outcome="rejected_validation" for the promql_query
+// tool, matching the analogous kubectl_exec rejected_validation path.
+func TestHandlePromQLTool_RejectedValidOutcome(t *testing.T) {
+	pq := &fakePromQLQuerier{}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
+	kc := &fakeKubectlRunner{}
+
+	runner := &fakeToolLoopRunner{
+		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
+			result, err := handleTool("promql_query", json.RawMessage(`{"query":""}`))
+			if err != nil {
+				t.Errorf("validation error should not propagate as Go error, got: %v", err)
+			}
+			if !strings.Contains(result, "empty query") {
+				t.Errorf("expected parse error in result, got: %q", result)
+			}
+			return "done", nil
+		},
+	}
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="rejected_validation",product="k8s",tool="promql_query"} 1`) {
+		t.Errorf("expected rejected_validation metric for promql empty query; body:\n%s", body)
+	}
+}
+
+// TestParseKubectlInput_InvalidJSON verifies the JSON unmarshal error path in
+// parseKubectlInput — the "parse command input: %w" branch that wraps the
+// json.Unmarshal error, distinct from the structural validation paths exercised
+// by TestParseKubectlInput_BasicValidation.
+func TestParseKubectlInput_InvalidJSON(t *testing.T) {
+	_, err := parseKubectlInput(json.RawMessage(`not-valid-json`))
+	if err == nil {
+		t.Fatal("expected error for invalid JSON, got nil")
+	}
+	if !strings.Contains(err.Error(), "parse command input:") {
+		t.Errorf("expected 'parse command input:' prefix, got: %v", err)
+	}
+}
+
+// TestValidateKubectlVerb_NoVerb verifies that validateKubectlVerb returns an
+// error when the entire argv consists of flags with no positional token, so the
+// "kubectl command has no verb" branch is covered.
+func TestValidateKubectlVerb_NoVerb(t *testing.T) {
+	err := validateKubectlVerb([]string{"--output=json", "-n", "default"})
+	if err == nil {
+		t.Fatal("expected error for all-flag argv, got nil")
+	}
+	if !strings.Contains(err.Error(), "kubectl command has no verb") {
+		t.Errorf("expected 'no verb' error, got: %v", err)
+	}
+}
+
 func TestNewKubectlSubprocess_NonExecutableBinary(t *testing.T) {
 	// Create a non-executable temp file and verify that NewKubectlSubprocess
 	// does not panic or exit — it only logs a warning.
