@@ -519,11 +519,11 @@ func RunAgenticDiagnostics(
 	if metrics != nil {
 		metrics.RecordAgentRounds(rounds, exhausted)
 	}
-	slog.Info("agentic k8s diagnostics complete",
-		"rounds", rounds, "exhausted", exhausted)
 	if err != nil {
 		return "", fmt.Errorf("agentic loop failed: %w", err)
 	}
+	slog.Info("agentic k8s diagnostics complete",
+		"rounds", rounds, "exhausted", exhausted)
 	return analysis, nil
 }
 
