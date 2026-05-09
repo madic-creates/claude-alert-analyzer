@@ -828,7 +828,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(alert_analyzer_claude_api_duration_seconds_bucket{product=~\"$product\"}[5m]))) or vector(0)",
+          "expr": "(histogram_quantile(0.50, sum by (le) (rate(alert_analyzer_claude_api_duration_seconds_bucket{product=~\"$product\"}[5m]))) and (sum(rate(alert_analyzer_claude_api_duration_seconds_count{product=~\"$product\"}[5m])) > 0)) or vector(0)",
           "legendFormat": "p50",
           "range": true,
           "refId": "A"
@@ -839,7 +839,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(alert_analyzer_claude_api_duration_seconds_bucket{product=~\"$product\"}[5m]))) or vector(0)",
+          "expr": "(histogram_quantile(0.95, sum by (le) (rate(alert_analyzer_claude_api_duration_seconds_bucket{product=~\"$product\"}[5m]))) and (sum(rate(alert_analyzer_claude_api_duration_seconds_count{product=~\"$product\"}[5m])) > 0)) or vector(0)",
           "legendFormat": "p95",
           "range": true,
           "refId": "B"
@@ -850,7 +850,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(alert_analyzer_claude_api_duration_seconds_bucket{product=~\"$product\"}[5m]))) or vector(0)",
+          "expr": "(histogram_quantile(0.99, sum by (le) (rate(alert_analyzer_claude_api_duration_seconds_bucket{product=~\"$product\"}[5m]))) and (sum(rate(alert_analyzer_claude_api_duration_seconds_count{product=~\"$product\"}[5m])) > 0)) or vector(0)",
           "legendFormat": "p99",
           "range": true,
           "refId": "C"
@@ -1036,8 +1036,8 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(alert_analyzer_processing_duration_seconds_sum{product=~\"$product\"}[5m]) / clamp_min(rate(alert_analyzer_processing_duration_seconds_count{product=~\"$product\"}[5m]), 1e-9)",
-          "legendFormat": "mean",
+          "expr": "sum by (product) (rate(alert_analyzer_processing_duration_seconds_sum{product=~\"$product\"}[5m])) / clamp_min(sum by (product) (rate(alert_analyzer_processing_duration_seconds_count{product=~\"$product\"}[5m])), 1e-9)",
+          "legendFormat": "{{product}}",
           "range": true,
           "refId": "A"
         }
@@ -1493,7 +1493,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (model) (rate(alert_analyzer_claude_tokens_total{kind=\"input\", product=~\"$product\", severity=~\"$severity\"}[5m]) + rate(alert_analyzer_claude_tokens_total{kind=\"cache_read\", product=~\"$product\", severity=~\"$severity\"}[5m]))",
+          "expr": "sum by (model) (rate(alert_analyzer_claude_tokens_total{kind=~\"input|cache_read\", product=~\"$product\", severity=~\"$severity\"}[5m]))",
           "legendFormat": "{{model}}",
           "range": true,
           "refId": "A"
@@ -1779,7 +1779,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, tool) (rate(alert_analyzer_agent_tool_duration_seconds_bucket{product=~\"$product\"}[5m]))) or vector(0)",
+          "expr": "(histogram_quantile(0.95, sum by (le, tool) (rate(alert_analyzer_agent_tool_duration_seconds_bucket{product=~\"$product\"}[5m]))) and on(tool) (sum by (tool) (rate(alert_analyzer_agent_tool_duration_seconds_count{product=~\"$product\"}[5m])) > 0)) or vector(0)",
           "legendFormat": "{{tool}} p95",
           "range": true,
           "refId": "A"
@@ -1870,7 +1870,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum by (le, product) (rate(alert_analyzer_agent_rounds_per_run_bucket{product=~\"$product\"}[5m]))) or vector(0)",
+          "expr": "(histogram_quantile(0.50, sum by (le, product) (rate(alert_analyzer_agent_rounds_per_run_bucket{product=~\"$product\"}[5m]))) and (sum(rate(alert_analyzer_agent_rounds_per_run_count{product=~\"$product\"}[5m])) > 0)) or vector(0)",
           "legendFormat": "{{source}} p50",
           "range": true,
           "refId": "A"
@@ -1881,7 +1881,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, product) (rate(alert_analyzer_agent_rounds_per_run_bucket{product=~\"$product\"}[5m]))) or vector(0)",
+          "expr": "(histogram_quantile(0.95, sum by (le, product) (rate(alert_analyzer_agent_rounds_per_run_bucket{product=~\"$product\"}[5m]))) and (sum(rate(alert_analyzer_agent_rounds_per_run_count{product=~\"$product\"}[5m])) > 0)) or vector(0)",
           "legendFormat": "{{source}} p95",
           "range": true,
           "refId": "B"
@@ -2020,12 +2020,10 @@
               "options": {
                 "0": {
                   "text": "off",
-                  "color": "green",
                   "index": 0
                 },
                 "1": {
                   "text": "active",
-                  "color": "red",
                   "index": 1
                 }
               }
@@ -2035,8 +2033,12 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "transparent",
+                "color": "green",
                 "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
               }
             ]
           }
@@ -2099,32 +2101,37 @@
           },
           "mappings": [
             {
+              "type": "value",
               "options": {
                 "0": {
-                  "color": "green",
-                  "index": 0,
-                  "text": "closed"
+                  "text": "closed",
+                  "index": 0
                 },
                 "1": {
-                  "color": "red",
-                  "index": 1,
-                  "text": "open"
+                  "text": "open",
+                  "index": 1
                 },
                 "2": {
-                  "color": "yellow",
-                  "index": 2,
-                  "text": "half-open"
+                  "text": "half-open",
+                  "index": 2
                 }
-              },
-              "type": "value"
+              }
             }
           ],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "transparent",
+                "color": "green",
                 "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              },
+              {
+                "color": "yellow",
+                "value": 2
               }
             ]
           }
