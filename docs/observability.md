@@ -13,6 +13,20 @@ Both analyzers expose two HTTP servers.
 
 - `GET /metrics` — Prometheus metrics, no authentication required
 
+## Grafana dashboard
+
+<a href="screenshot02.png"><img src="screenshot02.png" alt="Grafana dashboard for the Claude Alert Analyzer" height="400" align="left" hspace="20"></a>
+
+A ready-to-import dashboard ships at
+[`deploy/grafana/claude-alert-analyzer.json`](../deploy/grafana/claude-alert-analyzer.json).
+It is grouped into the same sections used in the metric reference below
+(Pipeline Overview, Alert Flow, Processing & Claude API, Tokens & Cache,
+Agentic Tool Loop, Storm Robustness, Webhook & Runtime) and exposes
+`datasource`, `product`, and `severity` template variables so a single
+deployment can serve both the k8s and CheckMK analyzers.
+
+<br clear="left">
+
 ## Metrics
 
 All application metrics share the prefix `alert_analyzer_*` and carry a
