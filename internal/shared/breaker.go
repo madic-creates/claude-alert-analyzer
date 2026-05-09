@@ -161,12 +161,25 @@ func (b *CircuitBreaker) recordResult(p *Permit, err error) {
 
 // State returns the current state as an integer (0=closed, 1=open, 2=halfOpen).
 // Used by metrics-recording code; not part of the public Permit API.
+//
+// The probe-watchdog transition (halfOpen → open on probe timeout) is applied
+// lazily inside Acquire(). State() mirrors that check so that the
+// claude_circuit_breaker_state gauge stays accurate during quiet periods
+// when no Acquire() call has fired the transition yet.
 func (b *CircuitBreaker) State() int {
 	if b == nil {
 		return 0
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	// Mirror the probe-watchdog logic from Acquire(): if the in-flight probe
+	// has exceeded maxProbeDuration, the effective state is open even though
+	// b.state still holds breakerHalfOpen (the lazy transition fires on the
+	// next Acquire() call). Returning 1 here keeps the metric accurate.
+	if b.state == breakerHalfOpen && b.halfOpenInFlight &&
+		b.now().Sub(b.probeStartedAt) >= b.maxProbeDuration {
+		return 1
+	}
 	switch b.state {
 	case breakerOpen:
 		return 1

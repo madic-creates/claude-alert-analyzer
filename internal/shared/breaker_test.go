@@ -252,6 +252,43 @@ func TestCircuitBreaker_State(t *testing.T) {
 	})
 }
 
+// TestCircuitBreaker_State_ExpiredProbeReportsOpen verifies that State()
+// returns 1 (open) when the half-open probe has exceeded maxProbeDuration
+// but Acquire() has not yet been called to apply the watchdog transition.
+// Without this check, the claude_circuit_breaker_state gauge can report
+// 2 (half-open) during quiet periods after a probe times out, misleading
+// operators who rely on the gauge to understand circuit-breaker health.
+func TestCircuitBreaker_State_ExpiredProbeReportsOpen(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(0, 0)}
+	b := NewCircuitBreaker(1, 10*time.Second, 5*time.Second, clk.Now)
+
+	// Trip the breaker.
+	p, _ := b.Acquire()
+	p.Done(errors.New("fail"))
+
+	// Advance past openDuration so a probe is issued.
+	clk.advance(11 * time.Second)
+	probe, err := b.Acquire()
+	if err != nil || !probe.IsProbe() {
+		t.Fatalf("expected probe permit: err=%v isProbe=%v", err, probe.IsProbe())
+	}
+	// Probe is in-flight but never settled — simulates a stuck/slow analysis.
+
+	// Within maxProbeDuration State() should report half-open (2).
+	clk.advance(4 * time.Second)
+	if got := b.State(); got != 2 {
+		t.Fatalf("State during probe window = %d, want 2 (half-open)", got)
+	}
+
+	// Past maxProbeDuration (5s): the probe has effectively expired.
+	// State() must report open (1) without requiring an Acquire() call to
+	// apply the watchdog transition first.
+	clk.advance(2 * time.Second) // total probe age = 6s > 5s maxProbeDuration
+	if got := b.State(); got != 1 {
+		t.Fatalf("State after probe expiry = %d, want 1 (open)", got)
+	}
+}
+
 // TestCircuitBreaker_SuccessResetsConsecutiveFailureCounter verifies that a
 // successful call resets the consecutive-failure counter. Without the reset,
 // non-consecutive failures could trip the breaker threshold when they should not.
