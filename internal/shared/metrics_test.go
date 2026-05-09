@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 )
 
 // TestAlertMetrics_NilSafe verifies every method tolerates a nil receiver and
@@ -127,6 +128,16 @@ func TestAlertMetrics_Delegation(t *testing.T) {
 	m.SetBreakerState(2)
 	if got := testutil.ToFloat64(prom.ClaudeCircuitBreakerState); got != 2 {
 		t.Errorf("ClaudeCircuitBreakerState = %v, want 2", got)
+	}
+
+	// ProcessingDuration histogram is observed via delegation.
+	m.ObserveProcessingDuration(time.Second)
+	var durMetric dto.Metric
+	if err := prom.ProcessingDuration.Write(&durMetric); err != nil {
+		t.Fatalf("ProcessingDuration.Write: %v", err)
+	}
+	if durMetric.Histogram.GetSampleCount() != 1 {
+		t.Errorf("ProcessingDuration sample count = %d, want 1", durMetric.Histogram.GetSampleCount())
 	}
 
 	// AggregatorDropsCounter returns the right labeled counter.
