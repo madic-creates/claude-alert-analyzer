@@ -1006,3 +1006,40 @@ func TestHandleWebhook_StormRecordIncrementsAfterCooldownCheck(t *testing.T) {
 		t.Fatalf("after cooldown-dedup, storm.Count()=%d, want 3", got)
 	}
 }
+
+func TestGroupKeyFromNotif(t *testing.T) {
+	cases := []struct {
+		name string
+		n    CheckMKNotification
+		want string
+	}{
+		{
+			name: "service present",
+			n:    CheckMKNotification{Hostname: "web01", ServiceDescription: "CPU"},
+			want: "web01:CPU",
+		},
+		{
+			name: "empty service uses _host_ sentinel",
+			n:    CheckMKNotification{Hostname: "web01", ServiceDescription: ""},
+			want: "web01:_host_",
+		},
+		{
+			name: "empty hostname",
+			n:    CheckMKNotification{Hostname: "", ServiceDescription: "Disk /"},
+			want: ":Disk /",
+		},
+		{
+			name: "both empty",
+			n:    CheckMKNotification{Hostname: "", ServiceDescription: ""},
+			want: ":_host_",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := groupKeyFromNotif(tc.n)
+			if got != tc.want {
+				t.Errorf("groupKeyFromNotif(%+v) = %q, want %q", tc.n, got, tc.want)
+			}
+		})
+	}
+}

@@ -802,3 +802,40 @@ func TestHandleWebhook_StormRecordIncrementsAfterCooldownCheck(t *testing.T) {
 		t.Fatalf("after cooldown-dedup, storm.Count()=%d, want still 3", got)
 	}
 }
+
+func TestGroupKeyFromLabels(t *testing.T) {
+	cases := []struct {
+		name   string
+		labels map[string]string
+		want   string
+	}{
+		{
+			name:   "namespace present",
+			labels: map[string]string{"alertname": "PodCrashLooping", "namespace": "prod"},
+			want:   "PodCrashLooping:prod",
+		},
+		{
+			name:   "empty namespace uses _cluster_ sentinel",
+			labels: map[string]string{"alertname": "KubeAPIDown", "namespace": ""},
+			want:   "KubeAPIDown:_cluster_",
+		},
+		{
+			name:   "missing namespace key uses _cluster_ sentinel",
+			labels: map[string]string{"alertname": "KubeAPIDown"},
+			want:   "KubeAPIDown:_cluster_",
+		},
+		{
+			name:   "empty alertname",
+			labels: map[string]string{"alertname": "", "namespace": "staging"},
+			want:   ":staging",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := groupKeyFromLabels(tc.labels)
+			if got != tc.want {
+				t.Errorf("groupKeyFromLabels(%v) = %q, want %q", tc.labels, got, tc.want)
+			}
+		})
+	}
+}
