@@ -72,12 +72,10 @@ ghcr.io/madic-creates/claude-alert-kubernetes-analyzer:latest
 ghcr.io/madic-creates/claude-alert-checkmk-analyzer:latest
 ```
 
-Both are also tagged with the short commit SHA (e.g. `:a1b2c3d`) for pinning.
-
 | Image | Base | Size |
 |-------|------|------|
-| `claude-alert-kubernetes-analyzer` | `scratch` | ~13 MB |
-| `claude-alert-checkmk-analyzer` | `alpine:3.23` | ~25 MB (includes `openssh-client`) |
+| `claude-alert-kubernetes-analyzer` | `scratch` | ~20 MB |
+| `claude-alert-checkmk-analyzer` | `alpine:3.23` | ~60 MB (includes `openssh-client`) |
 
 ## Documentation
 
