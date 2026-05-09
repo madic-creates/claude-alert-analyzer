@@ -1066,12 +1066,13 @@ func TestProcessAlert_AlertFieldsArePromptInjectionSafe(t *testing.T) {
 }
 
 // TestIsTimeoutErr verifies that isTimeoutErr correctly identifies timeout-like
-// errors by their message strings. Both "context deadline exceeded" (from
-// exec.CommandContext) and "signal: killed" (from the OS when SIGKILL is sent
-// after the deadline) must be classified as timeouts; all other errors and a
-// nil must not. Without these tests a mutation to either string literal would
-// cause timeout events to be recorded as "nonzero_exit" in the
-// agent_tool_calls_total metric, hiding slow-kubectl patterns from operators.
+// errors. On Go 1.20+, exec.CommandContext wraps context.DeadlineExceeded into
+// the returned error; "signal: killed" appears when the OS delivers SIGKILL
+// (e.g. from an external kill or older Go behavior). Both must be classified as
+// timeouts; all other errors and a nil must not. Without these tests a mutation
+// to the detection logic would cause timeout events to be recorded as
+// "nonzero_exit" in the agent_tool_calls_total metric, hiding slow-kubectl
+// patterns from operators.
 func TestIsTimeoutErr(t *testing.T) {
 	cases := []struct {
 		name string
@@ -1079,7 +1080,8 @@ func TestIsTimeoutErr(t *testing.T) {
 		want bool
 	}{
 		{"nil", nil, false},
-		{"deadline exceeded", fmt.Errorf("kubectl: context deadline exceeded"), true},
+		// Go 1.20+: exec.CommandContext wraps the context error properly.
+		{"deadline exceeded wrapped", fmt.Errorf("kubectl: %w", context.DeadlineExceeded), true},
 		{"signal killed", fmt.Errorf("signal: killed"), true},
 		{"generic non-zero exit", fmt.Errorf("exit status 1"), false},
 		{"no such file", fmt.Errorf("no such file or directory"), false},

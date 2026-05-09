@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -654,14 +655,33 @@ func isTimeoutErr(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(err.Error(), "context deadline exceeded") ||
-		strings.Contains(err.Error(), "signal: killed")
+	// Primary: typed check for the context deadline error that exec.CommandContext
+	// wraps into the returned error on Go 1.20+ when the child context expires.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	// Fallback: string match for "signal: killed", which appears when the OS
+	// delivers SIGKILL (e.g. the process was killed externally rather than via
+	// context cancellation) or on Go versions that don't wrap the context error.
+	return strings.Contains(err.Error(), "signal: killed")
 }
 
 func isExecError(err error) bool {
 	if err == nil {
 		return false
 	}
+	// Primary: typed check for a fork/exec PathError, which is what the OS
+	// returns when the binary cannot be started (not found, not executable, etc.).
+	// Op=="fork/exec" distinguishes binary-launch failures from other PathErrors
+	// that might surface via kubectl's own file operations.
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) && pathErr.Op == "fork/exec" {
+		return true
+	}
+	// Fallback: string-based matches for "executable file not found in $PATH"
+	// (returned by exec.LookPath when the binary name contains no slash) and the
+	// POSIX "no such file or directory" message, in case the error is wrapped in
+	// a type that errors.As cannot unwrap.
 	return strings.Contains(err.Error(), "no such file or directory") ||
 		strings.Contains(err.Error(), "executable file not found")
 }

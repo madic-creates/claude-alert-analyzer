@@ -1088,6 +1088,44 @@ func TestHandleKubectlTool_TimeoutOutcomeViaErrString(t *testing.T) {
 	}
 }
 
+// TestIsTimeoutErrTyped verifies that isTimeoutErr returns true for a
+// context.DeadlineExceeded error (both direct and wrapped), exercising the
+// errors.Is typed path added alongside the string-based "signal: killed" check.
+func TestIsTimeoutErrTyped(t *testing.T) {
+	if !isTimeoutErr(context.DeadlineExceeded) {
+		t.Error("expected isTimeoutErr(context.DeadlineExceeded) == true")
+	}
+	wrapped := fmt.Errorf("kubectl exec: %w", context.DeadlineExceeded)
+	if !isTimeoutErr(wrapped) {
+		t.Error("expected isTimeoutErr to return true for wrapped context.DeadlineExceeded")
+	}
+	if isTimeoutErr(nil) {
+		t.Error("expected isTimeoutErr(nil) == false")
+	}
+}
+
+// TestIsExecErrorTyped verifies that isExecError returns true for an
+// *os.PathError with Op=="fork/exec", exercising the errors.As typed path
+// added alongside the legacy string-based checks.
+func TestIsExecErrorTyped(t *testing.T) {
+	pathErr := &os.PathError{Op: "fork/exec", Path: "/usr/local/bin/kubectl", Err: os.ErrNotExist}
+	if !isExecError(pathErr) {
+		t.Error("expected isExecError to return true for fork/exec PathError")
+	}
+	wrapped := fmt.Errorf("start failed: %w", pathErr)
+	if !isExecError(wrapped) {
+		t.Error("expected isExecError to return true for wrapped fork/exec PathError")
+	}
+	// PathError with a different Op (e.g. "open") must NOT be classified as exec error.
+	openErr := &os.PathError{Op: "open", Path: "/some/file", Err: os.ErrNotExist}
+	if isExecError(openErr) {
+		t.Error("expected isExecError to return false for non-fork/exec PathError")
+	}
+	if isExecError(nil) {
+		t.Error("expected isExecError(nil) == false")
+	}
+}
+
 // TestHandlePromQLTool_RejectedValidOutcome verifies that parsePromQLInput
 // failure (empty query) records outcome="rejected_validation" for the promql_query
 // tool, matching the analogous kubectl_exec rejected_validation path.
