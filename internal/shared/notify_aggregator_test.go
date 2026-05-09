@@ -81,6 +81,16 @@ func getCounterValue(c prometheus.Counter) float64 {
 	return pb.GetCounter().GetValue()
 }
 
+func TestNotifyAggregator_NilReceiver(t *testing.T) {
+	var a *NotifyAggregator
+	if a.Add("x") {
+		t.Fatal("nil.Add() must return false")
+	}
+	if err := a.Stop(context.Background()); err != nil {
+		t.Fatalf("nil.Stop() must return nil, got %v", err)
+	}
+}
+
 func TestNotifyAggregator_NilWhenDisabled(t *testing.T) {
 	if a := NewNotifyAggregator(nil, time.Second, "x", "5", newDropsCounter()); a != nil {
 		t.Fatalf("expected nil for empty publishers, got %v", a)
