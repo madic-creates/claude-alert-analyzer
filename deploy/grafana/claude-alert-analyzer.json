@@ -828,7 +828,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(alert_analyzer_claude_api_duration_seconds_bucket{product=~\"$product\"}[5m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(alert_analyzer_claude_api_duration_seconds_bucket{product=~\"$product\"}[5m]))) or vector(0)",
           "legendFormat": "p50",
           "range": true,
           "refId": "A"
@@ -839,7 +839,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(alert_analyzer_claude_api_duration_seconds_bucket{product=~\"$product\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(alert_analyzer_claude_api_duration_seconds_bucket{product=~\"$product\"}[5m]))) or vector(0)",
           "legendFormat": "p95",
           "range": true,
           "refId": "B"
@@ -850,7 +850,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(alert_analyzer_claude_api_duration_seconds_bucket{product=~\"$product\"}[5m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(alert_analyzer_claude_api_duration_seconds_bucket{product=~\"$product\"}[5m]))) or vector(0)",
           "legendFormat": "p99",
           "range": true,
           "refId": "C"
@@ -1217,7 +1217,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(alert_analyzer_claude_tokens_total{kind=\"cache_read\", product=~\"$product\"}[5m])) / clamp_min(sum(rate(alert_analyzer_claude_tokens_total{kind=\"cache_read\", product=~\"$product\"}[5m]) + rate(alert_analyzer_claude_tokens_total{kind=\"cache_creation\", product=~\"$product\"}[5m]) + rate(alert_analyzer_claude_tokens_total{kind=\"input\", product=~\"$product\"}[5m])), 1e-9)",
+          "expr": "(sum(rate(alert_analyzer_claude_tokens_total{kind=\"cache_read\", product=~\"$product\"}[5m])) / clamp_min(sum(rate(alert_analyzer_claude_tokens_total{kind=\"cache_read\", product=~\"$product\"}[5m]) + rate(alert_analyzer_claude_tokens_total{kind=\"cache_creation\", product=~\"$product\"}[5m]) + rate(alert_analyzer_claude_tokens_total{kind=\"input\", product=~\"$product\"}[5m])), 1e-9)) or vector(0)",
           "legendFormat": "cache hit rate",
           "range": true,
           "refId": "A"
@@ -1779,7 +1779,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, tool) (rate(alert_analyzer_agent_tool_duration_seconds_bucket{product=~\"$product\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, tool) (rate(alert_analyzer_agent_tool_duration_seconds_bucket{product=~\"$product\"}[5m]))) or vector(0)",
           "legendFormat": "{{tool}} p95",
           "range": true,
           "refId": "A"
@@ -1870,7 +1870,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum by (le, product) (rate(alert_analyzer_agent_rounds_per_run_bucket{product=~\"$product\"}[5m])))",
+          "expr": "histogram_quantile(0.50, sum by (le, product) (rate(alert_analyzer_agent_rounds_per_run_bucket{product=~\"$product\"}[5m]))) or vector(0)",
           "legendFormat": "{{source}} p50",
           "range": true,
           "refId": "A"
@@ -1881,7 +1881,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, product) (rate(alert_analyzer_agent_rounds_per_run_bucket{product=~\"$product\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, product) (rate(alert_analyzer_agent_rounds_per_run_bucket{product=~\"$product\"}[5m]))) or vector(0)",
           "legendFormat": "{{source}} p95",
           "range": true,
           "refId": "B"
@@ -2016,36 +2016,27 @@
           },
           "mappings": [
             {
+              "type": "value",
               "options": {
                 "0": {
+                  "text": "off",
                   "color": "green",
-                  "index": 0,
-                  "text": "off"
-                }
-              },
-              "type": "value"
-            },
-            {
-              "options": {
+                  "index": 0
+                },
                 "1": {
+                  "text": "active",
                   "color": "red",
-                  "index": 1,
-                  "text": "active"
+                  "index": 1
                 }
-              },
-              "type": "value"
+              }
             }
           ],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "transparent",
                 "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
               }
             ]
           }
@@ -2081,7 +2072,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "alert_analyzer_storm_mode_active{product=~\"$product\"}",
+          "expr": "max by (product) (alert_analyzer_storm_mode_active{product=~\"$product\"})",
           "legendFormat": "{{source}}",
           "range": true,
           "refId": "A"
@@ -2132,16 +2123,8 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "transparent",
                 "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 2
-              },
-              {
-                "color": "red",
-                "value": 1
               }
             ]
           }
@@ -2177,7 +2160,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "alert_analyzer_claude_circuit_breaker_state{product=~\"$product\"}",
+          "expr": "max by (product) (alert_analyzer_claude_circuit_breaker_state{product=~\"$product\"})",
           "legendFormat": "{{source}}",
           "range": true,
           "refId": "A"
