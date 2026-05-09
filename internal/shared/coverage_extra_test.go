@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -667,6 +668,113 @@ func TestServer_Run_MetricsListenAndServeFails(t *testing.T) {
 	}
 	if exitErr.ExitCode() != 1 {
 		t.Errorf("subprocess exit code = %d, want 1\nstderr: %s", exitErr.ExitCode(), stderr.String())
+	}
+}
+
+// TestAnalyze_EmptyModelFallsBackToClientDefault verifies that when an empty
+// model string is passed to Analyze, the client falls back to its configured
+// c.Model instead of forwarding an empty string to the API. This documents the
+// "empty model == use client default" contract used by the policy layer when
+// callers omit a per-severity model override.
+func TestAnalyze_EmptyModelFallsBackToClientDefault(t *testing.T) {
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv, "client-default-model", "test-key", 0)
+	if _, err := c.Analyze(t.Context(), SeverityWarning, "", "sys", "usr"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(capturedBody), `"model":"client-default-model"`) {
+		t.Errorf("expected client-default-model in request body, got: %s", capturedBody)
+	}
+}
+
+// TestRunToolLoop_EmptyModelFallsBackToClientDefault verifies that RunToolLoop
+// uses c.Model when the caller passes an empty model string. Also exercises
+// toolsWithCachedTail with a nil/empty tools slice (the len==0 early-return
+// guard) since nil tools are passed here.
+func TestRunToolLoop_EmptyModelFallsBackToClientDefault(t *testing.T) {
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv, "client-default-model", "test-key", 0)
+	_, _, _, err := c.RunToolLoop(t.Context(), SeverityWarning, "", "sys", "usr",
+		nil, // empty tools — exercises toolsWithCachedTail len==0 early return
+		1,
+		func(name string, input json.RawMessage) (string, error) { return "", nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(capturedBody), `"model":"client-default-model"`) {
+		t.Errorf("expected client-default-model in request body, got: %s", capturedBody)
+	}
+}
+
+// TestAppendToolResultsAndCacheTail_EmptyResults verifies that
+// appendToolResultsAndCacheTail is a no-op when the results slice is nil/empty.
+// This guard prevents a nil-pointer dereference on the last element and keeps
+// the messages slice unchanged so the caller can detect the no-op case.
+func TestAppendToolResultsAndCacheTail_EmptyResults(t *testing.T) {
+	original := []anthropic.MessageParam{
+		anthropic.NewUserMessage(anthropic.NewTextBlock("question")),
+	}
+	got := appendToolResultsAndCacheTail(original, nil)
+	if len(got) != len(original) {
+		t.Errorf("expected messages unchanged for empty results, got len=%d want %d", len(got), len(original))
+	}
+}
+
+// TestNewLimitedTransport_NilInner verifies that NewLimitedTransport falls
+// back to http.DefaultTransport when the inner parameter is nil. This
+// documents the defensive nil-check in transport.go and ensures the returned
+// transport is functional (not nil itself).
+func TestNewLimitedTransport_NilInner(t *testing.T) {
+	lt := NewLimitedTransport(nil, nil)
+	if lt == nil {
+		t.Fatal("NewLimitedTransport(nil, nil) returned nil")
+	}
+	if lt.inner == nil {
+		t.Fatal("LimitedTransport.inner should not be nil after nil fallback")
+	}
+	if lt.inner != http.DefaultTransport {
+		t.Errorf("LimitedTransport.inner should be http.DefaultTransport after nil fallback, got %T", lt.inner)
+	}
+}
+
+// TestStormDetector_Threshold_NilReceiver verifies that Threshold() on a nil
+// *StormDetector returns 0 (disabled) without panicking. This is the nil-safe
+// contract that callers rely on when storm detection is disabled.
+func TestStormDetector_Threshold_NilReceiver(t *testing.T) {
+	var d *StormDetector
+	if got := d.Threshold(); got != 0 {
+		t.Errorf("nil.Threshold() = %d, want 0", got)
+	}
+}
+
+// TestNewPrometheusMetrics_InvalidProduct verifies that NewPrometheusMetrics
+// returns an error (not a panic) when an unrecognized Product value is passed.
+// This covers the previously-untested validation branch in prom_metrics.go.
+func TestNewPrometheusMetrics_InvalidProduct(t *testing.T) {
+	pm, err := NewPrometheusMetrics(Product("bogus"))
+	if err == nil {
+		t.Fatal("expected error for invalid product, got nil")
+	}
+	if pm != nil {
+		t.Errorf("expected nil PrometheusMetrics on error, got non-nil")
+	}
+	if !strings.Contains(err.Error(), "invalid product") {
+		t.Errorf("error should mention 'invalid product', got: %v", err)
 	}
 }
 
