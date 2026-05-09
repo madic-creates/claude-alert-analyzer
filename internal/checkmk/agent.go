@@ -956,7 +956,7 @@ func RunAgenticDiagnostics(
 		case strings.Contains(out, "[exited: timeout after"),
 			strings.Contains(out, "[exited: context cancelled"):
 			outcome = "timeout"
-		case strings.HasPrefix(out, "Command failed:"), strings.Contains(out, "[exited: "):
+		case strings.Contains(out, "[exited: "):
 			outcome = "nonzero_exit"
 		}
 		if metrics != nil {
