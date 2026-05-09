@@ -94,4 +94,48 @@ func TestAlertMetrics_Delegation(t *testing.T) {
 	if got := testutil.ToFloat64(prom.NtfyPublishErrors); got != 1 {
 		t.Errorf("NtfyPublishErrors = %v, want 1", got)
 	}
+
+	// Agent tool-loop counters.
+	m.RecordAgentToolCall("kubectl_exec", "ok", 50*time.Millisecond)
+	if got := testutil.ToFloat64(prom.AgentToolCalls.WithLabelValues("kubectl_exec", "ok")); got != 1 {
+		t.Errorf("AgentToolCalls[kubectl_exec,ok] = %v, want 1", got)
+	}
+
+	// Non-exhausted run: AgentRoundsExhausted must not be incremented.
+	m.RecordAgentRounds(5, false)
+	if got := testutil.ToFloat64(prom.AgentRoundsExhausted); got != 0 {
+		t.Errorf("AgentRoundsExhausted = %v, want 0 after non-exhausted run", got)
+	}
+
+	// Exhausted run: AgentRoundsExhausted must be incremented.
+	m.RecordAgentRounds(3, true)
+	if got := testutil.ToFloat64(prom.AgentRoundsExhausted); got != 1 {
+		t.Errorf("AgentRoundsExhausted = %v, want 1 after exhausted run", got)
+	}
+
+	// Storm-mode gauge: set to 1 when active, 0 when inactive.
+	m.SetStormMode(true)
+	if got := testutil.ToFloat64(prom.StormModeActive); got != 1 {
+		t.Errorf("StormModeActive = %v, want 1", got)
+	}
+	m.SetStormMode(false)
+	if got := testutil.ToFloat64(prom.StormModeActive); got != 0 {
+		t.Errorf("StormModeActive = %v, want 0", got)
+	}
+
+	// Circuit-breaker state gauge.
+	m.SetBreakerState(2)
+	if got := testutil.ToFloat64(prom.ClaudeCircuitBreakerState); got != 2 {
+		t.Errorf("ClaudeCircuitBreakerState = %v, want 2", got)
+	}
+
+	// AggregatorDropsCounter returns the right labeled counter.
+	dropc := m.AggregatorDropsCounter("storm")
+	if dropc == nil {
+		t.Fatal("AggregatorDropsCounter(\"storm\") returned nil")
+	}
+	dropc.Inc()
+	if got := testutil.ToFloat64(prom.NotifyAggregatorDrops.WithLabelValues("storm")); got != 1 {
+		t.Errorf("NotifyAggregatorDrops[storm] = %v, want 1", got)
+	}
 }
