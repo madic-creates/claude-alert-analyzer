@@ -194,3 +194,93 @@ func TestAnalysisPolicy_IsDegradedAtThreshold(t *testing.T) {
 		t.Fatal("count=10 == threshold=10: IsDegraded should be false (uses >, not >=)")
 	}
 }
+
+// TestLoadPolicy_GroupCooldownSeconds verifies that GROUP_COOLDOWN_SECONDS is
+// correctly parsed and mapped to GroupCooldownTTL in seconds. Without this test,
+// a mutation of the unit conversion (e.g. * time.Minute instead of * time.Second)
+// would go undetected, causing all group-cooldown windows to be 60x longer than
+// configured by the operator.
+func TestLoadPolicy_GroupCooldownSeconds(t *testing.T) {
+	t.Setenv("GROUP_COOLDOWN_SECONDS", "300")
+
+	p, err := LoadPolicy(BaseConfig{ClaudeModel: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.GroupCooldownTTL != 300*time.Second {
+		t.Errorf("GroupCooldownTTL = %v, want 300s", p.GroupCooldownTTL)
+	}
+}
+
+// TestLoadPolicy_GroupCooldownDisabledWhenZero verifies that the default value
+// GROUP_COOLDOWN_SECONDS=0 leaves GroupCooldownTTL at zero (feature disabled).
+func TestLoadPolicy_GroupCooldownDisabledWhenZero(t *testing.T) {
+	p, err := LoadPolicy(BaseConfig{ClaudeModel: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.GroupCooldownTTL != 0 {
+		t.Errorf("GroupCooldownTTL = %v, want 0 (disabled by default)", p.GroupCooldownTTL)
+	}
+}
+
+// TestLoadPolicy_RejectsInvalidGroupCooldown verifies that an out-of-range
+// GROUP_COOLDOWN_SECONDS value causes LoadPolicy to return an error that
+// identifies the offending variable.
+func TestLoadPolicy_RejectsInvalidGroupCooldown(t *testing.T) {
+	t.Setenv("GROUP_COOLDOWN_SECONDS", "86401") // exceeds max of 86400
+
+	_, err := LoadPolicy(BaseConfig{ClaudeModel: "x"})
+	if err == nil {
+		t.Fatal("expected error for out-of-range GROUP_COOLDOWN_SECONDS, got nil")
+	}
+	if !strings.Contains(err.Error(), "GROUP_COOLDOWN_SECONDS") {
+		t.Errorf("error should mention GROUP_COOLDOWN_SECONDS, got: %v", err)
+	}
+}
+
+// TestLoadPolicy_StormModeThreshold verifies that STORM_MODE_THRESHOLD=50
+// creates a non-nil Storm field with the correct threshold. Without this test,
+// a bug that parses the env var but never passes it to NewStormDetector would
+// silently disable storm protection even when it is explicitly configured.
+func TestLoadPolicy_StormModeThreshold(t *testing.T) {
+	t.Setenv("STORM_MODE_THRESHOLD", "50")
+
+	p, err := LoadPolicy(BaseConfig{ClaudeModel: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Storm == nil {
+		t.Fatal("Storm should be non-nil when STORM_MODE_THRESHOLD=50")
+	}
+	if p.Storm.Threshold() != 50 {
+		t.Errorf("Storm.Threshold() = %d, want 50", p.Storm.Threshold())
+	}
+}
+
+// TestLoadPolicy_StormModeDisabledWhenZero verifies that the default value
+// STORM_MODE_THRESHOLD=0 leaves Storm as nil (storm-mode disabled).
+func TestLoadPolicy_StormModeDisabledWhenZero(t *testing.T) {
+	p, err := LoadPolicy(BaseConfig{ClaudeModel: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Storm != nil {
+		t.Errorf("Storm should be nil when STORM_MODE_THRESHOLD=0 (default), got %v", p.Storm)
+	}
+}
+
+// TestLoadPolicy_RejectsInvalidStormThreshold verifies that an out-of-range
+// STORM_MODE_THRESHOLD value causes LoadPolicy to return an error that
+// identifies the offending variable.
+func TestLoadPolicy_RejectsInvalidStormThreshold(t *testing.T) {
+	t.Setenv("STORM_MODE_THRESHOLD", "100001") // exceeds max of 100000
+
+	_, err := LoadPolicy(BaseConfig{ClaudeModel: "x"})
+	if err == nil {
+		t.Fatal("expected error for out-of-range STORM_MODE_THRESHOLD, got nil")
+	}
+	if !strings.Contains(err.Error(), "STORM_MODE_THRESHOLD") {
+		t.Errorf("error should mention STORM_MODE_THRESHOLD, got: %v", err)
+	}
+}
