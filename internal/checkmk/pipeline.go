@@ -198,7 +198,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 		deps.Metrics.RecordClaudeAPIError()
 		if notifyErr := shared.PublishAll(ctx, deps.Publishers,
 			fmt.Sprintf("Analysis FAILED: %s", safeTitle), "5",
-			fmt.Sprintf("**Analysis failed** for %s: %v\n\nManual investigation needed.", safeTitle, analysisErr)); notifyErr != nil {
+			fmt.Sprintf("**Analysis failed** for %s: %s\n\nManual investigation needed.", safeTitle, shared.RedactSecrets(shared.SanitizeAlertField(analysisErr.Error())))); notifyErr != nil {
 			slog.Warn("failed to publish failure notification", "hostname", hostname, "error", notifyErr)
 		}
 		return
