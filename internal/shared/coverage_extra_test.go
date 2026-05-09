@@ -327,6 +327,40 @@ func (h *shutdownErrCapture) Handle(_ context.Context, r slog.Record) error {
 func (h *shutdownErrCapture) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 func (h *shutdownErrCapture) WithGroup(_ string) slog.Handler      { return h }
 
+// TestAppendTextToLastUserMessage_EmptySlice verifies that appendTextToLastUserMessage
+// returns an error (mentioning "empty") when the messages slice is empty.
+// This guards the internal invariant that the caller always passes a non-empty
+// slice; without this check a nil-pointer dereference would panic.
+func TestAppendTextToLastUserMessage_EmptySlice(t *testing.T) {
+	err := appendTextToLastUserMessage(nil, "summary")
+	if err == nil {
+		t.Fatal("expected error for empty messages slice, got nil")
+	}
+	if !strings.Contains(err.Error(), "empty") {
+		t.Errorf("error should mention 'empty', got: %v", err)
+	}
+}
+
+// TestAppendTextToLastUserMessage_WrongRole verifies that appendTextToLastUserMessage
+// returns an error (mentioning the actual role) when the last message is not a
+// user message. The Claude API requires strict role alternation; appending a
+// text block to an assistant message would produce an invalid message sequence.
+func TestAppendTextToLastUserMessage_WrongRole(t *testing.T) {
+	messages := []anthropic.MessageParam{
+		anthropic.NewUserMessage(anthropic.NewTextBlock("original")),
+		{Role: anthropic.MessageParamRoleAssistant, Content: []anthropic.ContentBlockParamUnion{
+			anthropic.NewTextBlock("assistant turn"),
+		}},
+	}
+	err := appendTextToLastUserMessage(messages, "summary")
+	if err == nil {
+		t.Fatal("expected error when last message is assistant, got nil")
+	}
+	if !strings.Contains(err.Error(), "assistant") {
+		t.Errorf("error should mention role 'assistant', got: %v", err)
+	}
+}
+
 // TestServer_Run_MetricsShutdownError verifies that when the metrics server
 // cannot drain all active connections within ShutdownTimeout, Run logs
 // "metrics server shutdown error" and still returns cleanly. This covers the
