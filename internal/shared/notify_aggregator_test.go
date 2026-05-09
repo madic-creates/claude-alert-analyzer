@@ -238,6 +238,74 @@ func TestNotifyAggregator_TickFlushPublisherFailureCountsDrops(t *testing.T) {
 	}
 }
 
+// publishBlocker is a Publisher that closes started on its first Publish call
+// and then blocks until unblock is closed. Used to freeze the owner goroutine
+// inside flush() so the in-channel can be filled to capacity deterministically.
+type publishBlocker struct {
+	started chan struct{}
+	unblock chan struct{}
+	once    sync.Once
+}
+
+func (p *publishBlocker) Name() string { return "blocker" }
+func (p *publishBlocker) Publish(ctx context.Context, _, _, _ string) error {
+	p.once.Do(func() { close(p.started) })
+	select {
+	case <-p.unblock:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// TestNotifyAggregator_AddChannelFullDrops covers the default branch in Add's
+// second select — the overflow path when a.in is at capacity. The owner
+// goroutine is frozen inside Publish() so nothing drains a.in while we fill it
+// to notifyAggregatorBufferSize; the next Add must hit the default drop.
+func TestNotifyAggregator_AddChannelFullDrops(t *testing.T) {
+	pub := &publishBlocker{
+		started: make(chan struct{}),
+		unblock: make(chan struct{}),
+	}
+	drops := newDropsCounter()
+	// 50 ms interval: short enough to fire quickly, long enough that the owner
+	// reads the seed into its buffer before the tick fires.
+	a := NewNotifyAggregator([]Publisher{pub}, 50*time.Millisecond, "S: %d", "5", drops)
+
+	// Seed one item so the tick flush is non-empty and Publish() is called.
+	if !a.Add("seed") {
+		t.Fatal("seed Add should succeed")
+	}
+
+	// Wait for the tick to fire and the owner to enter Publish() (blocked).
+	select {
+	case <-pub.started:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("publisher never started — tick did not fire in time")
+	}
+
+	// Owner is now blocked inside Publish(). Fill a.in to its full capacity.
+	for i := 0; i < notifyAggregatorBufferSize; i++ {
+		if !a.Add(fmt.Sprintf("alert-%d", i)) {
+			t.Fatalf("Add %d should succeed while channel has capacity", i)
+		}
+	}
+
+	// This Add must hit the default (channel-full) drop path.
+	if a.Add("overflow") {
+		t.Fatal("Add when channel is full must return false")
+	}
+	if v := getCounterValue(drops); v != 1 {
+		t.Fatalf("drops=%v, want 1 (channel-full drop)", v)
+	}
+
+	// Unblock the publisher and stop cleanly.
+	close(pub.unblock)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = a.Stop(ctx)
+}
+
 func TestNotifyAggregator_StopRaceNoLosses(t *testing.T) {
 	pub := &aggFakePublisher{}
 	drops := newDropsCounter()
