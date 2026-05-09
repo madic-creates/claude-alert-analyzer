@@ -28,6 +28,12 @@ const (
 	maxKubectlPromQLen = 4096 // also used by parsePromQLInput in Task 8
 )
 
+// errVerbDenied is a typed sentinel that validateKubectlVerb and
+// validateKubectlFlags wrap their denial errors with. handleKubectlTool uses
+// errors.Is(err, errVerbDenied) to distinguish policy rejections from
+// byte-level validation failures without fragile string matching.
+var errVerbDenied = errors.New("verb or flag denied")
+
 // parseKubectlInput validates the argv from a kubectl_exec tool call. It
 // checks structural constraints (length, control characters) then delegates to
 // validateKubectlFlags (global-flag denylist, Task 7) and validateKubectlVerb
@@ -105,7 +111,7 @@ func validateKubectlVerb(argv []string) error {
 		return fmt.Errorf("kubectl command has no verb; allowed verbs: %s", listAllowedVerbs())
 	}
 	if !allowedKubectlVerbs[verb] {
-		return fmt.Errorf("command denied: kubectl %s is not permitted; allowed verbs: %s", verb, listAllowedVerbs())
+		return fmt.Errorf("command denied: kubectl %s is not permitted; allowed verbs: %s: %w", verb, listAllowedVerbs(), errVerbDenied)
 	}
 	if subs, hasSubs := allowedKubectlSubVerbs[verb]; hasSubs {
 		if subVerb == "" || !subs[subVerb] {
@@ -113,8 +119,8 @@ func validateKubectlVerb(argv []string) error {
 			if subVerb != "" {
 				label = verb + " " + subVerb
 			}
-			return fmt.Errorf("command denied: kubectl %s is not permitted; only %s %s is allowed",
-				label, verb, allowedSubVerbList(verb))
+			return fmt.Errorf("command denied: kubectl %s is not permitted; only %s %s is allowed: %w",
+				label, verb, allowedSubVerbList(verb), errVerbDenied)
 		}
 	}
 	return nil
@@ -211,13 +217,13 @@ func validateKubectlFlags(argv []string) error {
 	for _, a := range argv {
 		// Exact-token match (covers "--kubeconfig" alone before its value, and "-s")
 		if deniedKubectlGlobalFlags[a] {
-			return fmt.Errorf("command denied: %s is not permitted; the in-cluster ServiceAccount is the only allowed identity (other denied flags include --kubeconfig, --server, --token, --as, --user, --cluster, --context, --client-*, --certificate-authority, --insecure-skip-tls-verify, --password, --username)", a)
+			return fmt.Errorf("command denied: %s is not permitted; the in-cluster ServiceAccount is the only allowed identity (other denied flags include --kubeconfig, --server, --token, --as, --user, --cluster, --context, --client-*, --certificate-authority, --insecure-skip-tls-verify, --password, --username): %w", a, errVerbDenied)
 		}
 		// "--flag=value" form: split on the first "=" and check the head.
 		if strings.HasPrefix(a, "--") {
 			if eq := strings.IndexByte(a, '='); eq != -1 {
 				if deniedKubectlGlobalFlags[a[:eq]] {
-					return fmt.Errorf("command denied: %s is not permitted; the in-cluster ServiceAccount is the only allowed identity", a[:eq])
+					return fmt.Errorf("command denied: %s is not permitted; the in-cluster ServiceAccount is the only allowed identity: %w", a[:eq], errVerbDenied)
 				}
 			}
 		}
@@ -227,7 +233,7 @@ func validateKubectlFlags(argv []string) error {
 		if len(a) > 1 && a[0] == '-' && a[1] != '-' {
 			if eq := strings.IndexByte(a, '='); eq != -1 {
 				if deniedKubectlGlobalFlags[a[:eq]] {
-					return fmt.Errorf("command denied: %s is not permitted; the in-cluster ServiceAccount is the only allowed identity", a[:eq])
+					return fmt.Errorf("command denied: %s is not permitted; the in-cluster ServiceAccount is the only allowed identity: %w", a[:eq], errVerbDenied)
 				}
 			}
 		}
@@ -242,7 +248,7 @@ func validateKubectlFlags(argv []string) error {
 					// of a longer flag name.
 					next := a[len(flag)]
 					if next != '=' {
-						return fmt.Errorf("command denied: %s (attached form of %s) is not permitted; the in-cluster ServiceAccount is the only allowed identity", a, flag)
+						return fmt.Errorf("command denied: %s (attached form of %s) is not permitted; the in-cluster ServiceAccount is the only allowed identity: %w", a, flag, errVerbDenied)
 					}
 				}
 			}
@@ -527,7 +533,7 @@ func handleKubectlTool(ctx context.Context, kc KubectlRunner, metrics *shared.Al
 		// Distinguish verb/flag rejection from byte-level validation so
 		// metrics can show which class of bad input Claude is hitting.
 		outcome := outcomeRejectedValid
-		if strings.Contains(err.Error(), "command denied") {
+		if errors.Is(err, errVerbDenied) {
 			outcome = outcomeRejectedVerb
 		}
 		recordToolCall(metrics, "kubectl_exec", outcome, time.Since(start), nil)
