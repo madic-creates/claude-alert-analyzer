@@ -874,6 +874,11 @@ func TestSummarizeKubectlArgv(t *testing.T) {
 			wantVerb: "logs", wantRes: "pod-x", wantNS: "default",
 		},
 		{
+			name:     "--namespace two-token long form",
+			argv:     []string{"get", "pods", "--namespace", "kube-system"},
+			wantVerb: "get", wantRes: "pods", wantNS: "kube-system",
+		},
+		{
 			name:     "-n= short form",
 			argv:     []string{"describe", "node", "-n=kube-system"},
 			wantVerb: "describe", wantRes: "node", wantNS: "kube-system",
