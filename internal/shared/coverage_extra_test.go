@@ -670,6 +670,25 @@ func TestServer_Run_MetricsListenAndServeFails(t *testing.T) {
 	}
 }
 
+// TestProduct_String verifies that Product.String() returns the underlying
+// string value for each recognized product constant. This covers the
+// previously-untested String() method on the Product type (product.go).
+func TestProduct_String(t *testing.T) {
+	tests := []struct {
+		product Product
+		want    string
+	}{
+		{ProductK8s, "k8s"},
+		{ProductCheckMK, "checkmk"},
+		{Product("custom"), "custom"},
+	}
+	for _, tc := range tests {
+		if got := tc.product.String(); got != tc.want {
+			t.Errorf("Product(%q).String() = %q, want %q", string(tc.product), got, tc.want)
+		}
+	}
+}
+
 // TestAnalyze_TruncatedResponse covers the previously-untested branch in
 // Analyze (claude.go) where msg.StopReason is non-empty and not "end_turn"
 // (e.g. "max_tokens"). Claude can return a truncated response when the

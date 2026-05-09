@@ -15,6 +15,20 @@ func TestStormDetector_NilWhenDisabled(t *testing.T) {
 	}
 }
 
+// TestNewStormDetector_NilClock verifies that passing nil as the clock
+// falls back to time.Now without panicking. This covers the previously-
+// untested `if now == nil { now = time.Now }` branch in NewStormDetector.
+func TestNewStormDetector_NilClock(t *testing.T) {
+	d := NewStormDetector(10, nil)
+	if d == nil {
+		t.Fatal("expected non-nil detector for threshold=10, nil clock")
+	}
+	d.Record() // must not panic using the real clock
+	if c := d.Count(); c < 0 {
+		t.Errorf("Count() = %d, want >= 0", c)
+	}
+}
+
 func TestStormDetector_RecordCountNilSafe(t *testing.T) {
 	var d *StormDetector // nil
 	d.Record()           // must not panic
