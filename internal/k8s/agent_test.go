@@ -461,6 +461,11 @@ func TestParsePromQLInput(t *testing.T) {
 			want:  "up",
 		},
 		{
+			name:  "leading and trailing whitespace trimmed",
+			input: `{"query":"  up  "}`,
+			want:  "up",
+		},
+		{
 			name:    "empty query",
 			input:   `{"query":""}`,
 			wantErr: "empty query",

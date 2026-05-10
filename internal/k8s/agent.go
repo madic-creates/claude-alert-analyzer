@@ -417,6 +417,9 @@ func (k *kubectlSubprocess) Exec(ctx context.Context, argv []string, timeout tim
 // the same as the per-argument cap used by kubectl_exec; control characters
 // are rejected for the same prompt-injection reasons (a query embedded with
 // "\n## INJECTED" inside an error path could pollute the model context).
+// Leading and trailing whitespace is stripped from the query before all checks
+// so that the returned string — used verbatim in the tool-result header and
+// sent to Prometheus — is clean and unambiguous.
 func parsePromQLInput(input json.RawMessage) (string, error) {
 	var parsed struct {
 		Query string `json:"query"`
@@ -424,18 +427,19 @@ func parsePromQLInput(input json.RawMessage) (string, error) {
 	if err := json.Unmarshal(input, &parsed); err != nil {
 		return "", fmt.Errorf("parse query input: %w", err)
 	}
-	if strings.TrimSpace(parsed.Query) == "" {
+	q := strings.TrimSpace(parsed.Query)
+	if q == "" {
 		return "", fmt.Errorf("empty query")
 	}
-	if len(parsed.Query) > maxKubectlPromQLen {
+	if len(q) > maxKubectlPromQLen {
 		return "", fmt.Errorf("query exceeds maximum length of %d bytes", maxKubectlPromQLen)
 	}
-	for _, r := range parsed.Query {
+	for _, r := range q {
 		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
 			return "", fmt.Errorf("query contains control character 0x%02x", r)
 		}
 	}
-	return parsed.Query, nil
+	return q, nil
 }
 
 // PromQLQuerier is the interface the agent loop uses to issue arbitrary
