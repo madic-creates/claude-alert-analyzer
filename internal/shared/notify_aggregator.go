@@ -130,13 +130,11 @@ func (a *NotifyAggregator) Stop(ctx context.Context) error {
 	}
 	a.stopOnce.Do(func() {
 		ack := make(chan error, 1)
+		// stopReq has buffer 1 and stopOnce guarantees this is the sole writer,
+		// so the send always completes immediately without blocking.
+		a.stopReq <- stopRequest{ctx: ctx, ack: ack}
 		select {
-		case a.stopReq <- stopRequest{ctx: ctx, ack: ack}:
-			select {
-			case a.stopErr = <-ack:
-			case <-ctx.Done():
-				a.stopErr = ctx.Err()
-			}
+		case a.stopErr = <-ack:
 		case <-ctx.Done():
 			a.stopErr = ctx.Err()
 		}
