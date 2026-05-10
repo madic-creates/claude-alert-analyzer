@@ -118,3 +118,44 @@ func TestMain_FailsWhenCheckmkAPISecretMissing(t *testing.T) {
 		t.Errorf("expected 'CHECKMK_API_SECRET' in output, got: %s", out)
 	}
 }
+
+// minEnvWithAuth returns the minimum env vars needed to pass loadConfig() and
+// reach the storm/breaker duration validation in main(). ANTHROPIC_API_KEY is
+// required to pass the auth check that runs inside loadConfig().
+func minEnvWithAuth() map[string]string {
+	env := minEnv()
+	env["ANTHROPIC_API_KEY"] = "x"
+	return env
+}
+
+// TestMain_FailsWhenStormModeNotifyIntervalInvalid verifies that the binary
+// exits and logs an error mentioning STORM_MODE_NOTIFY_INTERVAL when the env
+// var is not a valid Go duration string. An unparseable value would otherwise
+// cause main() to call os.Exit(1) before binding to any port, making the
+// failure mode silent and hard to diagnose without this test.
+func TestMain_FailsWhenStormModeNotifyIntervalInvalid(t *testing.T) {
+	env := minEnvWithAuth()
+	env["STORM_MODE_NOTIFY_INTERVAL"] = "notaduration"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid STORM_MODE_NOTIFY_INTERVAL; output=%s", out)
+	}
+	if !strings.Contains(out, "STORM_MODE_NOTIFY_INTERVAL") {
+		t.Errorf("expected 'STORM_MODE_NOTIFY_INTERVAL' in output, got: %s", out)
+	}
+}
+
+// TestMain_FailsWhenCircuitBreakerNotifyIntervalInvalid verifies that the
+// binary exits and logs an error mentioning CIRCUIT_BREAKER_NOTIFY_INTERVAL
+// when the env var is not a valid Go duration string.
+func TestMain_FailsWhenCircuitBreakerNotifyIntervalInvalid(t *testing.T) {
+	env := minEnvWithAuth()
+	env["CIRCUIT_BREAKER_NOTIFY_INTERVAL"] = "notaduration"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid CIRCUIT_BREAKER_NOTIFY_INTERVAL; output=%s", out)
+	}
+	if !strings.Contains(out, "CIRCUIT_BREAKER_NOTIFY_INTERVAL") {
+		t.Errorf("expected 'CIRCUIT_BREAKER_NOTIFY_INTERVAL' in output, got: %s", out)
+	}
+}
