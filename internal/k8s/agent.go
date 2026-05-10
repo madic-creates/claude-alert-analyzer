@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -420,40 +420,59 @@ func (k *kubectlSubprocess) Exec(ctx context.Context, argv []string, timeout tim
 		cmd.Dir = home
 	}
 
-	// Pipe stdout and stderr through a shared LimitReader so we never buffer
-	// more than maxKubectlOutputBytes regardless of how much the process emits.
-	// cmd.CombinedOutput() reads everything into memory first, which can exhaust
-	// memory when kubectl logs is called on a chatty pod; using the pipe-based
-	// approach mirrors the limitedWriter pattern used by checkmk/ssh.go.
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return "", fmt.Errorf("stdout pipe: %w", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return "", fmt.Errorf("stderr pipe: %w", err)
-	}
+	// Assign a shared limitedWriter to both stdout and stderr so the exec
+	// package's internal goroutines drain both pipes concurrently. The previous
+	// approach (StdoutPipe → read → StderrPipe → read sequentially) could
+	// deadlock: if the subprocess filled stderr's OS pipe buffer (~64 KiB on
+	// Linux) while we were blocked reading stdout, the subprocess would stall
+	// waiting for the buffer to drain and we would stall waiting for stdout
+	// EOF — neither side making progress until the agentToolTimeout fired.
+	// With cmd.Stdout/cmd.Stderr assigned, exec.Cmd.Start spawns internal
+	// goroutines that drain both pipes concurrently; cmd.Wait blocks until
+	// both goroutines finish, so no manual goroutine management is needed.
+	// This mirrors the limitedWriter type used in internal/checkmk/ssh.go.
+	lw := &limitedWriter{remaining: maxKubectlOutputBytes}
+	cmd.Stdout = lw
+	cmd.Stderr = lw
+
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("start: %w", err)
 	}
 
-	// Read stdout then stderr sequentially (combined) capped at the limit.
-	var buf bytes.Buffer
-	remaining := int64(maxKubectlOutputBytes)
-	io.Copy(&buf, io.LimitReader(stdout, remaining)) //nolint:errcheck
-	remaining -= int64(buf.Len())
-	if remaining < 0 {
-		remaining = 0
-	}
-	io.Copy(&buf, io.LimitReader(stderr, remaining)) //nolint:errcheck
-	truncated := buf.Len() >= maxKubectlOutputBytes
-
 	waitErr := cmd.Wait()
-	out := buf.String()
-	if truncated {
+	out := lw.buf.String()
+	if lw.truncated {
 		out += fmt.Sprintf("\n[output truncated at %d bytes]", maxKubectlOutputBytes)
 	}
 	return out, waitErr
+}
+
+// limitedWriter is a concurrent-safe io.Writer that caps combined stdout+stderr
+// output at a fixed byte limit. Beyond the limit writes are silently discarded
+// but reported as successful so exec's internal goroutines never block the
+// subprocess. This mirrors the limitedWriter type in internal/checkmk/ssh.go.
+type limitedWriter struct {
+	mu        sync.Mutex
+	buf       bytes.Buffer
+	remaining int
+	truncated bool
+}
+
+func (w *limitedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.remaining <= 0 {
+		w.truncated = true
+		return len(p), nil
+	}
+	n := len(p)
+	if n > w.remaining {
+		p = p[:w.remaining]
+		w.truncated = true
+	}
+	written, err := w.buf.Write(p)
+	w.remaining -= written
+	return n, err
 }
 
 // parsePromQLInput validates a promql_query tool call. The 4096-byte cap is
