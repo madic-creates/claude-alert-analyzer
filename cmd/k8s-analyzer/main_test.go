@@ -66,3 +66,20 @@ func TestMain_FailsWhenNeitherAuthVarSet(t *testing.T) {
 		t.Errorf("expected 'must be set' in stderr, got: %s", stderr)
 	}
 }
+
+// TestMain_FailsWhenWebhookSecretMissing verifies that the binary exits with
+// code 1 and logs an error mentioning WEBHOOK_SECRET when the env var is not
+// set. WEBHOOK_SECRET is the bearer-token gate for all incoming Alertmanager
+// webhooks; starting without it would silently accept any caller.
+func TestMain_FailsWhenWebhookSecretMissing(t *testing.T) {
+	exit, out := runMainWithEnv(t, map[string]string{
+		"ANTHROPIC_API_KEY": "x",
+		// WEBHOOK_SECRET intentionally omitted
+	})
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit when WEBHOOK_SECRET is missing; output=%s", out)
+	}
+	if !strings.Contains(out, "WEBHOOK_SECRET") {
+		t.Errorf("expected 'WEBHOOK_SECRET' in output, got: %s", out)
+	}
+}
