@@ -125,3 +125,17 @@ func TestAnalysisPolicy_AllModels(t *testing.T) {
 		t.Errorf("AllModels missing expected models: %v", got)
 	}
 }
+
+// TestNewPrometheusMetricsForTest_PanicsOnInvalidProduct verifies that
+// NewPrometheusMetricsForTest panics (rather than silently returning nil) when
+// given an unrecognized Product value. The panic is intentional: it surfaces
+// test-setup mistakes at construction time instead of producing a nil-pointer
+// dereference later in the test, making the failure location immediately obvious.
+func TestNewPrometheusMetricsForTest_PanicsOnInvalidProduct(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for invalid product, got none")
+		}
+	}()
+	NewPrometheusMetricsForTest(Product("bogus"))
+}
