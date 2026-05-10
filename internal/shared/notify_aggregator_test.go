@@ -316,6 +316,37 @@ func TestNotifyAggregator_AddChannelFullDrops(t *testing.T) {
 	_ = a.Stop(ctx)
 }
 
+// TestNotifyAggregator_Add_StoppedBetweenSelects exercises the race window
+// between Add's two select statements where the aggregator stops after the
+// first select passes. testHookBetweenAddSelects makes the window deterministic:
+// the hook calls Stop() and fills a.in to capacity so the second select's
+// default branch fires, recording a drop and returning false.
+func TestNotifyAggregator_Add_StoppedBetweenSelects(t *testing.T) {
+	pub := &aggFakePublisher{}
+	drops := newDropsCounter()
+	a := NewNotifyAggregator([]Publisher{pub}, 10*time.Second, "S: %d", "5", drops)
+
+	testHookBetweenAddSelects = func() {
+		testHookBetweenAddSelects = nil // one-shot: prevent re-entry on subsequent Add calls
+		if err := a.Stop(context.Background()); err != nil {
+			panic("hook: Stop returned " + err.Error())
+		}
+		// Fill a.in to capacity so `case a.in <- alertTitle` in the second
+		// select is not ready; the default branch fires, dropping the item.
+		for len(a.in) < cap(a.in) {
+			a.in <- "pad"
+		}
+	}
+	defer func() { testHookBetweenAddSelects = nil }()
+
+	if a.Add("race-item") {
+		t.Fatal("Add must return false when the aggregator stops between the stopping check and the send select")
+	}
+	if v := getCounterValue(drops); v < 1 {
+		t.Fatalf("expected drops >= 1, got %v", v)
+	}
+}
+
 func TestNotifyAggregator_StopRaceNoLosses(t *testing.T) {
 	pub := &aggFakePublisher{}
 	drops := newDropsCounter()

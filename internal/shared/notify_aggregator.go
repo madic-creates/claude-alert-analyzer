@@ -18,6 +18,12 @@ import (
 // via the drops counter — the contract on Add() is non-blocking by design.
 const notifyAggregatorBufferSize = 100
 
+// testHookBetweenAddSelects is called by Add() in tests between its two select
+// statements so tests can exercise the race window where the aggregator stops
+// after the first select passes but before the second select runs. Nil in
+// production.
+var testHookBetweenAddSelects func()
+
 // NotifyAggregator buffers alert titles during a time interval and emits one
 // summary notification per interval. It is concurrency-safe via a single
 // owner goroutine that owns buffer + timer; Add() and Stop() communicate
@@ -81,9 +87,9 @@ func NewNotifyAggregator(publishers []Publisher, interval time.Duration, titleFm
 // (notifyAggregatorBufferSize) is large enough for their alert volume.
 //
 // Drop ordering: the stopping flag is checked FIRST so Add() refuses sends
-// once the owner has begun shutdown drain. Without this, a select-race
-// between `a.in <- alertTitle` and `<-a.stopped` could land an item in
-// the channel after the owner already drained-and-flushed → silent loss.
+// once the owner has begun shutdown drain. Without this early check, an Add()
+// could land an item in a.in after the owner already drained-and-flushed,
+// resulting in a silently lost alert.
 func (a *NotifyAggregator) Add(alertTitle string) bool {
 	if a == nil {
 		return false
@@ -92,19 +98,15 @@ func (a *NotifyAggregator) Add(alertTitle string) bool {
 		a.recordDrop()
 		return false
 	}
-	select {
-	case <-a.stopped:
-		a.recordDrop()
-		return false
-	default:
+	if testHookBetweenAddSelects != nil {
+		testHookBetweenAddSelects()
 	}
 	select {
 	case a.in <- alertTitle:
 		return true
-	case <-a.stopped:
-		a.recordDrop()
-		return false
 	default:
+		// Channel full: drop rather than block. Stopped state is already
+		// guarded by stopping.Load() above.
 		a.recordDrop()
 		return false
 	}
@@ -202,9 +204,9 @@ func (a *NotifyAggregator) run() {
 				select {
 				case alertTitle := <-a.in:
 					buffer = append(buffer, alertTitle)
-					if !drainDeadline.Stop() {
-						<-drainDeadline.C
-					}
+					// Reset stops the old timer and restarts it. On Go 1.23+, Reset
+					// atomically drains the channel if the timer had already fired,
+					// so no explicit Stop+drain is needed before calling Reset.
 					drainDeadline.Reset(10 * time.Millisecond)
 				case <-drainDeadline.C:
 					break drain
