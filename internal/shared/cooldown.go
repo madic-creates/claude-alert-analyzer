@@ -126,7 +126,11 @@ func (cm *CooldownManager) CheckAndSetWithGroup(
 // CheckAndSetGroup. Caller must hold the relevant mutex.
 func checkAndSetLocked(entries map[string]cooldownEntry, key string, ttl time.Duration, now time.Time) bool {
 	for k, v := range entries {
-		if now.Sub(v.setAt) > v.ttl {
+		// Use >= so entries at exactly their TTL boundary are swept on the same
+		// call that the check already treats them as expired (< ttl is false).
+		// Using > would leave a "ghost" entry that lingers until elapsed > ttl,
+		// making the sweep semantics inconsistent with the check below.
+		if now.Sub(v.setAt) >= v.ttl {
 			delete(entries, k)
 		}
 	}

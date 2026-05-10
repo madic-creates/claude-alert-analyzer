@@ -231,3 +231,40 @@ func TestCheckAndSetWithGroup_Outcomes(t *testing.T) {
 		}
 	})
 }
+
+// TestCheckAndSetLocked_SweepAtExactBoundary verifies that the sweep condition
+// (>= ttl) and the check condition (< ttl) are consistent: an entry at exactly
+// its TTL boundary is treated as expired by the check AND swept during the same
+// call. Before the fix (which used > instead of >=), entries at exactly elapsed
+// == ttl were not swept and lingered as ghost entries until elapsed exceeded ttl.
+func TestCheckAndSetLocked_SweepAtExactBoundary(t *testing.T) {
+	entries := make(map[string]cooldownEntry)
+	ttl := 5 * time.Second
+	t0 := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Insert two entries at T=0.
+	if !checkAndSetLocked(entries, "a", ttl, t0) {
+		t.Fatal("first set of 'a' should succeed")
+	}
+	if !checkAndSetLocked(entries, "b", ttl, t0) {
+		t.Fatal("first set of 'b' should succeed")
+	}
+
+	// At T=exactly ttl, call for "b". Both entries are at elapsed==ttl.
+	// With >= sweep: "a" is deleted and "b" is overwritten.
+	// With old > sweep: "a" is NOT deleted — it lingers as a ghost entry.
+	tExact := t0.Add(ttl)
+	if !checkAndSetLocked(entries, "b", ttl, tExact) {
+		t.Error("at exact TTL boundary, entry should be treated as expired and allow set")
+	}
+
+	// "a" should have been swept (elapsed == ttl → expired).
+	if _, ok := entries["a"]; ok {
+		t.Error("entry 'a' at exact TTL boundary should have been swept; got ghost entry")
+	}
+
+	// "b" should have been refreshed to tExact.
+	if got := entries["b"].setAt; !got.Equal(tExact) {
+		t.Errorf("entry 'b' setAt should be tExact=%v, got %v", tExact, got)
+	}
+}
