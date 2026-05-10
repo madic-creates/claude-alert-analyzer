@@ -1,10 +1,12 @@
 package k8s
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -399,6 +401,15 @@ func NewKubectlSubprocess(path string) *kubectlSubprocess {
 	return &kubectlSubprocess{Path: path, Env: env}
 }
 
+// maxKubectlOutputBytes is the maximum number of bytes read from kubectl
+// combined stdout+stderr before truncation. Mirrors maxSSHOutputBytes in
+// checkmk/ssh.go: kubectl logs on a chatty pod can produce many megabytes
+// within the 10-second tool timeout, and cmd.CombinedOutput() would buffer
+// all of it in memory before the 4 KiB Truncate() call in handleKubectlTool
+// had a chance to run. The cap is applied here, closest to the source, to
+// prevent unbounded memory growth during an agentic loop.
+const maxKubectlOutputBytes = 512 * 1024 // 512 KiB
+
 func (k *kubectlSubprocess) Exec(ctx context.Context, argv []string, timeout time.Duration) (string, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -409,8 +420,40 @@ func (k *kubectlSubprocess) Exec(ctx context.Context, argv []string, timeout tim
 		cmd.Dir = home
 	}
 
-	out, err := cmd.CombinedOutput()
-	return string(out), err
+	// Pipe stdout and stderr through a shared LimitReader so we never buffer
+	// more than maxKubectlOutputBytes regardless of how much the process emits.
+	// cmd.CombinedOutput() reads everything into memory first, which can exhaust
+	// memory when kubectl logs is called on a chatty pod; using the pipe-based
+	// approach mirrors the limitedWriter pattern used by checkmk/ssh.go.
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", fmt.Errorf("stdout pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return "", fmt.Errorf("stderr pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("start: %w", err)
+	}
+
+	// Read stdout then stderr sequentially (combined) capped at the limit.
+	var buf bytes.Buffer
+	remaining := int64(maxKubectlOutputBytes)
+	io.Copy(&buf, io.LimitReader(stdout, remaining)) //nolint:errcheck
+	remaining -= int64(buf.Len())
+	if remaining < 0 {
+		remaining = 0
+	}
+	io.Copy(&buf, io.LimitReader(stderr, remaining)) //nolint:errcheck
+	truncated := buf.Len() >= maxKubectlOutputBytes
+
+	waitErr := cmd.Wait()
+	out := buf.String()
+	if truncated {
+		out += fmt.Sprintf("\n[output truncated at %d bytes]", maxKubectlOutputBytes)
+	}
+	return out, waitErr
 }
 
 // parsePromQLInput validates a promql_query tool call. The 4096-byte cap is
