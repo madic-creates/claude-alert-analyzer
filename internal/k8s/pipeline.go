@@ -210,9 +210,6 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	// keys; SeverityLevel is always one of the four normalized enum values.
 	priorityMap := map[string]string{"critical": "5", "warning": "4", "info": "2", "unknown": "3"}
 	priority := priorityMap[alert.SeverityLevel.String()]
-	if priority == "" {
-		priority = "3"
-	}
 
 	if deps.Policy.IsDegraded() && deps.StormNotify != nil {
 		deps.StormNotify.Add(alertname)
