@@ -674,6 +674,46 @@ func TestIsDenied_BlocksLuaTclPhpInterpreters(t *testing.T) {
 	}
 }
 
+// TestIsDenied_BlocksRAndJVMInterpreters verifies that the R statistical
+// computing language and JVM-based scripting runtimes are denied. These are
+// not covered by the existing interpreter entries (python, perl, ruby, node)
+// and all support direct sub-process execution:
+//
+//	R -e 'system("reboot")'                        — R built-in system()
+//	Rscript -e 'system("shutdown now")'            — non-interactive R companion
+//	echo 'Runtime.getRuntime().exec("reboot");' | jshell — Java REPL (JDK 9+)
+//	groovy -e '"reboot".execute()'                 — Groovy GString.execute()
+//
+// R is widely installed on data-science, bioinformatics, and finance servers;
+// jshell ships with JDK 9+ (ubiquitous in enterprise environments); groovy is
+// common in Jenkins/CI pipelines. Uppercase and absolute-path variants must
+// also be blocked because isDenied normalises argv[0] to lowercase and strips
+// the directory component before the denylist lookup.
+func TestIsDenied_BlocksRAndJVMInterpreters(t *testing.T) {
+	denied := [][]string{
+		// R statistical computing language.
+		{"R", "-e", "system('reboot')"},
+		{"/usr/bin/R", "-e", "system('rm -rf /')"},
+		{"Rscript", "-e", "system('shutdown now')"},
+		{"/usr/bin/Rscript", "-e", "system('reboot')"},
+		// Uppercase variants must be caught after argv[0] lowercasing.
+		{"RSCRIPT", "-e", "system('reboot')"},
+		// Java REPL (JDK 9+).
+		{"jshell"},
+		{"/usr/lib/jvm/java-17/bin/jshell", "--execution=local"},
+		// Groovy JVM scripting language.
+		{"groovy", "-e", `"reboot".execute()`},
+		{"/usr/bin/groovy", "-e", `"reboot".execute()`},
+		// Mixed-case variant — must be caught after lowercasing.
+		{"Groovy", "-e", `"reboot".execute()`},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("R/JVM interpreter bypass not blocked: %v", argv)
+		}
+	}
+}
+
 // TestIsDenied_BlocksPackageManagers verifies that package-manager binaries are
 // denied. Installing a package triggers build hooks (Python setup.py, Node.js
 // postinstall scripts, Ruby extconf.rb) that execute arbitrary code on the

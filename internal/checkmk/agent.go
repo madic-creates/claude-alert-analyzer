@@ -137,6 +137,28 @@ var DefaultDeniedCommands = map[string]bool{
 	"tcsh": true, "csh": true, "ksh": true, "mksh": true, "ash": true,
 	"python": true, "python2": true, "python3": true,
 	"perl": true, "ruby": true, "node": true, "nodejs": true,
+	// R and Rscript: the R statistical computing language. Both accept a -e
+	// flag that evaluates arbitrary R code inline:
+	//   R -e 'system("reboot")'
+	//   Rscript -e 'system("shutdown now")'
+	// R is widely installed on data-science, bioinformatics, and finance
+	// servers. The base name is a single letter ("r"), which the
+	// versioned-variant heuristic never produces from other denied names, so
+	// it must be listed explicitly. Rscript is the non-interactive companion
+	// binary and needs its own entry for the same reason.
+	"r": true, "rscript": true,
+	// jshell is the Java REPL shipped with JDK 9+. It reads and evaluates
+	// Java snippets interactively or from stdin:
+	//   echo 'Runtime.getRuntime().exec("reboot");' | jshell
+	// Java is ubiquitous on enterprise servers (application servers,
+	// middleware, build agents) commonly monitored by CheckMK.
+	"jshell": true,
+	// groovy is a JVM scripting language common in Jenkins/CI environments
+	// and Gradle build scripts. It accepts -e for direct code execution:
+	//   groovy -e '"reboot".execute()'
+	// The versioned-variant heuristic automatically extends the denial to
+	// versioned binary names (e.g. groovy2.5 → base "groovy" → denied).
+	"groovy": true,
 	// env and xargs can be used to invoke denied commands as a sub-process.
 	"env": true, "xargs": true,
 	// awk is a scripting language present on every Linux host; it can bypass
