@@ -55,7 +55,7 @@ jobs:
           make binaries
           ls -la k8s-analyzer checkmk-analyzer
       - name: Upload binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: binaries
           path: |
@@ -81,7 +81,7 @@ jobs:
           fetch-tags: true
 
       - name: Download prebuilt binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: binaries
           path: .
