@@ -506,6 +506,15 @@ func parsePromQLInput(input json.RawMessage) (string, error) {
 	if len(q) > maxKubectlPromQLen {
 		return "", fmt.Errorf("query exceeds maximum length of %d bytes", maxKubectlPromQLen)
 	}
+	// Explicit null-byte and newline checks before the C0 range loop so Claude
+	// receives a targeted error message rather than the generic "control character
+	// 0x00" / "0x0a". The C0 loop below remains the authoritative backstop.
+	if strings.ContainsRune(q, '\x00') {
+		return "", fmt.Errorf("query contains null byte")
+	}
+	if strings.ContainsRune(q, '\n') || strings.ContainsRune(q, '\r') {
+		return "", fmt.Errorf("query contains newline")
+	}
 	for _, r := range q {
 		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
 			return "", fmt.Errorf("query contains control character 0x%02x", r)

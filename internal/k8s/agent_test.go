@@ -489,7 +489,17 @@ func TestParsePromQLInput(t *testing.T) {
 		{
 			name:    "newline embedded",
 			input:   `{"query":"up\n## injected"}`,
-			wantErr: "control character",
+			wantErr: "newline",
+		},
+		{
+			name:    "carriage return embedded",
+			input:   `{"query":"up\r## injected"}`,
+			wantErr: "newline",
+		},
+		{
+			name:    "null byte embedded",
+			input:   `{"query":"up\u0000foo"}`,
+			wantErr: "null byte",
 		},
 		{
 			name:    "tab embedded",
