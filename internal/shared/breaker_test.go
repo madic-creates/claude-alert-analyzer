@@ -373,3 +373,20 @@ func TestCircuitBreaker_NilNowDefaultsToTimeNow(t *testing.T) {
 	}
 	p.Done(nil) // success should not panic
 }
+
+// TestCircuitBreaker_Acquire_InvalidState covers the default branch in
+// Acquire()'s switch statement. breakerState is a private iota type with
+// exactly three valid values; the default case is a safety guard against
+// memory corruption or future refactors introducing an unhandled state.
+// We reach it by forcibly writing an out-of-range value, which documents
+// the invariant and prevents coverage gaps from masking real regressions.
+func TestCircuitBreaker_Acquire_InvalidState(t *testing.T) {
+	b := NewCircuitBreaker(3, time.Minute, time.Minute, time.Now)
+	b.mu.Lock()
+	b.state = breakerState(99) // invalid — not closed/open/half-open
+	b.mu.Unlock()
+	_, err := b.Acquire()
+	if !errors.Is(err, ErrCircuitOpen) {
+		t.Fatalf("invalid state: expected ErrCircuitOpen, got: %v", err)
+	}
+}
