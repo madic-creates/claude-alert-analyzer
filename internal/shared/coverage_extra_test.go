@@ -329,23 +329,27 @@ func (h *shutdownErrCapture) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 func (h *shutdownErrCapture) WithGroup(_ string) slog.Handler      { return h }
 
 // TestAppendTextToLastUserMessage_EmptySlice verifies that appendTextToLastUserMessage
-// returns an error (mentioning "empty") when the messages slice is empty.
-// This guards the internal invariant that the caller always passes a non-empty
-// slice; without this check a nil-pointer dereference would panic.
+// panics (mentioning "empty") when the messages slice is empty. Panic is the
+// correct signal for this internal invariant violation — the tool loop always
+// produces a non-empty slice, so an empty slice indicates a bug in the caller.
 func TestAppendTextToLastUserMessage_EmptySlice(t *testing.T) {
-	err := appendTextToLastUserMessage(nil, "summary")
-	if err == nil {
-		t.Fatal("expected error for empty messages slice, got nil")
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		appendTextToLastUserMessage(nil, "summary")
+	}()
+	if recovered == nil {
+		t.Fatal("expected panic for empty messages slice, got none")
 	}
-	if !strings.Contains(err.Error(), "empty") {
-		t.Errorf("error should mention 'empty', got: %v", err)
+	if msg, ok := recovered.(string); !ok || !strings.Contains(msg, "empty") {
+		t.Errorf("panic value should mention 'empty', got: %v", recovered)
 	}
 }
 
 // TestAppendTextToLastUserMessage_WrongRole verifies that appendTextToLastUserMessage
-// returns an error (mentioning the actual role) when the last message is not a
-// user message. The Claude API requires strict role alternation; appending a
-// text block to an assistant message would produce an invalid message sequence.
+// panics (mentioning the actual role) when the last message is not a user message.
+// The Claude API requires strict role alternation; a wrong-role violation signals
+// a bug in the tool loop's message-building logic, not a recoverable user error.
 func TestAppendTextToLastUserMessage_WrongRole(t *testing.T) {
 	messages := []anthropic.MessageParam{
 		anthropic.NewUserMessage(anthropic.NewTextBlock("original")),
@@ -353,12 +357,16 @@ func TestAppendTextToLastUserMessage_WrongRole(t *testing.T) {
 			anthropic.NewTextBlock("assistant turn"),
 		}},
 	}
-	err := appendTextToLastUserMessage(messages, "summary")
-	if err == nil {
-		t.Fatal("expected error when last message is assistant, got nil")
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		appendTextToLastUserMessage(messages, "summary")
+	}()
+	if recovered == nil {
+		t.Fatal("expected panic when last message is assistant, got none")
 	}
-	if !strings.Contains(err.Error(), "assistant") {
-		t.Errorf("error should mention role 'assistant', got: %v", err)
+	if msg, ok := recovered.(string); !ok || !strings.Contains(msg, "assistant") {
+		t.Errorf("panic value should mention role 'assistant', got: %v", recovered)
 	}
 }
 

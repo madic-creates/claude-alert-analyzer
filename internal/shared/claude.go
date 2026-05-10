@@ -3,7 +3,6 @@ package shared
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -226,9 +225,7 @@ func (c *ClaudeClient) RunToolLoop(ctx context.Context, severity Severity,
 	// to preserve role alternation, then issue the tool-less summary call.
 	slog.Info("tool loop max rounds reached, requesting summary", "maxRounds", maxRounds)
 	const summaryPrompt = "You have reached the maximum number of diagnostic rounds. Do NOT call any more tools. Provide your final analysis now based on all information gathered so far. Start directly with the analysis — no preamble or meta-commentary."
-	if err := appendTextToLastUserMessage(messages, summaryPrompt); err != nil {
-		return "", maxRounds, true, err
-	}
+	appendTextToLastUserMessage(messages, summaryPrompt)
 	analysis, err := c.runForcedSummary(ctx, model, systemPrompt, tools, messages,
 		&totalInput, &totalOutput, &totalCacheCreation, &totalCacheRead)
 	return analysis, maxRounds, true, err
@@ -266,14 +263,16 @@ func (c *ClaudeClient) runForcedSummary(ctx context.Context, model, systemPrompt
 }
 
 // appendTextToLastUserMessage appends a text block to the last (user) message.
-func appendTextToLastUserMessage(messages []anthropic.MessageParam, text string) error {
+// Panics on invariant violations (empty slice or wrong role) — these represent
+// internal bugs in the tool loop, never recoverable user errors. The pipeline's
+// panic-recovery defer catches and logs any such panic.
+func appendTextToLastUserMessage(messages []anthropic.MessageParam, text string) {
 	if len(messages) == 0 {
-		return errors.New("internal: messages slice is empty when appending forced-summary text")
+		panic("internal: messages slice is empty when appending forced-summary text")
 	}
 	last := &messages[len(messages)-1]
 	if last.Role != anthropic.MessageParamRoleUser {
-		return fmt.Errorf("internal: last message role is %q, expected user", string(last.Role))
+		panic(fmt.Sprintf("internal: last message role is %q, expected user", string(last.Role)))
 	}
 	last.Content = append(last.Content, anthropic.NewTextBlock(text))
-	return nil
 }
