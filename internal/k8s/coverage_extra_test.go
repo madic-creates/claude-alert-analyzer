@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -1120,5 +1122,45 @@ func TestIsExecError(t *testing.T) {
 				t.Errorf("isExecError(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestKubectlSubprocess_Exec_StartError covers the cmd.Start() error branch in
+// kubectlSubprocess.Exec. Pointing Path at a non-existent binary causes
+// exec.Cmd.Start to fail before any process is spawned, exercising the
+// "start: %w" return that was previously uncovered.
+func TestKubectlSubprocess_Exec_StartError(t *testing.T) {
+	k := &kubectlSubprocess{Path: "/nonexistent/kubectl-does-not-exist", Env: nil}
+	_, err := k.Exec(context.Background(), []string{"get", "pods"}, 5*time.Second)
+	if err == nil {
+		t.Fatal("expected error from Start() with non-existent binary, got nil")
+	}
+	if !strings.Contains(err.Error(), "start:") {
+		t.Errorf("expected error to contain 'start:', got: %v", err)
+	}
+}
+
+// TestKubectlSubprocess_Exec_OutputTruncated covers the lw.truncated branch in
+// kubectlSubprocess.Exec. It runs /bin/sh to generate more than
+// maxKubectlOutputBytes (512 KiB) of output, which causes limitedWriter to set
+// truncated=true and appends the "[output truncated at N bytes]" suffix.
+func TestKubectlSubprocess_Exec_OutputTruncated(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not available:", err)
+	}
+	// Generate slightly more than 512 KiB via head so the process exits cleanly.
+	byteCount := maxKubectlOutputBytes + 1024
+	k := &kubectlSubprocess{
+		Path: sh,
+		Env:  []string{"HOME=" + os.Getenv("HOME")},
+	}
+	out, _ := k.Exec(context.Background(),
+		[]string{"-c", fmt.Sprintf("head -c %d /dev/zero | tr '\\0' 'x'", byteCount)},
+		10*time.Second)
+	want := fmt.Sprintf("[output truncated at %d bytes]", maxKubectlOutputBytes)
+	if !strings.Contains(out, want) {
+		t.Errorf("expected truncation message %q in output, got last 200 chars: %q",
+			want, out[max(0, len(out)-200):])
 	}
 }
