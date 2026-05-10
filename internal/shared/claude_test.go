@@ -925,6 +925,93 @@ func TestRunToolLoop_LastToolResultHasCacheControl(t *testing.T) {
 	}
 }
 
+// TestRunToolLoop_PreviousToolResultCacheControlCleared verifies that
+// appendToolResultsAndCacheTail clears cache_control from all prior tool_result
+// blocks when a new round appends its own tail. This keeps the total number of
+// cache_control breakpoints at 3 (system + tools + current), which is
+// required by providers such as Amazon Bedrock via OpenRouter that enforce a
+// hard limit of 4 breakpoints.
+func TestRunToolLoop_PreviousToolResultCacheControlCleared(t *testing.T) {
+	// Three-round scenario:
+	//   round 1 → tool_use (2 tools)   → tool_results appended, last has cache_control
+	//   round 2 → tool_use (1 tool)    → round-1 cache_control cleared; round-2 last has cache_control
+	//   round 3 → end_turn             → we inspect the request to verify invariants
+	round := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		round++
+		body, _ := io.ReadAll(r.Body)
+
+		if round == 3 {
+			var req map[string]any
+			_ = json.Unmarshal(body, &req)
+			messages := req["messages"].([]any)
+
+			// Structure (0-based):
+			//   0: original user prompt
+			//   1: assistant (round-1 tool_use)
+			//   2: user (round-1 tool_results)  ← cache_control MUST be absent on all blocks
+			//   3: assistant (round-2 tool_use)
+			//   4: user (round-2 tool_results)  ← last block MUST have cache_control
+			if len(messages) < 5 {
+				t.Fatalf("round 3: expected at least 5 messages, got %d", len(messages))
+			}
+
+			// round-1 tool_results: all blocks must have no cache_control (cleared by round-2 append)
+			round1User := messages[2].(map[string]any)
+			for i, block := range round1User["content"].([]any) {
+				b := block.(map[string]any)
+				if _, has := b["cache_control"]; has {
+					t.Errorf("round 3: round-1 tool_result block %d still has cache_control (should be cleared): %v", i, b)
+				}
+			}
+
+			// round-2 tool_results: only the last block must have cache_control
+			round2User := messages[4].(map[string]any)
+			round2Content := round2User["content"].([]any)
+			lastIdx := len(round2Content) - 1
+			for i, block := range round2Content {
+				b := block.(map[string]any)
+				_, has := b["cache_control"]
+				if i == lastIdx && !has {
+					t.Errorf("round 3: round-2 last tool_result block missing cache_control: %v", b)
+				}
+				if i != lastIdx && has {
+					t.Errorf("round 3: round-2 non-last tool_result block %d unexpectedly has cache_control: %v", i, b)
+				}
+			}
+		}
+
+		switch round {
+		case 1:
+			// Two tool_use blocks to exercise multi-tool clearing.
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"content":[` +
+				`{"type":"tool_use","id":"t1","name":"a","input":{}},` +
+				`{"type":"tool_use","id":"t2","name":"a","input":{}}` +
+				`],"stop_reason":"tool_use"}`))
+		case 2:
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"content":[{"type":"tool_use","id":"t3","name":"a","input":{}}],"stop_reason":"tool_use"}`))
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}`))
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv, "m", "x", 0)
+	tools := []anthropic.ToolUnionParam{{OfTool: &anthropic.ToolParam{Name: "a"}}}
+
+	_, rounds, _, err := c.RunToolLoop(context.Background(), SeverityWarning, "m", "sys", "user", tools, 5,
+		func(string, json.RawMessage) (string, error) { return "output", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rounds != 3 {
+		t.Fatalf("expected 3 rounds, got %d", rounds)
+	}
+}
+
 func TestRunToolLoop_UsesProvidedModel(t *testing.T) {
 	var bodies [][]byte
 	round := 0
