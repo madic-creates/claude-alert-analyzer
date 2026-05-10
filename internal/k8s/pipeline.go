@@ -98,9 +98,8 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 				deps.Metrics.RecordFailed()
 			}
 		case phaseAPI:
-			if analysisErr == nil {
-				return
-			}
+			// analysisErr is always non-nil here: Acquire() sets it on failure,
+			// and the analysis + empty-check paths set it before returning.
 			if errors.Is(analysisErr, shared.ErrCircuitOpen) {
 				// Verstärker-Mitigation: keep cooldowns to absorb retries.
 				deps.Metrics.RecordFailed()
