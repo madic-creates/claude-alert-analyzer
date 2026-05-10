@@ -64,6 +64,16 @@ func parseKubectlInput(input json.RawMessage) ([]string, error) {
 		if len(arg) > maxArgLen {
 			return nil, fmt.Errorf("argument %d exceeds maximum length of %d bytes", i, maxArgLen)
 		}
+		// Explicit null-byte and newline checks before the C0 range loop so
+		// Claude receives a targeted error message ("contains null byte" /
+		// "contains newline") rather than the generic "control character 0x0a".
+		// The C0 loop below remains the authoritative backstop.
+		if strings.ContainsRune(arg, '\x00') {
+			return nil, fmt.Errorf("argument %d contains null byte", i)
+		}
+		if strings.ContainsRune(arg, '\n') || strings.ContainsRune(arg, '\r') {
+			return nil, fmt.Errorf("argument %d contains newline", i)
+		}
 		if strings.TrimSpace(arg) != arg {
 			return nil, fmt.Errorf("argument %d has leading or trailing whitespace", i)
 		}

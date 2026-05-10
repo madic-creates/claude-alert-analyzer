@@ -64,9 +64,19 @@ func TestParseKubectlInput_BasicValidation(t *testing.T) {
 			wantErr: "leading or trailing whitespace",
 		},
 		{
+			name:    "null byte in arg",
+			input:   string(mustMarshalCommand([]string{"get", "pods\x00foo"})),
+			wantErr: "null byte",
+		},
+		{
 			name:    "newline in arg",
 			input:   `{"command":["get","pods\nfoo"]}`,
-			wantErr: "control character",
+			wantErr: "newline",
+		},
+		{
+			name:    "carriage return in arg",
+			input:   string(mustMarshalCommand([]string{"get", "pods\rfoo"})),
+			wantErr: "newline",
 		},
 		{
 			name:    "tab in arg",
