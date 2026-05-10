@@ -50,6 +50,23 @@ func loadConfig() k8s.Config {
 	_ = os.Unsetenv("ANTHROPIC_AUTH_TOKEN")
 	_ = os.Unsetenv("ANTHROPIC_BASE_URL")
 
+	var kubeAPITimeout time.Duration
+	if v := os.Getenv("KUBE_API_TIMEOUT"); v != "" {
+		kubeAPITimeout, err = time.ParseDuration(v)
+		if err != nil {
+			slog.Error("invalid KUBE_API_TIMEOUT", "error", err)
+			os.Exit(1)
+		}
+	}
+	var promTimeout time.Duration
+	if v := os.Getenv("PROM_TIMEOUT"); v != "" {
+		promTimeout, err = time.ParseDuration(v)
+		if err != nil {
+			slog.Error("invalid PROM_TIMEOUT", "error", err)
+			os.Exit(1)
+		}
+	}
+
 	return k8s.Config{
 		PrometheusURL:   shared.EnvOrDefault("PROMETHEUS_URL", "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"),
 		ClaudeModel:     shared.EnvOrDefault("CLAUDE_MODEL", "claude-sonnet-4-6"),
@@ -62,6 +79,8 @@ func loadConfig() k8s.Config {
 		APIBaseURL:      baseURL,
 		APIKey:          apiKey,
 		AuthToken:       authToken,
+		KubeAPITimeout:  kubeAPITimeout,
+		PromTimeout:     promTimeout,
 	}
 }
 

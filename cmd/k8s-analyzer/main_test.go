@@ -124,3 +124,33 @@ func TestMain_FailsWhenCircuitBreakerNotifyIntervalInvalid(t *testing.T) {
 		t.Errorf("expected 'CIRCUIT_BREAKER_NOTIFY_INTERVAL' in output, got: %s", out)
 	}
 }
+
+// TestMain_FailsWhenKubeAPITimeoutInvalid verifies that the binary exits and
+// logs an error mentioning KUBE_API_TIMEOUT when the env var is not a valid Go
+// duration string.
+func TestMain_FailsWhenKubeAPITimeoutInvalid(t *testing.T) {
+	env := minEnv()
+	env["KUBE_API_TIMEOUT"] = "notaduration"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid KUBE_API_TIMEOUT; output=%s", out)
+	}
+	if !strings.Contains(out, "KUBE_API_TIMEOUT") {
+		t.Errorf("expected 'KUBE_API_TIMEOUT' in output, got: %s", out)
+	}
+}
+
+// TestMain_FailsWhenPromTimeoutInvalid verifies that the binary exits and logs
+// an error mentioning PROM_TIMEOUT when the env var is not a valid Go duration
+// string.
+func TestMain_FailsWhenPromTimeoutInvalid(t *testing.T) {
+	env := minEnv()
+	env["PROM_TIMEOUT"] = "notaduration"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid PROM_TIMEOUT; output=%s", out)
+	}
+	if !strings.Contains(out, "PROM_TIMEOUT") {
+		t.Errorf("expected 'PROM_TIMEOUT' in output, got: %s", out)
+	}
+}
