@@ -1236,6 +1236,46 @@ func TestHandlePromQLTool_RejectedValidOutcome(t *testing.T) {
 	}
 }
 
+// TestHandleKubectlTool_RejectedValidOutcome verifies that a structural
+// parseKubectlInput failure (empty command array) records
+// outcome="rejected_validation" for the kubectl_exec tool. This pins the
+// contract between handleKubectlTool's outcome classification and the metric
+// label, mirroring TestHandlePromQLTool_RejectedValidOutcome for promql_query.
+// An errVerbDenied-wrapped error (e.g. "delete") must NOT trigger this path —
+// that case records "rejected_verb" and is covered by TestRunAgenticDiagnostics_RecordsMetrics.
+func TestHandleKubectlTool_RejectedValidOutcome(t *testing.T) {
+	kc := &fakeKubectlRunner{}
+	pq := &fakePromQLQuerier{}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
+
+	runner := &fakeToolLoopRunner{
+		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
+			// Empty command array — parseKubectlInput returns "empty command" error
+			// without errVerbDenied wrapping; handleKubectlTool must record
+			// outcome="rejected_validation", not "rejected_verb".
+			result, err := handleTool("kubectl_exec", json.RawMessage(`{"command":[]}`))
+			if err != nil {
+				t.Errorf("validation error should not propagate as Go error, got: %v", err)
+			}
+			if !strings.Contains(result, "empty command") {
+				t.Errorf("expected parse error in result, got: %q", result)
+			}
+			return "done", nil
+		},
+	}
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="rejected_validation",product="k8s",tool="kubectl_exec"} 1`) {
+		t.Errorf("expected rejected_validation metric for empty command; body:\n%s", body)
+	}
+}
+
 // TestParseKubectlInput_InvalidJSON verifies the JSON unmarshal error path in
 // parseKubectlInput — the "parse command input: %w" branch that wraps the
 // json.Unmarshal error, distinct from the structural validation paths exercised
