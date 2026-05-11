@@ -266,6 +266,24 @@ var systemctlReadOnly = map[string]bool{
 	"cat": true, // shows installed unit file content; read-only and useful for config inspection
 }
 
+// systemctlFlagsConsumingNextToken is the set of systemctl flags that take
+// their value as the next separate argument (space-separated form). The
+// subcommand-finding loop must skip the value token when it sees one of these
+// flags, otherwise it mistakes the value for the subcommand.
+//
+// Example: ["systemctl", "--type", "service", "list-units"]
+// Without skipping, the loop stops at "service" and returns it as the
+// subcommand; systemctlReadOnly["service"] == false → incorrectly denied.
+// With skipping, the loop skips "service" and finds "list-units" → allowed.
+//
+// --host/-H and --machine/-M are intentionally absent: they are denied by the
+// explicit security check before this loop runs, so they never reach it.
+var systemctlFlagsConsumingNextToken = map[string]bool{
+	"--type": true, "-t": true,
+	"--state":    true,
+	"--property": true, "-p": true,
+}
+
 // iptablesReadOnlyOps are iptables(8)/ip6tables(8) operation flags that only
 // read firewall state without modifying it. Commands using only these flags
 // (plus modifier-only flags such as -n, -v, -t, --line-numbers) are allowed
@@ -438,7 +456,19 @@ func isDenied(denied map[string]bool, argv []string) bool {
 			}
 		}
 		subcmd := ""
+		skipNext := false
 		for _, arg := range argv[1:] {
+			if skipNext {
+				skipNext = false
+				continue
+			}
+			if systemctlFlagsConsumingNextToken[arg] {
+				// This flag's value is the next token; skip it so we don't
+				// mistake the value (e.g. "service" in "--type service") for
+				// the subcommand.
+				skipNext = true
+				continue
+			}
 			if !strings.HasPrefix(arg, "-") {
 				subcmd = arg
 				break

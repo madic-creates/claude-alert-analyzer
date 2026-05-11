@@ -1430,6 +1430,50 @@ func TestIsDenied_SystemctlFlagsBeforeSubcommand(t *testing.T) {
 	}
 }
 
+// TestIsDenied_SystemctlValueTakingFlags covers flags that consume the next
+// token as their value (space-separated form). The subcommand-finding loop
+// must skip those value tokens so it finds the real subcommand, not the
+// value of a preceding flag.
+//
+// Bug: ["systemctl", "--type", "service", "list-units"] was incorrectly denied
+// because the loop stopped at "service" (value of --type) and looked up
+// systemctlReadOnly["service"] == false.
+func TestIsDenied_SystemctlValueTakingFlags(t *testing.T) {
+	allowed := [][]string{
+		// --type with space-separated value before a read-only subcommand.
+		{"systemctl", "--type", "service", "list-units"},
+		{"systemctl", "--type", "socket", "list-unit-files"},
+		// -t short form.
+		{"systemctl", "-t", "service", "list-units"},
+		// --state with space-separated value.
+		{"systemctl", "--state", "failed", "list-units"},
+		// --property with space-separated value.
+		{"systemctl", "--property", "ActiveState", "show", "nginx"},
+		// -p short form.
+		{"systemctl", "-p", "ActiveState", "show", "sshd"},
+		// Multiple value-taking flags combined with other boolean flags.
+		{"systemctl", "--no-pager", "--type", "service", "list-units"},
+		{"systemctl", "--type", "service", "--state", "failed", "list-units"},
+	}
+	for _, argv := range allowed {
+		if isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected allowed (value-taking flag before subcommand): %v", argv)
+		}
+	}
+
+	// Destructive subcommands must remain denied even with value-taking flags.
+	denied := [][]string{
+		{"systemctl", "--type", "service", "restart"},
+		{"systemctl", "--state", "failed", "stop"},
+		{"systemctl", "-p", "ActiveState", "daemon-reload"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("expected denied (value-taking flag before destructive subcommand): %v", argv)
+		}
+	}
+}
+
 func TestIsDenied_SystemctlRemoteAndContainerFlagsDenied(t *testing.T) {
 	// --host/-H and --machine/-M target remote hosts or containers, which are
 	// out of scope for diagnosing the local host. Both the long-option-with-equals
