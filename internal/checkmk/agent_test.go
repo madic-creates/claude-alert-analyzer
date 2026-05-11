@@ -873,6 +873,14 @@ func TestIsDenied_IptablesSpecialCases(t *testing.T) {
 		{"iptables-nft"},
 		// iptables-save/ip6tables-save with --list flag style — no known op flag.
 		{"iptables", "--modprobe=foo"}, // only modifier, no operation — deny
+		// Mixed read-only + write op: the write op must win regardless of order.
+		// Regression guard for the loop in isDenied that checks write ops first:
+		// a read-only flag (e.g. -L) appearing before a write op flag (e.g. -F)
+		// must not cause the command to be mis-classified as allowed.
+		{"iptables", "-L", "-F"},                         // -L (read-only) then -F (write) → denied
+		{"iptables", "-F", "-L"},                         // -F (write) first, then -L (read-only) → denied
+		{"iptables", "-S", "--zero"},                     // -S (read-only) then --zero (write) → denied
+		{"ip6tables", "-L", "-A", "INPUT", "-j", "DROP"}, // ip6tables mixed → denied
 	}
 	for _, argv := range denied {
 		if !isDenied(DefaultDeniedCommands, argv) {
@@ -3146,6 +3154,43 @@ func TestDenyReason_IptablesWriteOpAndMissingOp(t *testing.T) {
 		}
 		if strings.Contains(msg, "not allowed (destructive or privileged command)") {
 			t.Errorf("expected targeted message for uppercase IPTABLES, got generic denial: %s", msg)
+		}
+	})
+
+	t.Run("iptables write op wins when a read-only flag also present (write first)", func(t *testing.T) {
+		// [-F, -L]: write op appears before the read-only flag. The loop checks
+		// write ops first, so -F triggers the "modifies firewall rules" message
+		// before -L is even examined. Without explicit coverage, a loop-order
+		// change could silently allow this command if read-only is found first.
+		msg := denyReason(DefaultDeniedCommands, []string{"iptables", "-F", "-L"})
+		if !strings.Contains(msg, "modifies firewall rules") {
+			t.Errorf("expected 'modifies firewall rules' when write op precedes read-only; got: %s", msg)
+		}
+		if !strings.Contains(msg, "-F") {
+			t.Errorf("expected message to name the -F write op; got: %s", msg)
+		}
+	})
+
+	t.Run("iptables write op wins when a read-only flag also present (read-only first)", func(t *testing.T) {
+		// [-L, -F]: read-only -L appears before write op -F. The loop must
+		// continue past -L and still catch -F as a write op rather than
+		// short-circuiting on readOnly=true.
+		msg := denyReason(DefaultDeniedCommands, []string{"iptables", "-L", "-F"})
+		if !strings.Contains(msg, "modifies firewall rules") {
+			t.Errorf("expected 'modifies firewall rules' when read-only precedes write op; got: %s", msg)
+		}
+		if !strings.Contains(msg, "-F") {
+			t.Errorf("expected message to name the -F write op; got: %s", msg)
+		}
+	})
+
+	t.Run("ip6tables write op wins when a read-only flag also present", func(t *testing.T) {
+		msg := denyReason(DefaultDeniedCommands, []string{"ip6tables", "-S", "--zero"})
+		if !strings.Contains(msg, "modifies firewall rules") {
+			t.Errorf("expected 'modifies firewall rules' for ip6tables mixed flags; got: %s", msg)
+		}
+		if !strings.Contains(msg, "--zero") {
+			t.Errorf("expected message to name the --zero write op; got: %s", msg)
 		}
 	})
 
