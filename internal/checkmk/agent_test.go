@@ -889,10 +889,13 @@ func TestIsDenied_NftSpecialCases(t *testing.T) {
 		{"nft", "list", "tables"},
 		{"nft", "list", "chains"},
 		{"nft", "list", "chain", "inet", "filter", "input"},
-		{"nft", "-n", "list", "ruleset"},        // -n before subcommand
-		{"nft", "--numeric", "list", "ruleset"}, // long option before subcommand
-		{"nft", "-j", "list", "tables"},         // --json short form before subcommand
-		{"nft", "LIST", "ruleset"},              // subcommand match is case-insensitive
+		{"nft", "-n", "list", "ruleset"},                       // -n before subcommand
+		{"nft", "--numeric", "list", "ruleset"},                // long option before subcommand
+		{"nft", "-j", "list", "tables"},                        // --json short form before subcommand
+		{"nft", "LIST", "ruleset"},                             // subcommand match is case-insensitive
+		{"nft", "--debug", "netlink", "list", "ruleset"},       // --debug value must not be mistaken for subcommand
+		{"nft", "-d", "netlink", "list", "tables"},             // -d short form of --debug
+		{"nft", "--debug", "netlink", "-j", "list", "ruleset"}, // --debug value + another flag before subcommand
 	}
 	for _, argv := range allowed {
 		if isDenied(DefaultDeniedCommands, argv) {
@@ -909,7 +912,8 @@ func TestIsDenied_NftSpecialCases(t *testing.T) {
 		{"nft", "replace", "rule", "inet", "filter", "input", "handle", "3", "drop"},
 		{"nft"},                             // no subcommand — deny
 		{"nft", "--numeric"},                // only option, no subcommand — deny
-		{"nft", "-f", "/etc/nftables.conf"}, // -f applies rules from a file
+		{"nft", "-f", "/etc/nftables.conf"}, // -f applies rules from a file (write op)
+		{"nft", "--debug", "netlink", "add", "table", "inet", "x"}, // write subcommand after --debug value
 	}
 	for _, argv := range denied {
 		if !isDenied(DefaultDeniedCommands, argv) {
@@ -3175,6 +3179,19 @@ func TestDenyReason_IptablesWriteOpAndMissingOp(t *testing.T) {
 		}
 		if strings.Contains(msg, "not allowed (destructive or privileged command)") {
 			t.Errorf("expected targeted message, got generic denial: %s", msg)
+		}
+	})
+
+	t.Run("nft --debug value is not mistaken for the subcommand in denyReason", func(t *testing.T) {
+		// "nft --debug netlink add table ..." — the value "netlink" follows --debug
+		// and must not be identified as the subcommand. The real subcommand "add"
+		// must appear in the denial message.
+		msg := denyReason(DefaultDeniedCommands, []string{"nft", "--debug", "netlink", "add", "table", "inet", "x"})
+		if !strings.Contains(msg, "add") {
+			t.Errorf("expected message to name the denied subcommand 'add'; got: %s", msg)
+		}
+		if strings.Contains(msg, "netlink") {
+			t.Errorf("expected message to not mention --debug value 'netlink' as the subcommand; got: %s", msg)
 		}
 	})
 }

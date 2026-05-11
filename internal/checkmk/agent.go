@@ -306,6 +306,21 @@ var nftReadOnlySubcmds = map[string]bool{
 	"list": true,
 }
 
+// nftFlagsConsumingNextToken is the set of nft(8) flags that take their value
+// as the next separate argument. The subcommand-finding loop must skip that
+// value token, otherwise it mistakes the value for the subcommand.
+//
+// Example: ["nft", "--debug", "netlink", "list", "ruleset"]
+// Without skipping, "netlink" is found as the subcommand → incorrectly denied.
+// With skipping, "netlink" is consumed as the --debug value and "list" is
+// found → correctly allowed.
+//
+// Note: -f/--file is intentionally absent. "nft -f <file>" applies rules from
+// a file (write operation) and must remain denied by the default denylist.
+var nftFlagsConsumingNextToken = map[string]bool{
+	"--debug": true, "-d": true,
+}
+
 // iptablesWriteOps are iptables(8)/ip6tables(8) operation flags that modify
 // firewall state. Their presence in any argv causes the command to be denied
 // even if a read-only operation flag also appears.
@@ -411,7 +426,16 @@ func isDenied(denied map[string]bool, argv []string) bool {
 	// the same pattern used for systemctl below.
 	if cmd == "nft" && denied["nft"] {
 		subcmd := ""
+		skipNext := false
 		for _, arg := range argv[1:] {
+			if skipNext {
+				skipNext = false
+				continue
+			}
+			if nftFlagsConsumingNextToken[arg] {
+				skipNext = true
+				continue
+			}
 			if !strings.HasPrefix(arg, "-") {
 				subcmd = arg
 				break
@@ -630,9 +654,19 @@ func denyReason(denied map[string]bool, argv []string) string {
 	switch cmd {
 	case "nft":
 		// Find the first non-option argument as the subcommand, matching
-		// the same logic used in isDenied so the message targets the real reason.
+		// the same logic used in isDenied (including nftFlagsConsumingNextToken)
+		// so the message targets the real reason for denial.
 		subcmd := ""
+		skipNext := false
 		for _, arg := range argv[1:] {
+			if skipNext {
+				skipNext = false
+				continue
+			}
+			if nftFlagsConsumingNextToken[arg] {
+				skipNext = true
+				continue
+			}
 			if !strings.HasPrefix(arg, "-") {
 				subcmd = arg
 				break
