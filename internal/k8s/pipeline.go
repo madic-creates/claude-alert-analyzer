@@ -137,11 +137,19 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 		shared.SanitizeAlertField(alert.Fields["startsAt"]),
 		actx.FormatForPrompt())
 
+	// Snapshot storm-mode once so the rounds decision and the publish decision
+	// see a consistent value. IsDegraded() queries the sliding-window counter
+	// which can change between calls as concurrent alerts arrive; if storm mode
+	// turns on after we decide rounds>0 but before we reach the publish step,
+	// an expensive agentic analysis result would be silently collapsed to just a
+	// title in the StormNotify aggregator.
+	stormMode := deps.Policy.IsDegraded()
+
 	// Update breaker-state metric on every alert so Grafana sees the gauge fresh.
 	if deps.Breaker != nil {
 		deps.Metrics.SetBreakerState(deps.Breaker.State())
 	}
-	deps.Metrics.SetStormMode(deps.Policy.IsDegraded())
+	deps.Metrics.SetStormMode(stormMode)
 
 	// === Acquire breaker permit ===
 	phase = phaseAPI
@@ -165,7 +173,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 
 	model := deps.Policy.ModelFor(alert.SeverityLevel)
 	rounds := deps.Policy.MaxRoundsFor(alert.SeverityLevel)
-	if deps.Policy.IsDegraded() || permit.IsProbe() {
+	if stormMode || permit.IsProbe() {
 		rounds = 0
 	}
 
@@ -211,7 +219,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	priorityMap := map[string]string{"critical": "5", "warning": "4", "info": "2", "unknown": "3"}
 	priority := priorityMap[alert.SeverityLevel.String()]
 
-	if deps.Policy.IsDegraded() && deps.StormNotify != nil {
+	if stormMode && deps.StormNotify != nil {
 		deps.StormNotify.Add(alertname)
 	} else if pubErr := shared.PublishAll(ctx, deps.Publishers, title, priority, analysis); pubErr != nil {
 		slog.Error("failed to publish analysis", "alertname", alertname, "error", pubErr)
