@@ -710,7 +710,16 @@ func denyReason(denied map[string]bool, argv []string) string {
 			}
 		}
 		subcmd := ""
+		skipNext := false
 		for _, arg := range argv[1:] {
+			if skipNext {
+				skipNext = false
+				continue
+			}
+			if systemctlFlagsConsumingNextToken[arg] {
+				skipNext = true
+				continue
+			}
 			if !strings.HasPrefix(arg, "-") {
 				subcmd = arg
 				break

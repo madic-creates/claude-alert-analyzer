@@ -2250,6 +2250,27 @@ func TestDenyReason(t *testing.T) {
 		}
 	})
 
+	t.Run("systemctl value-taking flag skipped so write subcommand is named correctly", func(t *testing.T) {
+		// Bug: denyReason was not applying systemctlFlagsConsumingNextToken, so
+		// ["systemctl", "--type", "service", "restart"] would report "systemctl
+		// service is not permitted" instead of "systemctl restart is not permitted".
+		msg := denyReason(DefaultDeniedCommands, []string{"systemctl", "--type", "service", "restart"})
+		if !strings.Contains(msg, "systemctl restart") {
+			t.Errorf("expected message to name 'restart' (not the flag value 'service'); got: %s", msg)
+		}
+		if strings.Contains(msg, "systemctl service") {
+			t.Errorf("expected message NOT to name flag value 'service' as the subcommand; got: %s", msg)
+		}
+	})
+
+	t.Run("systemctl multiple value-taking flags before write subcommand named correctly", func(t *testing.T) {
+		// ["systemctl", "--state", "failed", "--type", "service", "stop"] should name "stop".
+		msg := denyReason(DefaultDeniedCommands, []string{"systemctl", "--state", "failed", "--type", "service", "stop"})
+		if !strings.Contains(msg, "systemctl stop") {
+			t.Errorf("expected message to name 'stop'; got: %s", msg)
+		}
+	})
+
 	t.Run("systemctl uppercase write subcommand is lowercased in message", func(t *testing.T) {
 		msg := denyReason(DefaultDeniedCommands, []string{"systemctl", "RESTART", "nginx"})
 		if !strings.Contains(msg, "systemctl restart") {
