@@ -3535,6 +3535,49 @@ func TestRunAgenticDiagnostics_PanicRecovery(t *testing.T) {
 	}
 }
 
+// TestRunAgenticDiagnostics_RejectedValidationMetricClassification verifies
+// that wrappedHandleTool records outcome="rejected_validation" when
+// parseCommandInput rejects the argv. handleTool returns the failure as
+// "Invalid command: <detail>" with a nil error so Claude can self-correct;
+// wrappedHandleTool classifies it via strings.HasPrefix. If either side
+// changes the prefix without updating the other, the outcome silently becomes
+// "ok" instead of "rejected_validation". This test pins that contract,
+// mirroring the sister test for "rejected_verb".
+func TestRunAgenticDiagnostics_RejectedValidationMetricClassification(t *testing.T) {
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)}
+
+	runner := &driverToolLoopRunner{
+		driver: func(handleTool func(string, json.RawMessage) (string, error)) (string, error) {
+			// Empty command array — parseCommandInput returns "empty command" error;
+			// handleTool wraps it as "Invalid command: empty command" with nil error.
+			result, err := handleTool("execute_command", json.RawMessage(`{"command":[]}`))
+			if err != nil {
+				t.Errorf("wrappedHandleTool returned unexpected error: %v", err)
+			}
+			if !strings.HasPrefix(result, "Invalid command: ") {
+				t.Errorf("expected result to start with %q, got: %q", "Invalid command: ", result)
+			}
+			return "analysis", nil
+		},
+	}
+
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, nilDialer{}, metrics, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 10, "test-model",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="rejected_validation",product="checkmk",tool="execute_command"} 1`) {
+		t.Errorf("expected rejected_validation metric for invalid command; body:\n%s", body)
+	}
+}
+
 // TestRunAgenticDiagnostics_RejectedVerbMetricClassification verifies that
 // wrappedHandleTool records outcome="rejected_verb" when a command is blocked
 // by the denylist. denyReason always returns strings starting with "Command
