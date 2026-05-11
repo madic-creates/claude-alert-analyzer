@@ -128,6 +128,54 @@ func minEnvWithAuth() map[string]string {
 	return env
 }
 
+// TestMain_FailsWhenCircuitBreakerThresholdInvalid verifies that the binary
+// exits and logs an error mentioning CIRCUIT_BREAKER_THRESHOLD when the value
+// exceeds the valid range [0, 100]. The threshold is a failure-count window,
+// not a percentage; values above 100 are almost certainly a misconfiguration.
+func TestMain_FailsWhenCircuitBreakerThresholdInvalid(t *testing.T) {
+	env := minEnvWithAuth()
+	env["CIRCUIT_BREAKER_THRESHOLD"] = "101"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid CIRCUIT_BREAKER_THRESHOLD; output=%s", out)
+	}
+	if !strings.Contains(out, "CIRCUIT_BREAKER_THRESHOLD") {
+		t.Errorf("expected 'CIRCUIT_BREAKER_THRESHOLD' in output, got: %s", out)
+	}
+}
+
+// TestMain_FailsWhenCircuitBreakerOpenSecondsInvalid verifies that the binary
+// exits and logs an error mentioning CIRCUIT_BREAKER_OPEN_SECONDS when the
+// value is outside the valid range [1, 3600]. An operator who sets this to 0
+// expecting to disable the open-state duration gets a clear config error
+// instead of a confusing runtime failure.
+func TestMain_FailsWhenCircuitBreakerOpenSecondsInvalid(t *testing.T) {
+	env := minEnvWithAuth()
+	env["CIRCUIT_BREAKER_OPEN_SECONDS"] = "0"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid CIRCUIT_BREAKER_OPEN_SECONDS; output=%s", out)
+	}
+	if !strings.Contains(out, "CIRCUIT_BREAKER_OPEN_SECONDS") {
+		t.Errorf("expected 'CIRCUIT_BREAKER_OPEN_SECONDS' in output, got: %s", out)
+	}
+}
+
+// TestMain_FailsWhenCircuitBreakerMaxProbeSecondsInvalid verifies that the
+// binary exits and logs an error mentioning CIRCUIT_BREAKER_MAX_PROBE_SECONDS
+// when the value is outside the valid range [1, 3600].
+func TestMain_FailsWhenCircuitBreakerMaxProbeSecondsInvalid(t *testing.T) {
+	env := minEnvWithAuth()
+	env["CIRCUIT_BREAKER_MAX_PROBE_SECONDS"] = "0"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid CIRCUIT_BREAKER_MAX_PROBE_SECONDS; output=%s", out)
+	}
+	if !strings.Contains(out, "CIRCUIT_BREAKER_MAX_PROBE_SECONDS") {
+		t.Errorf("expected 'CIRCUIT_BREAKER_MAX_PROBE_SECONDS' in output, got: %s", out)
+	}
+}
+
 // TestMain_FailsWhenStormModeNotifyIntervalInvalid verifies that the binary
 // exits and logs an error mentioning STORM_MODE_NOTIFY_INTERVAL when the env
 // var is not a valid Go duration string. An unparseable value would otherwise
