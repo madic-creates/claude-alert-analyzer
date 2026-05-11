@@ -35,7 +35,7 @@ func TestSeverityFromCheckMK(t *testing.T) {
 	}{
 		{"service_critical", "CRITICAL", "", SeverityCritical},
 		{"service_warning", "WARNING", "", SeverityWarning},
-		{"service_unknown", "UNKNOWN", "", SeverityWarning},
+		{"service_unknown", "UNKNOWN", "", SeverityUnknown},
 		{"host_down", "", "DOWN", SeverityCritical},
 		{"host_unreachable", "", "UNREACHABLE", SeverityCritical},
 		{"host_ok_fallback", "", "UP", SeverityWarning},

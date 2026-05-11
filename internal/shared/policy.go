@@ -88,6 +88,7 @@ func LoadPolicy(base BaseConfig) (*AnalysisPolicy, error) {
 		SeverityCritical: "CLAUDE_MODEL_CRITICAL",
 		SeverityWarning:  "CLAUDE_MODEL_WARNING",
 		SeverityInfo:     "CLAUDE_MODEL_INFO",
+		SeverityUnknown:  "CLAUDE_MODEL_UNKNOWN",
 	} {
 		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 			modelOverrides[sev] = v
@@ -99,6 +100,7 @@ func LoadPolicy(base BaseConfig) (*AnalysisPolicy, error) {
 		SeverityCritical: "MAX_AGENT_ROUNDS_CRITICAL",
 		SeverityWarning:  "MAX_AGENT_ROUNDS_WARNING",
 		SeverityInfo:     "MAX_AGENT_ROUNDS_INFO",
+		SeverityUnknown:  "MAX_AGENT_ROUNDS_UNKNOWN",
 	} {
 		if os.Getenv(key) == "" {
 			continue

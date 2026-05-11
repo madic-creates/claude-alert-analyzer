@@ -121,6 +121,47 @@ func TestLoadPolicy_AppliesRoundsOverrides_IncludingZero(t *testing.T) {
 	}
 }
 
+// TestLoadPolicy_AppliesUnknownModelOverride verifies that CLAUDE_MODEL_UNKNOWN
+// is read and applied to SeverityUnknown. This completes the per-severity model
+// override surface — without this test a regression that drops the UNKNOWN key
+// from the override map would go undetected, forcing CheckMK UNKNOWN service
+// alerts to always use the default model even when the operator configures an
+// override.
+func TestLoadPolicy_AppliesUnknownModelOverride(t *testing.T) {
+	t.Setenv("CLAUDE_MODEL_UNKNOWN", "claude-haiku-4-5")
+
+	p, err := LoadPolicy(BaseConfig{ClaudeModel: "claude-sonnet-4-6"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.ModelFor(SeverityUnknown); got != "claude-haiku-4-5" {
+		t.Errorf("unknown: got %q, want claude-haiku-4-5", got)
+	}
+	// Other severities must still fall back to the default.
+	if got := p.ModelFor(SeverityWarning); got != "claude-sonnet-4-6" {
+		t.Errorf("warning (no override): got %q, want default", got)
+	}
+}
+
+// TestLoadPolicy_AppliesUnknownRoundsOverride verifies that
+// MAX_AGENT_ROUNDS_UNKNOWN is read and applied to SeverityUnknown. Without
+// this, operators cannot route CheckMK UNKNOWN service alerts to static-only
+// analysis independently of WARNING alerts.
+func TestLoadPolicy_AppliesUnknownRoundsOverride(t *testing.T) {
+	t.Setenv("MAX_AGENT_ROUNDS_UNKNOWN", "2")
+
+	p, err := LoadPolicy(BaseConfig{ClaudeModel: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.MaxRoundsFor(SeverityUnknown); got != 2 {
+		t.Errorf("unknown: got %d, want 2", got)
+	}
+	if got := p.MaxRoundsFor(SeverityWarning); got != 10 {
+		t.Errorf("warning (no override): got %d, want default 10", got)
+	}
+}
+
 func TestLoadPolicy_RejectsOutOfRangeOverride(t *testing.T) {
 	t.Setenv("MAX_AGENT_ROUNDS_CRITICAL", "99")
 
@@ -282,5 +323,122 @@ func TestLoadPolicy_RejectsInvalidStormThreshold(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "STORM_MODE_THRESHOLD") {
 		t.Errorf("error should mention STORM_MODE_THRESHOLD, got: %v", err)
+	}
+}
+
+// TestAnalysisPolicy_AllModels_OnlyDefault verifies that AllModels returns only
+// the DefaultModel when no overrides are configured. AllModels is called at
+// startup by main.go to pre-materialize Prometheus token series; a missing or
+// duplicated model entry would leave a series permanently absent or doubled.
+func TestAnalysisPolicy_AllModels_OnlyDefault(t *testing.T) {
+	p := &AnalysisPolicy{DefaultModel: "claude-sonnet-4-6"}
+	got := p.AllModels()
+	if len(got) != 1 {
+		t.Fatalf("AllModels: got %v, want exactly 1 entry", got)
+	}
+	if got[0] != "claude-sonnet-4-6" {
+		t.Errorf("AllModels[0] = %q, want claude-sonnet-4-6", got[0])
+	}
+}
+
+// TestAnalysisPolicy_AllModels_IncludesOverrides verifies that AllModels returns
+// both the DefaultModel and every distinct model referenced in ModelOverrides.
+func TestAnalysisPolicy_AllModels_IncludesOverrides(t *testing.T) {
+	p := &AnalysisPolicy{
+		DefaultModel: "claude-sonnet-4-6",
+		ModelOverrides: map[Severity]string{
+			SeverityCritical: "claude-opus-4-6",
+			SeverityWarning:  "claude-haiku-4-5",
+		},
+	}
+	got := p.AllModels()
+	if len(got) != 3 {
+		t.Fatalf("AllModels: got %v, want 3 distinct entries", got)
+	}
+	inResult := func(model string) bool {
+		for _, m := range got {
+			if m == model {
+				return true
+			}
+		}
+		return false
+	}
+	for _, want := range []string{"claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"} {
+		if !inResult(want) {
+			t.Errorf("AllModels missing %q; got %v", want, got)
+		}
+	}
+}
+
+// TestAnalysisPolicy_AllModels_DeduplicatesOverrideEqualToDefault verifies that
+// when an override model equals the DefaultModel, AllModels deduplicates it so
+// each model appears exactly once. Without this, MaterializeClaudeTokensForModels
+// would call WithLabelValues twice for the same model, creating no duplicate
+// series (Prometheus counters it as one), but the intent is to return a set.
+func TestAnalysisPolicy_AllModels_DeduplicatesOverrideEqualToDefault(t *testing.T) {
+	p := &AnalysisPolicy{
+		DefaultModel: "claude-sonnet-4-6",
+		ModelOverrides: map[Severity]string{
+			SeverityCritical: "claude-sonnet-4-6", // same as default
+			SeverityWarning:  "claude-haiku-4-5",
+		},
+	}
+	got := p.AllModels()
+	if len(got) != 2 {
+		t.Fatalf("AllModels: got %v, want 2 entries (dedup expected)", got)
+	}
+	seen := map[string]int{}
+	for _, m := range got {
+		seen[m]++
+	}
+	for m, count := range seen {
+		if count > 1 {
+			t.Errorf("AllModels: model %q appears %d times, want 1", m, count)
+		}
+	}
+}
+
+// TestAnalysisPolicy_AllModels_SkipsEmptyDefault verifies that an empty
+// DefaultModel is not included in the result. This guards against a regression
+// where MaterializeClaudeTokensForModels is called with an empty-string model
+// label, which would create a metric series with model="" in the Prometheus
+// output and pollute dashboards.
+func TestAnalysisPolicy_AllModels_SkipsEmptyDefault(t *testing.T) {
+	p := &AnalysisPolicy{
+		DefaultModel: "",
+		ModelOverrides: map[Severity]string{
+			SeverityCritical: "claude-opus-4-6",
+		},
+	}
+	got := p.AllModels()
+	for _, m := range got {
+		if m == "" {
+			t.Errorf("AllModels returned empty-string model; got %v", got)
+		}
+	}
+	if len(got) != 1 || got[0] != "claude-opus-4-6" {
+		t.Errorf("AllModels: got %v, want [claude-opus-4-6]", got)
+	}
+}
+
+// TestAnalysisPolicy_AllModels_DefaultModelIsFirst verifies that the DefaultModel
+// is always the first entry in AllModels. main.go calls AllModels at startup and
+// logs no explicit ordering guarantee, but the implementation adds DefaultModel
+// first and this invariant must not silently break; a change that moves
+// DefaultModel to a random position would make startup logs harder to read and
+// could confuse future callers that rely on stable ordering.
+func TestAnalysisPolicy_AllModels_DefaultModelIsFirst(t *testing.T) {
+	p := &AnalysisPolicy{
+		DefaultModel: "claude-sonnet-4-6",
+		ModelOverrides: map[Severity]string{
+			SeverityCritical: "claude-opus-4-6",
+		},
+	}
+	got := p.AllModels()
+	if len(got) == 0 {
+		t.Fatal("AllModels returned empty slice")
+	}
+	if got[0] != "claude-sonnet-4-6" {
+		t.Errorf("AllModels[0] = %q, want DefaultModel %q first", got[0], "claude-sonnet-4-6")
 	}
 }

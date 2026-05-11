@@ -232,6 +232,34 @@ func TestCheckAndSetWithGroup_Outcomes(t *testing.T) {
 	})
 }
 
+// TestCooldownManager_CheckAndSetWithGroup_ZeroGroupTTLSkipsGroup verifies
+// that a non-empty groupKey combined with groupTTL=0 skips the group gate
+// entirely — the same as when groupKey is empty. This is the real production
+// path for the disabled-default (GROUP_COOLDOWN_SECONDS=0): pipelines always
+// compute a non-empty group key, but the zero TTL must bypass the group check.
+// Without this test a mutation of the || to && would silently change the
+// disabled-feature path without triggering any test failure.
+func TestCooldownManager_CheckAndSetWithGroup_ZeroGroupTTLSkipsGroup(t *testing.T) {
+	cm := NewCooldownManager()
+	ttl := 5 * time.Second
+	const groupKey = "alertname:MyAlert"
+
+	// Non-empty groupKey with groupTTL=0 must be accepted (group skipped).
+	if got := cm.CheckAndSetWithGroup("fp1", ttl, groupKey, 0); got != CooldownAccepted {
+		t.Fatalf("expected CooldownAccepted, got %v", got)
+	}
+
+	// The group map must be empty — no entry was written for the group.
+	if !cm.CheckAndSetGroup(groupKey, ttl) {
+		t.Fatal("group map should be empty; group key must not have been set")
+	}
+
+	// The fingerprint must now be in cooldown.
+	if got := cm.CheckAndSetWithGroup("fp1", ttl, groupKey, 0); got != CooldownFingerprint {
+		t.Errorf("expected CooldownFingerprint on second call, got %v", got)
+	}
+}
+
 // TestCheckAndSetLocked_SweepAtExactBoundary verifies that the sweep condition
 // (>= ttl) and the check condition (< ttl) are consistent: an entry at exactly
 // its TTL boundary is treated as expired by the check AND swept during the same
