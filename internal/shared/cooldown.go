@@ -122,10 +122,21 @@ func (cm *CooldownManager) CheckAndSetWithGroup(
 	return CooldownAccepted
 }
 
+// maxSweepPerCall bounds the number of map entries examined during the
+// expired-entry sweep inside checkAndSetLocked. Without a cap, a storm that
+// produces thousands of unique fingerprints causes an O(n) walk of the entire
+// map on every CheckAndSetWithGroup call while the lock is held.
+const maxSweepPerCall = 100
+
 // checkAndSetLocked is the lock-free body shared by CheckAndSet and
 // CheckAndSetGroup. Caller must hold the relevant mutex.
 func checkAndSetLocked(entries map[string]cooldownEntry, key string, ttl time.Duration, now time.Time) bool {
+	checked := 0
 	for k, v := range entries {
+		if checked >= maxSweepPerCall {
+			break
+		}
+		checked++
 		// Use >= so entries at exactly their TTL boundary are swept on the same
 		// call that the check already treats them as expired (< ttl is false).
 		// Using > would leave a "ghost" entry that lingers until elapsed > ttl,

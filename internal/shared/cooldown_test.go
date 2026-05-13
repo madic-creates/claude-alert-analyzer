@@ -31,26 +31,51 @@ func TestCooldown_DifferentFingerprint_Allowed(t *testing.T) {
 	}
 }
 
-func TestCooldown_ExpiredEntriesFullyEvicted(t *testing.T) {
+func TestCooldown_ExpiredEntriesEvictedWithinSweepBudget(t *testing.T) {
 	cd := NewCooldownManager()
 	ttl := time.Millisecond
 
-	// Insert 150 unique fingerprints with a tiny TTL.
-	for i := 0; i < 150; i++ {
+	// Insert maxSweepPerCall-1 entries — all fit within a single sweep pass.
+	n := maxSweepPerCall - 1
+	for i := 0; i < n; i++ {
 		cd.CheckAndSet(fmt.Sprintf("fp-%d", i), ttl)
 	}
 	time.Sleep(5 * time.Millisecond) // let all entries expire
 
-	// A new call must trigger eviction of ALL 150 expired entries.
 	cd.CheckAndSet("trigger", ttl)
 
 	cd.fpMu.Lock()
 	remaining := len(cd.fpEntries)
 	cd.fpMu.Unlock()
 
-	// Only "trigger" should remain.
+	// All n expired entries fit within the sweep cap, so only "trigger" remains.
 	if remaining != 1 {
-		t.Errorf("expected 1 entry after full eviction, got %d", remaining)
+		t.Errorf("expected 1 entry after eviction within sweep budget, got %d", remaining)
+	}
+}
+
+// TestCooldown_SweepBudgetBounded verifies that checkAndSetLocked examines at
+// most maxSweepPerCall entries per call. With 2×maxSweepPerCall expired entries
+// in the map, a single call must not sweep all of them — some must remain until
+// subsequent calls, bounding the per-call latency under storm conditions.
+func TestCooldown_SweepBudgetBounded(t *testing.T) {
+	entries := make(map[string]cooldownEntry)
+	ttl := time.Millisecond
+	t0 := time.Now()
+
+	const n = 2 * maxSweepPerCall
+	for i := 0; i < n; i++ {
+		entries[fmt.Sprintf("fp-%d", i)] = cooldownEntry{setAt: t0, ttl: ttl}
+	}
+
+	// Advance time past the TTL so all n entries are expired.
+	now := t0.Add(10 * time.Millisecond)
+	checkAndSetLocked(entries, "trigger", 5*time.Second, now)
+
+	// With the cap, at most maxSweepPerCall entries are swept per call.
+	// n - maxSweepPerCall expired entries + "trigger" must remain.
+	if len(entries) == 1 {
+		t.Errorf("all %d entries swept in a single call; sweep cap of %d was not enforced", n, maxSweepPerCall)
 	}
 }
 
