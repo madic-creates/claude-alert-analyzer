@@ -215,6 +215,53 @@ func TestCheckmkHandleWebhook_RecoveryClearsFlapCooldown(t *testing.T) {
 	}
 }
 
+// TestCheckmkHandleWebhook_RecoveryClearsGroupCooldown verifies that a RECOVERY
+// notification clears the group-level cooldown so a subsequent alert with a
+// different fingerprint but the same hostname:service group key can be processed
+// within the original TTL window — the checkmk analogue of k8s
+// TestHandleWebhook_ResolvedClearsGroupCooldown.
+func TestCheckmkHandleWebhook_RecoveryClearsGroupCooldown(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cfg.CooldownSeconds = 60
+	cfg.GroupCooldownTTL = time.Minute
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	}, nil, nil)
+
+	// Step 1: fire alert A (PROBLEM:CRITICAL) → sets both FP and group cooldowns.
+	alertA := makeNotification("host1", "CPU", "CRITICAL", "PROBLEM")
+	postCheckmkWebhook(t, handler, "test-secret", alertA)
+	if enqueued.Load() != 1 {
+		t.Fatalf("step 1: expected 1 enqueued, got %d", enqueued.Load())
+	}
+
+	// Step 2: alert B has a different fingerprint (FLAPPINGSTART:WARNING) but the
+	// same group key (host1:CPU). Within the TTL it must be blocked by group cooldown.
+	alertB := makeNotification("host1", "CPU", "WARNING", "FLAPPINGSTART")
+	postCheckmkWebhook(t, handler, "test-secret", alertB)
+	if enqueued.Load() != 1 {
+		t.Fatalf("step 2: expected group cooldown to block alert B, got %d enqueued", enqueued.Load())
+	}
+
+	// Step 3: RECOVERY for host1:CPU clears all FP cooldowns AND the group cooldown.
+	// The RECOVERY notification itself must not be enqueued.
+	recovery := makeNotification("host1", "CPU", "OK", "RECOVERY")
+	postCheckmkWebhook(t, handler, "test-secret", recovery)
+	if enqueued.Load() != 1 {
+		t.Errorf("step 3: RECOVERY should not be enqueued, still expect 1, got %d", enqueued.Load())
+	}
+
+	// Step 4: alert B again (different FP from A, same group key) must now be enqueued
+	// because RECOVERY cleared the group cooldown.
+	postCheckmkWebhook(t, handler, "test-secret", alertB)
+	if enqueued.Load() != 2 {
+		t.Errorf("step 4: expected 2 enqueued after group-cooldown cleared by RECOVERY, got %d", enqueued.Load())
+	}
+}
+
 func TestCheckmkHandleWebhook_EnqueuesProblem(t *testing.T) {
 	cfg := makeCheckmkConfig()
 	cd := shared.NewCooldownManager()
