@@ -1,7 +1,6 @@
 package checkmk
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -210,8 +209,7 @@ func TestSSHDialer_Dial_ContextCancelled(t *testing.T) {
 // that the returned n equals len(p) (the full slice length) even when the
 // write is partially or fully discarded.
 func TestLimitedWriter_DiscardsBeyondLimit(t *testing.T) {
-	buf := new(bytes.Buffer)
-	lw := &limitedWriter{w: buf, remaining: 5}
+	lw := &limitedWriter{remaining: 5}
 
 	// First write: fits within limit.
 	n, err := lw.Write([]byte("hello"))
@@ -221,8 +219,8 @@ func TestLimitedWriter_DiscardsBeyondLimit(t *testing.T) {
 	if n != 5 {
 		t.Errorf("n = %d, want 5", n)
 	}
-	if buf.String() != "hello" {
-		t.Errorf("buf = %q, want %q", buf.String(), "hello")
+	if lw.buf.String() != "hello" {
+		t.Errorf("buf = %q, want %q", lw.buf.String(), "hello")
 	}
 
 	// Second write: limit already reached — full discard.
@@ -235,8 +233,8 @@ func TestLimitedWriter_DiscardsBeyondLimit(t *testing.T) {
 		t.Errorf("n = %d on discard, want 5", n)
 	}
 	// Buffer must not have grown.
-	if buf.String() != "hello" {
-		t.Errorf("buf = %q after discard, want %q", buf.String(), "hello")
+	if lw.buf.String() != "hello" {
+		t.Errorf("buf = %q after discard, want %q", lw.buf.String(), "hello")
 	}
 }
 
@@ -244,8 +242,7 @@ func TestLimitedWriter_DiscardsBeyondLimit(t *testing.T) {
 // capacity limit only the bytes that fit are written, while the full slice
 // length is still returned so callers don't see an error.
 func TestLimitedWriter_PartialWrite(t *testing.T) {
-	buf := new(bytes.Buffer)
-	lw := &limitedWriter{w: buf, remaining: 3}
+	lw := &limitedWriter{remaining: 3}
 
 	// Write 5 bytes when only 3 remain → 3 written, 2 discarded.
 	n, err := lw.Write([]byte("hello"))
@@ -255,8 +252,8 @@ func TestLimitedWriter_PartialWrite(t *testing.T) {
 	if n != 5 {
 		t.Errorf("n = %d, want 5 (full slice length)", n)
 	}
-	if buf.String() != "hel" {
-		t.Errorf("buf = %q, want %q", buf.String(), "hel")
+	if lw.buf.String() != "hel" {
+		t.Errorf("buf = %q, want %q", lw.buf.String(), "hel")
 	}
 	if lw.remaining != 0 {
 		t.Errorf("remaining = %d, want 0 after partial write fills buffer", lw.remaining)
@@ -266,8 +263,7 @@ func TestLimitedWriter_PartialWrite(t *testing.T) {
 // TestLimitedWriter_ZeroRemaining verifies that writing to an already-full
 // limitedWriter returns len(p) without touching the underlying buffer.
 func TestLimitedWriter_ZeroRemaining(t *testing.T) {
-	buf := new(bytes.Buffer)
-	lw := &limitedWriter{w: buf, remaining: 0}
+	lw := &limitedWriter{remaining: 0}
 
 	n, err := lw.Write([]byte("anything"))
 	if err != nil {
@@ -276,8 +272,8 @@ func TestLimitedWriter_ZeroRemaining(t *testing.T) {
 	if n != 8 {
 		t.Errorf("n = %d, want 8", n)
 	}
-	if buf.Len() != 0 {
-		t.Errorf("buf should remain empty, got %q", buf.String())
+	if lw.buf.Len() != 0 {
+		t.Errorf("buf should remain empty, got %q", lw.buf.String())
 	}
 }
 
@@ -285,8 +281,7 @@ func TestLimitedWriter_ZeroRemaining(t *testing.T) {
 // exactly when data is discarded and remains false when all data fits.
 func TestLimitedWriter_TruncatedFlag(t *testing.T) {
 	t.Run("no truncation when data fits", func(t *testing.T) {
-		buf := new(bytes.Buffer)
-		lw := &limitedWriter{w: buf, remaining: 10}
+		lw := &limitedWriter{remaining: 10}
 		_, _ = lw.Write([]byte("hello"))
 		if lw.truncated {
 			t.Error("truncated should be false when all data fits within limit")
@@ -294,8 +289,7 @@ func TestLimitedWriter_TruncatedFlag(t *testing.T) {
 	})
 
 	t.Run("truncated set on partial write", func(t *testing.T) {
-		buf := new(bytes.Buffer)
-		lw := &limitedWriter{w: buf, remaining: 3}
+		lw := &limitedWriter{remaining: 3}
 		_, _ = lw.Write([]byte("hello")) // 5 bytes, only 3 fit
 		if !lw.truncated {
 			t.Error("truncated should be true after a partial write")
@@ -303,8 +297,7 @@ func TestLimitedWriter_TruncatedFlag(t *testing.T) {
 	})
 
 	t.Run("truncated set on full discard", func(t *testing.T) {
-		buf := new(bytes.Buffer)
-		lw := &limitedWriter{w: buf, remaining: 0}
+		lw := &limitedWriter{remaining: 0}
 		_, _ = lw.Write([]byte("anything"))
 		if !lw.truncated {
 			t.Error("truncated should be true when writing to a full buffer")

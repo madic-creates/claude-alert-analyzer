@@ -93,12 +93,13 @@ func (d *SSHDialer) Dial(ctx context.Context, hostname, ip string) (*ssh.Client,
 // truncation in agent.go (4 KiB) has a chance to run.
 const maxSSHOutputBytes = 512 * 1024 // 512 KiB
 
-// limitedWriter writes to w until remaining reaches zero, then silently
+// limitedWriter writes to buf until remaining reaches zero, then silently
 // discards further writes. It is safe for concurrent use (stdout and stderr
 // may be written from different goroutines by the SSH package).
+// This mirrors the limitedWriter type used in internal/k8s/agent.go.
 type limitedWriter struct {
 	mu        sync.Mutex
-	w         *bytes.Buffer
+	buf       bytes.Buffer
 	remaining int
 	truncated bool // set to true the first time data is discarded
 }
@@ -115,7 +116,7 @@ func (lw *limitedWriter) Write(p []byte) (int, error) {
 		p = p[:lw.remaining]
 		lw.truncated = true // trailing bytes will be discarded after this write
 	}
-	written, err := lw.w.Write(p)
+	written, err := lw.buf.Write(p)
 	lw.remaining -= written
 	// Return the original length so callers (the SSH package) don't treat a
 	// partial write as an error.
@@ -155,7 +156,7 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 	// (e.g. "cat /large/file") from exhausting memory before the 4 KiB truncation
 	// in agent.go runs. Both pipes share the same buffer and limit so the cap
 	// applies to the combined output, matching the behaviour of CombinedOutput.
-	lw := &limitedWriter{w: new(bytes.Buffer), remaining: maxSSHOutputBytes}
+	lw := &limitedWriter{remaining: maxSSHOutputBytes}
 	session.Stdout = lw
 	session.Stderr = lw
 
@@ -167,7 +168,7 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 	go func() {
 		cmdErr := session.Run(cmdStr)
 		lw.mu.Lock()
-		out := lw.w.String()
+		out := lw.buf.String()
 		wasTruncated := lw.truncated
 		lw.mu.Unlock()
 		done <- sshResult{out, cmdErr, wasTruncated}
@@ -194,13 +195,13 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 		// value. agent.go already handles (partial, error) returns by including
 		// the output in the tool result alongside the timeout message.
 		lw.mu.Lock()
-		partial := lw.w.String()
+		partial := lw.buf.String()
 		lw.mu.Unlock()
 		return partial, fmt.Errorf("timeout after %v", timeout)
 	case <-ctx.Done():
 		session.Close()
 		lw.mu.Lock()
-		partial := lw.w.String()
+		partial := lw.buf.String()
 		lw.mu.Unlock()
 		return partial, fmt.Errorf("context cancelled: %w", ctx.Err())
 	}
