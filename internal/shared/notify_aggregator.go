@@ -18,11 +18,10 @@ import (
 // via the drops counter — the contract on Add() is non-blocking by design.
 const notifyAggregatorBufferSize = 100
 
-// testHookBetweenAddSelects is called by Add() in tests between its two select
-// statements so tests can exercise the race window where the aggregator stops
-// after the first select passes but before the second select runs. Nil in
-// production.
-var testHookBetweenAddSelects func()
+// testHookBeforeAddSend is called by Add() in tests after the stopping check
+// but before the channel-send select, so tests can exercise the race window
+// where the aggregator stops between those two operations. Nil in production.
+var testHookBeforeAddSend func()
 
 // NotifyAggregator buffers alert titles during a time interval and emits one
 // summary notification per interval. It is concurrency-safe via a single
@@ -97,8 +96,9 @@ func NewNotifyAggregator(publishers []Publisher, interval time.Duration, titleFm
 //
 // Drop ordering: the stopping flag is checked FIRST so Add() refuses sends
 // once the owner has begun shutdown drain. Without this early check, an Add()
-// could land an item in a.in after the owner already drained-and-flushed,
-// resulting in a silently lost alert.
+// that passes the stopping check but has not yet sent to a.in could land an
+// item after the owner already drained-and-flushed, resulting in a silently
+// lost alert. testHookBeforeAddSend exercises this exact race window.
 func (a *NotifyAggregator) Add(alertTitle string) bool {
 	if a == nil {
 		return false
@@ -107,8 +107,8 @@ func (a *NotifyAggregator) Add(alertTitle string) bool {
 		a.recordDrop()
 		return false
 	}
-	if testHookBetweenAddSelects != nil {
-		testHookBetweenAddSelects()
+	if testHookBeforeAddSend != nil {
+		testHookBeforeAddSend()
 	}
 	select {
 	case a.in <- alertTitle:
