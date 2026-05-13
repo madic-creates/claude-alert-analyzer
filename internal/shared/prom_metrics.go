@@ -237,9 +237,10 @@ var allAgentTools = []string{"kubectl_exec", "promql_query", "execute_command"}
 // allAgentOutcomes is the closed set of outcome label values produced by the
 // agent loops in both products. See internal/k8s/agent.go and
 // internal/checkmk/agent.go for the emission sites.
+// ssh_error is checkmk-only (SSH transport failure distinct from nonzero_exit).
 var allAgentOutcomes = []string{
 	"ok", "exec_error", "rejected_validation", "rejected_verb",
-	"nonzero_exit", "timeout",
+	"nonzero_exit", "ssh_error", "timeout",
 }
 
 // allTokenKinds is the closed set of kind label values for ClaudeTokens.

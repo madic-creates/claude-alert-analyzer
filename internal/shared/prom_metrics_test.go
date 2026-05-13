@@ -23,7 +23,7 @@ func TestNewPrometheusMetrics_PrematerializedSeries(t *testing.T) {
 		{"AlertsDropped (4 reasons)", testutil.CollectAndCount(pm.AlertsDropped), 4},
 		{"AlertsProcessed (4 severities)", testutil.CollectAndCount(pm.AlertsProcessed), 4},
 		{"NotifyAggregatorDrops (2 aggregators)", testutil.CollectAndCount(pm.NotifyAggregatorDrops), 2},
-		{"AgentToolCalls (3 tools x 6 outcomes)", testutil.CollectAndCount(pm.AgentToolCalls), 18},
+		{"AgentToolCalls (3 tools x 7 outcomes)", testutil.CollectAndCount(pm.AgentToolCalls), 21},
 		{"AgentToolDuration (3 tools)", testutil.CollectAndCount(pm.AgentToolDuration), 3},
 	}
 	for _, c := range cases {
