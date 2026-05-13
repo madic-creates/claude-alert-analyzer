@@ -992,6 +992,173 @@ func TestGetPodLogs_APILimitHitTruncationNote(t *testing.T) {
 	}
 }
 
+// TestGetPodLogs_CrashLoopBackOffRequestsPreviousLogs verifies that when a container
+// is in CrashLoopBackOff state, getPodLogs sets opts.Previous = true so that the
+// previous terminated instance's logs are fetched. CrashLoopBackOff containers are
+// in Waiting state between restarts — the current instance has no logs, so without
+// opts.Previous the log request returns empty output and Claude gets no diagnostic
+// information about why the container is crashing.
+func TestGetPodLogs_CrashLoopBackOffRequestsPreviousLogs(t *testing.T) {
+	podListJSON := `{
+		"apiVersion": "v1", "kind": "PodList",
+		"metadata": {"resourceVersion": "1"},
+		"items": [{
+			"apiVersion": "v1", "kind": "Pod",
+			"metadata": {"name": "crash-pod", "namespace": "testns", "resourceVersion": "1"},
+			"spec": {"containers": [{"name": "app", "image": "nginx"}]},
+			"status": {
+				"phase": "Running",
+				"containerStatuses": [{
+					"name": "app", "ready": false, "restartCount": 5,
+					"image": "nginx", "imageID": "docker://nginx",
+					"state": {"waiting": {"reason": "CrashLoopBackOff", "message": "back-off restarting"}}
+				}]
+			}
+		}]
+	}`
+
+	var gotPrevious string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/log") {
+			gotPrevious = r.URL.Query().Get("previous")
+			fmt.Fprint(w, "crash logs from previous instance") //nolint:errcheck
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, podListJSON) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	cs, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatalf("failed to create clientset: %v", err)
+	}
+
+	result := getPodLogs(context.Background(), cs, "testns", Config{MaxLogBytes: 4096})
+
+	if gotPrevious != "true" {
+		t.Errorf("CrashLoopBackOff pod: expected previous=true in log request, got previous=%q", gotPrevious)
+	}
+	if !strings.Contains(result, "crash logs from previous instance") {
+		t.Errorf("expected previous container logs in output, got: %q", result)
+	}
+}
+
+// TestGetPodLogs_MultiContainerSelectsNotReadyContainer verifies that when a
+// multi-container pod has one ready sidecar and one not-ready app container,
+// getPodLogs requests logs from the not-ready container rather than the first
+// container in Spec.Containers. The code sets a fallback to Spec.Containers[0]
+// for multi-container pods and then overwrites it when a not-ready ContainerStatus
+// is found — this test locks down that the overwrite fires correctly so Claude
+// receives logs from the failing container, not an arbitrary one.
+func TestGetPodLogs_MultiContainerSelectsNotReadyContainer(t *testing.T) {
+	podListJSON := `{
+		"apiVersion": "v1", "kind": "PodList",
+		"metadata": {"resourceVersion": "1"},
+		"items": [{
+			"apiVersion": "v1", "kind": "Pod",
+			"metadata": {"name": "multi-pod", "namespace": "testns", "resourceVersion": "1"},
+			"spec": {
+				"containers": [
+					{"name": "sidecar", "image": "envoy"},
+					{"name": "app",     "image": "myapp"}
+				]
+			},
+			"status": {
+				"phase": "Running",
+				"containerStatuses": [
+					{"name": "sidecar", "ready": true,  "restartCount": 0,
+					 "image": "envoy", "imageID": "docker://envoy"},
+					{"name": "app",    "ready": false, "restartCount": 3,
+					 "image": "myapp", "imageID": "docker://myapp",
+					 "state": {"terminated": {"reason": "OOMKilled", "exitCode": 137}}}
+				]
+			}
+		}]
+	}`
+
+	var gotContainer string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/log") {
+			gotContainer = r.URL.Query().Get("container")
+			fmt.Fprint(w, "app container OOM logs") //nolint:errcheck
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, podListJSON) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	cs, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatalf("failed to create clientset: %v", err)
+	}
+
+	result := getPodLogs(context.Background(), cs, "testns", Config{MaxLogBytes: 4096})
+
+	if gotContainer != "app" {
+		t.Errorf("multi-container pod: expected container=app (not-ready) in log request, got container=%q (first container is %q)", gotContainer, "sidecar")
+	}
+	if !strings.Contains(result, "app container OOM logs") {
+		t.Errorf("expected app container logs in output, got: %q", result)
+	}
+}
+
+// TestGetPodLogs_FailingInitContainerSelectedWhenNoContainerStatuses verifies that
+// when a pod has no regular ContainerStatuses (main containers have not yet started)
+// but has a non-ready InitContainerStatus, getPodLogs fetches logs from the init
+// container. This covers the init-container fallback at context.go:503–513, the
+// primary diagnostic path for pods stuck in Init:Error or CrashLoopBackOff during
+// init, where the init container log is the only actionable output available.
+func TestGetPodLogs_FailingInitContainerSelectedWhenNoContainerStatuses(t *testing.T) {
+	podListJSON := `{
+		"apiVersion": "v1", "kind": "PodList",
+		"metadata": {"resourceVersion": "1"},
+		"items": [{
+			"apiVersion": "v1", "kind": "Pod",
+			"metadata": {"name": "init-pod", "namespace": "testns", "resourceVersion": "1"},
+			"spec": {
+				"initContainers": [{"name": "init-db",  "image": "migrate"}],
+				"containers":     [{"name": "app",      "image": "myapp"}]
+			},
+			"status": {
+				"phase": "Pending",
+				"initContainerStatuses": [{
+					"name": "init-db", "ready": false, "restartCount": 0,
+					"image": "migrate", "imageID": "docker://migrate",
+					"state": {"terminated": {"reason": "Error", "exitCode": 1}}
+				}]
+			}
+		}]
+	}`
+
+	var gotContainer string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/log") {
+			gotContainer = r.URL.Query().Get("container")
+			fmt.Fprint(w, "init-db migration failure logs") //nolint:errcheck
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, podListJSON) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	cs, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatalf("failed to create clientset: %v", err)
+	}
+
+	result := getPodLogs(context.Background(), cs, "testns", Config{MaxLogBytes: 4096})
+
+	if gotContainer != "init-db" {
+		t.Errorf("init-container pod: expected container=init-db in log request, got container=%q", gotContainer)
+	}
+	if !strings.Contains(result, "init-db migration failure logs") {
+		t.Errorf("expected init container logs in output, got: %q", result)
+	}
+}
+
 // TestProcessAlert_AlertFieldsArePromptInjectionSafe verifies that control
 // characters embedded in the k8s alert fields (alertname, severity, status,
 // namespace) are stripped before they reach the Claude user prompt.
