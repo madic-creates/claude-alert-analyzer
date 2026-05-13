@@ -3327,10 +3327,15 @@ func TestIsDenied_BlocksEbtablesAndArptables(t *testing.T) {
 		}
 	}
 
-	// *-save variants are read-only and must be allowed.
+	// *-save variants are read-only and must be allowed, including
+	// backend-specific multi-suffix forms (e.g. ebtables-legacy-save,
+	// ebtables-nft-save). Mirrors the equivalent iptables-legacy-save test.
 	allowed := [][]string{
 		{"ebtables-save"},
+		{"ebtables-legacy-save"},
+		{"ebtables-nft-save"},
 		{"arptables-save"},
+		{"arptables-legacy-save"},
 	}
 	for _, argv := range allowed {
 		if isDenied(DefaultDeniedCommands, argv) {
