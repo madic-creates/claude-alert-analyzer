@@ -942,6 +942,16 @@ func TestSummarizeKubectlArgv(t *testing.T) {
 			argv:     []string{"get", "--timeout", "30s", "nodes"},
 			wantVerb: "get", wantRes: "nodes",
 		},
+		{
+			name:     "-v 4 between verb and resource",
+			argv:     []string{"get", "-v", "4", "pods", "-n", "default"},
+			wantVerb: "get", wantRes: "pods", wantNS: "default",
+		},
+		{
+			name:     "--request-timeout before resource",
+			argv:     []string{"get", "--request-timeout", "30s", "nodes"},
+			wantVerb: "get", wantRes: "nodes",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
