@@ -268,6 +268,50 @@ func (p *publishBlocker) Publish(ctx context.Context, _, _, _ string) error {
 	}
 }
 
+// TestNotifyAggregator_HungPublisherDuringTickFlush_StopCancels verifies that
+// Stop() cancels an in-progress timer flush and the owner goroutine exits
+// cleanly without leaking. This is the complement of
+// TestNotifyAggregator_HungPublisher_StopReturnsTimeout, which covers a hung
+// publisher during the stop-flush; this test covers the timer-flush path.
+func TestNotifyAggregator_HungPublisherDuringTickFlush_StopCancels(t *testing.T) {
+	pub := &publishBlocker{
+		started: make(chan struct{}),
+		unblock: make(chan struct{}),
+	}
+	a := NewNotifyAggregator([]Publisher{pub}, 20*time.Millisecond, "S: %d", "5", newDropsCounter())
+
+	// Seed one item so the timer flush is non-empty and Publish() is called.
+	if !a.Add("seed") {
+		t.Fatal("seed Add should succeed")
+	}
+
+	// Wait until the owner goroutine is blocked inside the timer-flush Publish().
+	select {
+	case <-pub.started:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("publisher never started — tick did not fire in time")
+	}
+
+	// Snapshot goroutine count before Stop() so we can verify no leak.
+	before := runtime.NumGoroutine()
+
+	// Stop() must cancel the in-progress timer flush via flushCancel, allowing
+	// the owner goroutine to proceed to the stopReq path and exit.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = a.Stop(ctx)
+
+	// Allow the (now-unblocked-via-context) publisher goroutine to settle.
+	time.Sleep(50 * time.Millisecond)
+	after := runtime.NumGoroutine()
+	if after > before+1 {
+		t.Fatalf("goroutine leak: before=%d after=%d", before, after)
+	}
+
+	// Unblock the publisher in case it is still waiting (cleanup).
+	close(pub.unblock)
+}
+
 // TestNotifyAggregator_AddChannelFullDrops covers the default branch in Add's
 // second select — the overflow path when a.in is at capacity. The owner
 // goroutine is frozen inside Publish() so nothing drains a.in while we fill it

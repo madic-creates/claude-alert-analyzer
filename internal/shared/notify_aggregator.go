@@ -44,6 +44,12 @@ type NotifyAggregator struct {
 	stopped  chan struct{}
 	stopErr  error
 
+	// flushCtx is passed to timer-triggered flushes. Stop() cancels it before
+	// sending the stop-request so any in-progress timer flush is interrupted
+	// promptly, preventing a goroutine leak when a publisher hangs indefinitely.
+	flushCtx    context.Context
+	flushCancel context.CancelFunc
+
 	// stopping is set by the owner goroutine when it begins shutdown drain.
 	// Add() callers check it FIRST so they drop instead of racing with the
 	// owner's drain loop. Without this flag, an Add() that wins the random
@@ -63,15 +69,18 @@ func NewNotifyAggregator(publishers []Publisher, interval time.Duration, titleFm
 	if len(publishers) == 0 || interval <= 0 {
 		return nil
 	}
+	flushCtx, flushCancel := context.WithCancel(context.Background())
 	a := &NotifyAggregator{
-		publishers: publishers,
-		interval:   interval,
-		titleFmt:   titleFmt,
-		priority:   priority,
-		drops:      drops,
-		in:         make(chan string, notifyAggregatorBufferSize),
-		stopReq:    make(chan stopRequest, 1),
-		stopped:    make(chan struct{}),
+		publishers:  publishers,
+		interval:    interval,
+		titleFmt:    titleFmt,
+		priority:    priority,
+		drops:       drops,
+		in:          make(chan string, notifyAggregatorBufferSize),
+		stopReq:     make(chan stopRequest, 1),
+		stopped:     make(chan struct{}),
+		flushCtx:    flushCtx,
+		flushCancel: flushCancel,
 	}
 	go a.run()
 	return a
@@ -131,6 +140,9 @@ func (a *NotifyAggregator) Stop(ctx context.Context) error {
 		return nil
 	}
 	a.stopOnce.Do(func() {
+		// Cancel any in-progress timer flush so the owner goroutine is not
+		// stuck in a hung publisher and can process the stopReq promptly.
+		a.flushCancel()
 		ack := make(chan error, 1)
 		// stopReq has buffer 1 and stopOnce guarantees this is the sole writer,
 		// so the send always completes immediately without blocking.
@@ -187,7 +199,7 @@ func (a *NotifyAggregator) run() {
 			}
 		case <-timerC:
 			timer = nil
-			if err := flush(context.Background()); err != nil {
+			if err := flush(a.flushCtx); err != nil {
 				slog.Warn("aggregator tick flush failed", "error", err)
 			}
 		case req := <-a.stopReq:
