@@ -547,11 +547,16 @@ func RunAgenticDiagnostics(
 	// Wrap handleTool with panic recovery so a buggy handler cannot kill the
 	// loop. The synthetic tool result lets Claude move on instead of aborting.
 	safeHandleTool := func(name string, input json.RawMessage) (result string, err error) {
+		// Capture start here so the panic-recovery defer can record actual
+		// elapsed time. handleTool defines its own start for the normal path;
+		// this one is only used when a panic propagates out before that
+		// recording runs.
+		start := time.Now()
 		defer func() {
 			if r := recover(); r != nil {
 				slog.Error("agent tool handler panicked", "tool", name, "recover", r)
 				if metrics != nil {
-					metrics.RecordAgentToolCall(name, outcomeExecError, 0)
+					metrics.RecordAgentToolCall(name, outcomeExecError, time.Since(start))
 				}
 				result = fmt.Sprintf("Tool %s panicked: %v — continue with a different command", name, r)
 				err = nil
