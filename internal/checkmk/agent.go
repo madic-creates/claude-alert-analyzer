@@ -982,8 +982,9 @@ func RunAgenticDiagnostics(
 		}
 
 		if isDenied(denied, argv) {
-			slog.Warn("denied command", "hostname", hostname, "command", shellQuote(argv))
-			return denyReason(denied, argv), nil
+			reason := denyReason(denied, argv)
+			slog.Warn("denied command", "hostname", hostname, "command", shellQuote(argv), "deny_reason", reason)
+			return reason, nil
 		}
 
 		logCmd := shellQuote(argv)
