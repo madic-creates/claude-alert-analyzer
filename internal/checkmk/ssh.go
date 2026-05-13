@@ -2,6 +2,7 @@ package checkmk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -94,6 +95,7 @@ const maxSSHOutputBytes = 512 * 1024 // 512 KiB
 
 type sshResult struct {
 	output    string
+	exitCode  int // non-zero when the remote command exited with a non-zero status
 	err       error
 	truncated bool
 }
@@ -111,10 +113,16 @@ func shellQuote(argv []string) string {
 	return strings.Join(quoted, " ")
 }
 
-func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeout time.Duration) (string, error) {
+// runSSHCommand runs argv on the remote host and returns an sshResult.
+// Transport-level failures (session create, timeout, context cancellation)
+// are reported in sshResult.err. When the remote command exits with a
+// non-zero status, sshResult.exitCode is set and sshResult.err is nil —
+// allowing callers to distinguish "command ran but failed" from "the SSH
+// session itself broke".
+func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeout time.Duration) sshResult {
 	session, err := client.NewSession()
 	if err != nil {
-		return "", fmt.Errorf("new session: %w", err)
+		return sshResult{err: fmt.Errorf("new session: %w", err)}
 	}
 	defer session.Close()
 
@@ -137,7 +145,14 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 	go func() {
 		cmdErr := session.Run(cmdStr)
 		out, wasTruncated := lw.Snapshot()
-		done <- sshResult{out, cmdErr, wasTruncated}
+		r := sshResult{output: out, truncated: wasTruncated}
+		var exitErr *ssh.ExitError
+		if errors.As(cmdErr, &exitErr) {
+			r.exitCode = exitErr.ExitStatus()
+		} else {
+			r.err = cmdErr
+		}
+		done <- r
 	}()
 
 	// Use time.NewTimer instead of time.After so we can call Stop() when the
@@ -149,11 +164,10 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 
 	select {
 	case r := <-done:
-		out := r.output
 		if r.truncated {
-			out += fmt.Sprintf("\n[output truncated at %d bytes]", maxSSHOutputBytes)
+			r.output += fmt.Sprintf("\n[output truncated at %d bytes]", maxSSHOutputBytes)
 		}
-		return out, r.err
+		return r
 	case <-timer.C:
 		session.Close()
 		// Return any output collected before the timeout so that slow commands
@@ -161,10 +175,10 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 		// value. agent.go already handles (partial, error) returns by including
 		// the output in the tool result alongside the timeout message.
 		partial, _ := lw.Snapshot()
-		return partial, fmt.Errorf("timeout after %v", timeout)
+		return sshResult{output: partial, err: fmt.Errorf("timeout after %v", timeout)}
 	case <-ctx.Done():
 		session.Close()
 		partial, _ := lw.Snapshot()
-		return partial, fmt.Errorf("context cancelled: %w", ctx.Err())
+		return sshResult{output: partial, err: fmt.Errorf("context cancelled: %w", ctx.Err())}
 	}
 }

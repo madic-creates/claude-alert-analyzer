@@ -990,24 +990,29 @@ func RunAgenticDiagnostics(
 		logCmd := shellQuote(argv)
 		slog.Info("agentic SSH command", "hostname", hostname, "command", logCmd)
 
-		output, err := runSSHCommand(ctx, sshClient, argv, 10*time.Second)
-		if err != nil {
-			slog.Warn("agentic SSH command failed", "hostname", hostname, "command", logCmd, "error", err)
-			// If the command produced output before failing (e.g. non-zero exit
-			// code from systemctl status, grep with no match, etc.), include it so
-			// Claude can use the diagnostic information. Without this, "systemctl
-			// status nginx" on a stopped service exits 3 and its full status output
-			// is discarded, leaving Claude with only "Command failed: exit status 3".
-			if output != "" {
-				output = shared.SanitizeOutput(output)
-				output = shared.RedactSecrets(output)
-				output = shared.Truncate(output, 4096)
-				return fmt.Sprintf("$ %s\n```\n%s\n```\n[exited: %v]", logCmd, output, err), nil
+		r := runSSHCommand(ctx, sshClient, argv, 10*time.Second)
+		if r.err != nil {
+			slog.Warn("agentic SSH command failed", "hostname", hostname, "command", logCmd, "error", r.err)
+			if r.output != "" {
+				out := shared.SanitizeOutput(r.output)
+				out = shared.RedactSecrets(out)
+				out = shared.Truncate(out, 4096)
+				return fmt.Sprintf("$ %s\n```\n%s\n```\n[exited: %v]", logCmd, out, r.err), nil
 			}
-			return fmt.Sprintf("$ %s\n[exited: %v]", logCmd, err), nil
+			return fmt.Sprintf("$ %s\n[exited: %v]", logCmd, r.err), nil
 		}
 
-		output = shared.SanitizeOutput(output)
+		if r.exitCode != 0 {
+			out := shared.SanitizeOutput(r.output)
+			out = shared.RedactSecrets(out)
+			out = shared.Truncate(out, 4096)
+			if out != "" {
+				return fmt.Sprintf("$ %s\n```\n%s\n```\n[exit code: %d]", logCmd, out, r.exitCode), nil
+			}
+			return fmt.Sprintf("$ %s\n[exit code: %d]", logCmd, r.exitCode), nil
+		}
+
+		output := shared.SanitizeOutput(r.output)
 		output = shared.RedactSecrets(output)
 		output = shared.Truncate(output, 4096)
 
@@ -1038,21 +1043,20 @@ func RunAgenticDiagnostics(
 			outcome = "rejected_validation"
 		case strings.HasPrefix(out, "Command denied"):
 			outcome = "rejected_verb"
-		// Distinguish SSH timeout and context-cancellation from ordinary non-zero
-		// exits. runSSHCommand encodes timeouts as "timeout after <d>" and context
-		// cancellation as "context cancelled: ..." in the error message; handleTool
-		// always includes these in an [exited: ...] annotation. Matching them before
-		// the broader nonzero_exit case ensures operators can tell from metrics
-		// whether commands are slow/hanging (timeout) versus merely failing
-		// (nonzero_exit, e.g. grep no-match, systemctl status on a stopped unit).
-		//
-		// Two patterns cover all timeout paths from runSSHCommand:
-		//   1. Timer fires (with or without output) → "[exited: timeout after <d>]"
-		//   2. ctx.Done()                           → "[exited: context cancelled: ...]"
+		// Distinguish timeouts, SSH transport errors, and non-zero exits.
+		// runSSHCommand uses three distinct formats:
+		//   "[exited: timeout after <d>]"      — timer fired
+		//   "[exited: context cancelled: ...]" — context cancelled
+		//   "[exited: <transport error>]"      — SSH transport failure
+		//   "[exit code: <N>]"                 — remote command exited non-zero
+		// The timeout patterns are checked first so they don't fall through to
+		// ssh_error; exit-code and transport annotations are then separable.
 		case strings.Contains(out, "[exited: timeout after"),
 			strings.Contains(out, "[exited: context cancelled"):
 			outcome = "timeout"
 		case strings.Contains(out, "[exited: "):
+			outcome = "ssh_error"
+		case strings.Contains(out, "[exit code: "):
 			outcome = "nonzero_exit"
 		}
 		if metrics != nil {

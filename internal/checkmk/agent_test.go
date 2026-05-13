@@ -335,7 +335,7 @@ func TestRunAgenticDiagnostics_NonZeroExitControlCharsStripped(t *testing.T) {
 	if !strings.Contains(out, "unit output") {
 		t.Errorf("printable content unexpectedly missing from non-zero exit tool output: %q", out)
 	}
-	if !strings.Contains(out, "exited") {
+	if !strings.Contains(out, "exit code") {
 		t.Errorf("exit annotation missing from non-zero exit tool output: %q", out)
 	}
 }
@@ -373,9 +373,9 @@ func TestRunAgenticDiagnostics_NonZeroExitIncludesOutput(t *testing.T) {
 	if !strings.Contains(runner.toolOutputs[0], "nginx.service") {
 		t.Errorf("expected systemctl output in tool result for non-zero exit, got: %q", runner.toolOutputs[0])
 	}
-	// The exit status should also be noted so Claude knows the command failed.
-	if !strings.Contains(runner.toolOutputs[0], "exited") {
-		t.Errorf("expected exit status annotation in tool result, got: %q", runner.toolOutputs[0])
+	// The exit code should also be noted so Claude knows the command failed.
+	if !strings.Contains(runner.toolOutputs[0], "exit code") {
+		t.Errorf("expected exit code annotation in tool result, got: %q", runner.toolOutputs[0])
 	}
 	// Must not be a bare "Command failed" message — the output must be included.
 	if strings.HasPrefix(runner.toolOutputs[0], "Command failed:") && !strings.Contains(runner.toolOutputs[0], "nginx") {
@@ -417,8 +417,8 @@ func TestRunAgenticDiagnostics_NonZeroExitNoOutput(t *testing.T) {
 	if !strings.Contains(runner.toolOutputs[0], "false") {
 		t.Errorf("tool result missing command line; got: %q", runner.toolOutputs[0])
 	}
-	// The exit annotation must also appear.
-	if !strings.Contains(runner.toolOutputs[0], "[exited:") {
+	// The exit code annotation must also appear.
+	if !strings.Contains(runner.toolOutputs[0], "[exit code:") {
 		t.Errorf("tool result missing exit annotation; got: %q", runner.toolOutputs[0])
 	}
 }

@@ -151,25 +151,36 @@ func TestRunSSHCommand_Success(t *testing.T) {
 		sendExitStatus(ch, 0)
 	})
 
-	out, err := runSSHCommand(context.Background(), client, []string{"echo", "hello"}, 5*time.Second)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	r := runSSHCommand(context.Background(), client, []string{"echo", "hello"}, 5*time.Second)
+	if r.err != nil {
+		t.Fatalf("unexpected error: %v", r.err)
 	}
-	if out != "hello output\n" {
-		t.Errorf("unexpected output: %q", out)
+	if r.exitCode != 0 {
+		t.Errorf("exitCode = %d, want 0", r.exitCode)
+	}
+	if r.output != "hello output\n" {
+		t.Errorf("unexpected output: %q", r.output)
 	}
 }
 
-func TestRunSSHCommand_CommandError(t *testing.T) {
+// TestRunSSHCommand_NonZeroExitCode verifies that when the remote command exits
+// with a non-zero status, sshResult.exitCode is populated and sshResult.err is
+// nil. This separates "command ran but failed" from "SSH session broke".
+func TestRunSSHCommand_NonZeroExitCode(t *testing.T) {
 	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
 		_, _ = io.WriteString(ch, "command not found\n")
 		sendExitStatus(ch, 127)
 	})
 
-	// session.Run returns an *ssh.ExitError on non-zero exit status
-	_, err := runSSHCommand(context.Background(), client, []string{"nonexistent"}, 5*time.Second)
-	if err == nil {
-		t.Fatal("expected error for non-zero exit status")
+	r := runSSHCommand(context.Background(), client, []string{"nonexistent"}, 5*time.Second)
+	if r.err != nil {
+		t.Errorf("expected nil err for non-zero exit, got: %v", r.err)
+	}
+	if r.exitCode != 127 {
+		t.Errorf("exitCode = %d, want 127", r.exitCode)
+	}
+	if !strings.Contains(r.output, "command not found") {
+		t.Errorf("output = %q, want to contain 'command not found'", r.output)
 	}
 }
 
@@ -185,15 +196,15 @@ func TestRunSSHCommand_OutputTruncatedAtLimit(t *testing.T) {
 		sendExitStatus(ch, 0)
 	})
 
-	out, err := runSSHCommand(context.Background(), client, []string{"cat", "/large/file"}, 5*time.Second)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	r := runSSHCommand(context.Background(), client, []string{"cat", "/large/file"}, 5*time.Second)
+	if r.err != nil {
+		t.Fatalf("unexpected error: %v", r.err)
 	}
-	if len(out) == 0 {
+	if len(r.output) == 0 {
 		t.Error("expected some output to be collected before the limit")
 	}
-	if !strings.Contains(out, "[output truncated at") {
-		t.Errorf("expected truncation notice in output, got %d bytes without notice", len(out))
+	if !strings.Contains(r.output, "[output truncated at") {
+		t.Errorf("expected truncation notice in output, got %d bytes without notice", len(r.output))
 	}
 }
 
@@ -204,12 +215,12 @@ func TestRunSSHCommand_Timeout(t *testing.T) {
 		time.Sleep(10 * time.Second)
 	})
 
-	_, err := runSSHCommand(context.Background(), client, []string{"sleep", "100"}, 50*time.Millisecond)
-	if err == nil {
+	r := runSSHCommand(context.Background(), client, []string{"sleep", "100"}, 50*time.Millisecond)
+	if r.err == nil {
 		t.Fatal("expected timeout error")
 	}
-	if !strings.Contains(err.Error(), "timeout") {
-		t.Errorf("expected timeout error message, got: %v", err)
+	if !strings.Contains(r.err.Error(), "timeout") {
+		t.Errorf("expected timeout error message, got: %v", r.err)
 	}
 }
 
@@ -278,15 +289,15 @@ func TestRunSSHCommand_Timeout_PartialOutput(t *testing.T) {
 		time.Sleep(10 * time.Second)
 	})
 
-	out, err := runSSHCommand(context.Background(), client, []string{"slow-cmd"}, 100*time.Millisecond)
-	if err == nil {
+	r := runSSHCommand(context.Background(), client, []string{"slow-cmd"}, 100*time.Millisecond)
+	if r.err == nil {
 		t.Fatal("expected timeout error")
 	}
-	if !strings.Contains(err.Error(), "timeout") {
-		t.Errorf("expected timeout error, got: %v", err)
+	if !strings.Contains(r.err.Error(), "timeout") {
+		t.Errorf("expected timeout error, got: %v", r.err)
 	}
-	if !strings.Contains(out, "partial output line") {
-		t.Errorf("expected partial output to be returned on timeout, got: %q", out)
+	if !strings.Contains(r.output, "partial output line") {
+		t.Errorf("expected partial output to be returned on timeout, got: %q", r.output)
 	}
 }
 
@@ -300,12 +311,12 @@ func TestRunSSHCommand_ContextCancelled(t *testing.T) {
 	// Cancel immediately so the select fires the ctx.Done() case.
 	cancel()
 
-	_, err := runSSHCommand(ctx, client, []string{"sleep", "100"}, 30*time.Second)
-	if err == nil {
+	r := runSSHCommand(ctx, client, []string{"sleep", "100"}, 30*time.Second)
+	if r.err == nil {
 		t.Fatal("expected error when context is cancelled")
 	}
-	if !strings.Contains(err.Error(), "context cancelled") {
-		t.Errorf("expected 'context cancelled' error message, got: %v", err)
+	if !strings.Contains(r.err.Error(), "context cancelled") {
+		t.Errorf("expected 'context cancelled' error message, got: %v", r.err)
 	}
 }
 
@@ -334,15 +345,15 @@ func TestRunSSHCommand_ContextCancelled_PartialOutput(t *testing.T) {
 		cancel()
 	}()
 
-	out, err := runSSHCommand(ctx, client, []string{"slow-cmd"}, 30*time.Second)
-	if err == nil {
+	r := runSSHCommand(ctx, client, []string{"slow-cmd"}, 30*time.Second)
+	if r.err == nil {
 		t.Fatal("expected error when context is cancelled")
 	}
-	if !strings.Contains(err.Error(), "context cancelled") {
-		t.Errorf("expected 'context cancelled' error message, got: %v", err)
+	if !strings.Contains(r.err.Error(), "context cancelled") {
+		t.Errorf("expected 'context cancelled' error message, got: %v", r.err)
 	}
-	if !strings.Contains(out, "partial context output") {
-		t.Errorf("expected partial output to be returned on context cancellation, got: %q", out)
+	if !strings.Contains(r.output, "partial context output") {
+		t.Errorf("expected partial output to be returned on context cancellation, got: %q", r.output)
 	}
 }
 
@@ -362,12 +373,12 @@ func TestRunSSHCommand_NewSessionFails(t *testing.T) {
 	// Close the connection before issuing a command so that NewSession fails.
 	client.Close()
 
-	_, err := runSSHCommand(context.Background(), client, []string{"uptime"}, 5*time.Second)
-	if err == nil {
+	r := runSSHCommand(context.Background(), client, []string{"uptime"}, 5*time.Second)
+	if r.err == nil {
 		t.Fatal("expected error when SSH connection is closed, got nil")
 	}
-	if !strings.Contains(err.Error(), "new session") {
-		t.Errorf("expected 'new session' in error message, got: %v", err)
+	if !strings.Contains(r.err.Error(), "new session") {
+		t.Errorf("expected 'new session' in error message, got: %v", r.err)
 	}
 }
 
@@ -408,7 +419,7 @@ func TestRunSSHCommand_ShellMetacharsEscaped(t *testing.T) {
 				sendExitStatus(ch, 0)
 			})
 
-			_, _ = runSSHCommand(context.Background(), client, tc.argv, 5*time.Second)
+			_ = runSSHCommand(context.Background(), client, tc.argv, 5*time.Second)
 
 			expected := shellQuote(tc.argv)
 			if captured != expected {
