@@ -1028,7 +1028,7 @@ func RunAgenticDiagnostics(
 			if r := recover(); r != nil {
 				slog.Error("agent tool handler panicked", "tool", name, "recover", r)
 				if metrics != nil {
-					metrics.RecordAgentToolCall(name, "exec_error", 0)
+					metrics.RecordAgentToolCall(name, "exec_error", time.Since(start))
 				}
 				result = fmt.Sprintf("Tool %s panicked: %v — continue with a different command", name, r)
 				err = nil

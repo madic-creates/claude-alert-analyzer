@@ -3538,6 +3538,18 @@ func TestRunAgenticDiagnostics_PanicRecovery(t *testing.T) {
 	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="exec_error",product="checkmk",tool="execute_command"} 1`) {
 		t.Errorf("missing exec_error metric for panicked call; body:\n%s", body)
 	}
+
+	// Duration histogram: the panic recovery records time.Since(start) instead
+	// of constant 0. Verify the sum is non-zero (Prometheus renders an
+	// exactly-zero sum as "0", so "} 0\n" signals the old broken behaviour).
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, `alert_analyzer_agent_tool_duration_seconds_sum{product="checkmk",tool="execute_command"}`) {
+			if strings.HasSuffix(line, " 0") {
+				t.Errorf("duration histogram sum is 0 for panicked call — panic recovery must record time.Since(start), not constant 0; metric line: %q", line)
+			}
+			break
+		}
+	}
 }
 
 // TestRunAgenticDiagnostics_RejectedValidationMetricClassification verifies
