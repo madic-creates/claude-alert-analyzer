@@ -410,10 +410,9 @@ func TestProcessAlert_PublishFails(t *testing.T) {
 }
 
 // TestProcessAlert_PublishFails_RecordsPrometheusCounter verifies that when
-// PublishAll returns an error and Prom is non-nil, the ntfy_publish_errors_total
-// Prometheus counter is incremented. The existing TestProcessAlert_PublishFails
-// uses shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)) (Prom == nil) so RecordNtfyPublishError is a
-// no-op there; this test exercises the non-nil path.
+// PublishAll returns an error, ntfy_publish_errors_total is incremented.
+// TestProcessAlert_PublishFails focuses on cooldown semantics; this test
+// focuses solely on the ntfy publish error counter.
 func TestProcessAlert_PublishFails_RecordsPrometheusCounter(t *testing.T) {
 	pub := &mockPublisher{err: fmt.Errorf("ntfy unavailable")}
 	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)}
