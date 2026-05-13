@@ -261,16 +261,16 @@ func TestPublishAll_AllSucceed(t *testing.T) {
 	}
 }
 
-func TestPublishAll_OneFailsReturnsFirstError(t *testing.T) {
+func TestPublishAll_OneFails_AllPublishersStillCalled(t *testing.T) {
 	errFirst := errors.New("first failure")
 	p1 := &fakePublisher{name: "p1", err: errFirst}
 	p2 := &fakePublisher{name: "p2"}
 
 	err := PublishAll(context.Background(), []Publisher{p1, p2}, "title", "default", "body")
 	if !errors.Is(err, errFirst) {
-		t.Errorf("expected first error, got: %v", err)
+		t.Errorf("expected error to wrap first failure, got: %v", err)
 	}
-	// p2 should still have been called.
+	// p2 should still have been called despite p1's failure.
 	if p2.calls != 1 {
 		t.Errorf("expected p2 to be called, calls=%d", p2.calls)
 	}
@@ -283,9 +283,13 @@ func TestPublishAll_AllFail(t *testing.T) {
 	p2 := &fakePublisher{name: "p2", err: errB}
 
 	err := PublishAll(context.Background(), []Publisher{p1, p2}, "title", "default", "body")
-	// Should return first error encountered (p1's).
+	// Should return a joined error containing all failures so callers see every
+	// failed publisher, not just the first one.
 	if !errors.Is(err, errA) {
-		t.Errorf("expected err-a, got: %v", err)
+		t.Errorf("expected err-a in joined error, got: %v", err)
+	}
+	if !errors.Is(err, errB) {
+		t.Errorf("expected err-b in joined error, got: %v", err)
 	}
 }
 

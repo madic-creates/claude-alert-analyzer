@@ -2,6 +2,7 @@ package shared
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -140,16 +141,16 @@ func (n *NtfyPublisher) Publish(ctx context.Context, title, priority, body strin
 	return lastErr
 }
 
-// PublishAll sends to all publishers, logging errors. Returns the first error encountered.
+// PublishAll sends to all publishers, logging errors. Returns a joined error
+// containing all failures so callers can diagnose every failed publisher, not
+// just the first one. errors.Is/As work correctly on the joined result.
 func PublishAll(ctx context.Context, publishers []Publisher, title, priority, body string) error {
-	var firstErr error
+	var errs []error
 	for _, p := range publishers {
 		if err := p.Publish(ctx, title, priority, body); err != nil {
 			slog.Error("publish failed", "publisher", p.Name(), "error", err)
-			if firstErr == nil {
-				firstErr = err
-			}
+			errs = append(errs, err)
 		}
 	}
-	return firstErr
+	return errors.Join(errs...)
 }
