@@ -1,18 +1,17 @@
 package checkmk
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
+
+	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 )
 
 // Dialer opens SSH connections to remote hosts.
@@ -93,36 +92,6 @@ func (d *SSHDialer) Dial(ctx context.Context, hostname, ip string) (*ssh.Client,
 // truncation in agent.go (4 KiB) has a chance to run.
 const maxSSHOutputBytes = 512 * 1024 // 512 KiB
 
-// limitedWriter writes to buf until remaining reaches zero, then silently
-// discards further writes. It is safe for concurrent use (stdout and stderr
-// may be written from different goroutines by the SSH package).
-// This mirrors the limitedWriter type used in internal/k8s/agent.go.
-type limitedWriter struct {
-	mu        sync.Mutex
-	buf       bytes.Buffer
-	remaining int
-	truncated bool // set to true the first time data is discarded
-}
-
-func (lw *limitedWriter) Write(p []byte) (int, error) {
-	lw.mu.Lock()
-	defer lw.mu.Unlock()
-	if lw.remaining <= 0 {
-		lw.truncated = true
-		return len(p), nil // discard, but pretend success so the session doesn't error
-	}
-	n := len(p)
-	if n > lw.remaining {
-		p = p[:lw.remaining]
-		lw.truncated = true // trailing bytes will be discarded after this write
-	}
-	written, err := lw.buf.Write(p)
-	lw.remaining -= written
-	// Return the original length so callers (the SSH package) don't treat a
-	// partial write as an error.
-	return n, err
-}
-
 type sshResult struct {
 	output    string
 	err       error
@@ -152,11 +121,11 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 	cmdStr := shellQuote(argv)
 
 	// Collect stdout and stderr into a shared buffer capped at maxSSHOutputBytes.
-	// Using a limitedWriter prevents a command that streams large amounts of data
+	// Using a LimitedWriter prevents a command that streams large amounts of data
 	// (e.g. "cat /large/file") from exhausting memory before the 4 KiB truncation
 	// in agent.go runs. Both pipes share the same buffer and limit so the cap
 	// applies to the combined output, matching the behaviour of CombinedOutput.
-	lw := &limitedWriter{remaining: maxSSHOutputBytes}
+	lw := shared.NewLimitedWriter(maxSSHOutputBytes)
 	session.Stdout = lw
 	session.Stderr = lw
 
@@ -167,10 +136,7 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 
 	go func() {
 		cmdErr := session.Run(cmdStr)
-		lw.mu.Lock()
-		out := lw.buf.String()
-		wasTruncated := lw.truncated
-		lw.mu.Unlock()
+		out, wasTruncated := lw.Snapshot()
 		done <- sshResult{out, cmdErr, wasTruncated}
 	}()
 
@@ -194,18 +160,11 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 		// (e.g. "journalctl -n 500" on a busy host) still provide diagnostic
 		// value. agent.go already handles (partial, error) returns by including
 		// the output in the tool result alongside the timeout message.
-		lw.mu.Lock()
-		partial := lw.buf.String()
-		lw.mu.Unlock()
+		partial, _ := lw.Snapshot()
 		return partial, fmt.Errorf("timeout after %v", timeout)
 	case <-ctx.Done():
 		session.Close()
-		lw.mu.Lock()
-		partial := lw.buf.String()
-		lw.mu.Unlock()
+		partial, _ := lw.Snapshot()
 		return partial, fmt.Errorf("context cancelled: %w", ctx.Err())
 	}
 }
-
-// Ensure limitedWriter implements io.Writer (compile-time check).
-var _ io.Writer = (*limitedWriter)(nil)

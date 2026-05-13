@@ -8,7 +8,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -1339,59 +1338,5 @@ func TestNewKubectlSubprocess_DefaultPath(t *testing.T) {
 	}
 	if runner.Path != defaultKubectlPath {
 		t.Errorf("runner.Path = %q, want %q (default)", runner.Path, defaultKubectlPath)
-	}
-}
-
-func TestLimitedWriter_Basic(t *testing.T) {
-	lw := &limitedWriter{remaining: 10}
-	n, err := lw.Write([]byte("hello"))
-	if err != nil || n != 5 {
-		t.Fatalf("Write(hello): n=%d err=%v", n, err)
-	}
-	if lw.buf.String() != "hello" {
-		t.Errorf("buf=%q, want %q", lw.buf.String(), "hello")
-	}
-	if lw.truncated {
-		t.Errorf("truncated prematurely")
-	}
-}
-
-func TestLimitedWriter_Truncation(t *testing.T) {
-	lw := &limitedWriter{remaining: 5}
-	n, err := lw.Write([]byte("hello world"))
-	if err != nil || n != 11 {
-		t.Fatalf("Write should report all bytes consumed: n=%d err=%v", n, err)
-	}
-	if lw.buf.String() != "hello" {
-		t.Errorf("buf=%q, want %q", lw.buf.String(), "hello")
-	}
-	if !lw.truncated {
-		t.Errorf("expected truncated=true")
-	}
-	// Further writes should be discarded silently.
-	n, err = lw.Write([]byte("more"))
-	if err != nil || n != 4 {
-		t.Fatalf("Write after limit: n=%d err=%v", n, err)
-	}
-	if lw.buf.String() != "hello" {
-		t.Errorf("buf changed after limit: %q", lw.buf.String())
-	}
-}
-
-func TestLimitedWriter_ConcurrentSafety(t *testing.T) {
-	const goroutines = 20
-	const chunk = "abcdefghij" // 10 bytes each
-	lw := &limitedWriter{remaining: goroutines * len(chunk)}
-	var wg sync.WaitGroup
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			lw.Write([]byte(chunk)) //nolint:errcheck
-		}()
-	}
-	wg.Wait()
-	if got := lw.buf.Len(); got != goroutines*len(chunk) {
-		t.Errorf("buf.Len()=%d, want %d", got, goroutines*len(chunk))
 	}
 }

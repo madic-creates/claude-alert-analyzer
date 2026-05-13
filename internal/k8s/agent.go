@@ -1,7 +1,6 @@
 package k8s
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,7 +10,6 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -430,7 +428,7 @@ func (k *kubectlSubprocess) Exec(ctx context.Context, argv []string, timeout tim
 		cmd.Dir = home
 	}
 
-	// Assign a shared limitedWriter to both stdout and stderr so the exec
+	// Assign a shared LimitedWriter to both stdout and stderr so the exec
 	// package's internal goroutines drain both pipes concurrently. The previous
 	// approach (StdoutPipe → read → StderrPipe → read sequentially) could
 	// deadlock: if the subprocess filled stderr's OS pipe buffer (~64 KiB on
@@ -440,8 +438,7 @@ func (k *kubectlSubprocess) Exec(ctx context.Context, argv []string, timeout tim
 	// With cmd.Stdout/cmd.Stderr assigned, exec.Cmd.Start spawns internal
 	// goroutines that drain both pipes concurrently; cmd.Wait blocks until
 	// both goroutines finish, so no manual goroutine management is needed.
-	// This mirrors the limitedWriter type used in internal/checkmk/ssh.go.
-	lw := &limitedWriter{remaining: maxKubectlOutputBytes}
+	lw := shared.NewLimitedWriter(maxKubectlOutputBytes)
 	cmd.Stdout = lw
 	cmd.Stderr = lw
 
@@ -450,39 +447,11 @@ func (k *kubectlSubprocess) Exec(ctx context.Context, argv []string, timeout tim
 	}
 
 	waitErr := cmd.Wait()
-	out := lw.buf.String()
-	if lw.truncated {
+	out, truncated := lw.Snapshot()
+	if truncated {
 		out += fmt.Sprintf("\n[output truncated at %d bytes]", maxKubectlOutputBytes)
 	}
 	return out, waitErr
-}
-
-// limitedWriter is a concurrent-safe io.Writer that caps combined stdout+stderr
-// output at a fixed byte limit. Beyond the limit writes are silently discarded
-// but reported as successful so exec's internal goroutines never block the
-// subprocess. This mirrors the limitedWriter type in internal/checkmk/ssh.go.
-type limitedWriter struct {
-	mu        sync.Mutex
-	buf       bytes.Buffer
-	remaining int
-	truncated bool
-}
-
-func (w *limitedWriter) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.remaining <= 0 {
-		w.truncated = true
-		return len(p), nil
-	}
-	n := len(p)
-	if n > w.remaining {
-		p = p[:w.remaining]
-		w.truncated = true
-	}
-	written, err := w.buf.Write(p)
-	w.remaining -= written
-	return n, err
 }
 
 // parsePromQLInput validates a promql_query tool call. The 4096-byte cap is
