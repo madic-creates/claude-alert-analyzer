@@ -993,32 +993,24 @@ func RunAgenticDiagnostics(
 		slog.Info("agentic SSH command", "hostname", hostname, "command", logCmd)
 
 		r := runSSHCommand(ctx, sshClient, argv, agentToolTimeout)
+		// Sanitize once before branching so all three outcome paths (transport
+		// error, non-zero exit, success) share the same pipeline and the
+		// post-sanitization emptiness check is consistent across branches.
+		sanitized := shared.Truncate(shared.RedactSecrets(shared.SanitizeOutput(r.output)), 4096)
 		if r.err != nil {
 			slog.Warn("agentic SSH command failed", "hostname", hostname, "command", logCmd, "error", r.err)
-			if r.output != "" {
-				out := shared.SanitizeOutput(r.output)
-				out = shared.RedactSecrets(out)
-				out = shared.Truncate(out, 4096)
-				return fmt.Sprintf("$ %s\n```\n%s\n```\n[exited: %v]", logCmd, out, r.err), nil
+			if sanitized != "" {
+				return fmt.Sprintf("$ %s\n```\n%s\n```\n[exited: %v]", logCmd, sanitized, r.err), nil
 			}
 			return fmt.Sprintf("$ %s\n[exited: %v]", logCmd, r.err), nil
 		}
-
 		if r.exitCode != 0 {
-			out := shared.SanitizeOutput(r.output)
-			out = shared.RedactSecrets(out)
-			out = shared.Truncate(out, 4096)
-			if out != "" {
-				return fmt.Sprintf("$ %s\n```\n%s\n```\n[exit code: %d]", logCmd, out, r.exitCode), nil
+			if sanitized != "" {
+				return fmt.Sprintf("$ %s\n```\n%s\n```\n[exit code: %d]", logCmd, sanitized, r.exitCode), nil
 			}
 			return fmt.Sprintf("$ %s\n[exit code: %d]", logCmd, r.exitCode), nil
 		}
-
-		output := shared.SanitizeOutput(r.output)
-		output = shared.RedactSecrets(output)
-		output = shared.Truncate(output, 4096)
-
-		return fmt.Sprintf("$ %s\n```\n%s\n```", logCmd, output), nil
+		return fmt.Sprintf("$ %s\n```\n%s\n```", logCmd, sanitized), nil
 	}
 
 	wrappedHandleTool := func(name string, input json.RawMessage) (result string, err error) {
