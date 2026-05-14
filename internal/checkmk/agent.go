@@ -84,6 +84,8 @@ var sshTool = anthropic.ToolUnionParam{
 	},
 }
 
+const agentToolTimeout = 10 * time.Second
+
 // DefaultDeniedCommands is the default denylist used when SSH_DENIED_COMMANDS is not set.
 var DefaultDeniedCommands = map[string]bool{
 	"rm": true, "rmdir": true, "dd": true, "mkfs": true, "mke2fs": true,
@@ -990,7 +992,7 @@ func RunAgenticDiagnostics(
 		logCmd := shellQuote(argv)
 		slog.Info("agentic SSH command", "hostname", hostname, "command", logCmd)
 
-		r := runSSHCommand(ctx, sshClient, argv, 10*time.Second)
+		r := runSSHCommand(ctx, sshClient, argv, agentToolTimeout)
 		if r.err != nil {
 			slog.Warn("agentic SSH command failed", "hostname", hostname, "command", logCmd, "error", r.err)
 			if r.output != "" {
