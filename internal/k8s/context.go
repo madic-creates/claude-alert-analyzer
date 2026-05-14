@@ -150,6 +150,27 @@ func (p *PrometheusClient) Query(ctx context.Context, queryStr string) string {
 	return p.query(ctx, queryStr)
 }
 
+// runAsync launches f in a goroutine, sends its return value on a buffered
+// channel, and recovers from any panic by logging and sending an error string.
+// The channel has capacity 1 so the goroutine never blocks if the caller
+// abandons the channel.
+func runAsync(label string, f func() string) <-chan string {
+	ch := make(chan string, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("goroutine panicked",
+					"label", label,
+					"recover", r,
+					"stack", string(debug.Stack()))
+				ch <- fmt.Sprintf("(%s goroutine panicked: %v)", label, r)
+			}
+		}()
+		ch <- f()
+	}()
+	return ch
+}
+
 // GetMetrics queries Prometheus for metrics related to the alert.
 func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	namespace := alert.Labels["namespace"]
@@ -187,18 +208,9 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	// that blocked up to one full HTTP timeout (10 s) before the namespace
 	// goroutines were even started. Worst-case latency drops from ~20 s
 	// (serial ALERTS + parallel namespace queries) to ~10 s (all in parallel).
-	firingCh := make(chan string, 1)
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				slog.Error("firing alerts goroutine panicked",
-					"recover", r,
-					"stack", string(debug.Stack()))
-				firingCh <- fmt.Sprintf("(firing alerts goroutine panicked: %v)", r)
-			}
-		}()
-		firingCh <- p.query(ctx, `ALERTS{alertstate="firing"}`)
-	}()
+	firingCh := runAsync("firing alerts", func() string {
+		return p.query(ctx, `ALERTS{alertstate="firing"}`)
+	})
 
 	var sections []string
 
@@ -207,60 +219,21 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 		// the firing-alerts goroutine above. When an alertname-specific query also
 		// applies, run it in a fourth goroutine so it overlaps with the namespace
 		// queries instead of waiting for all three to complete first.
-		cpuCh := make(chan string, 1)
-		memCh := make(chan string, 1)
-		restartsCh := make(chan string, 1)
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					slog.Error("cpu query goroutine panicked",
-						"recover", r,
-						"stack", string(debug.Stack()))
-					cpuCh <- fmt.Sprintf("(cpu query goroutine panicked: %v)", r)
-				}
-			}()
-			cpuCh <- p.query(ctx,
-				fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace="%s"}[5m])) by (pod)`, namespace))
-		}()
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					slog.Error("memory query goroutine panicked",
-						"recover", r,
-						"stack", string(debug.Stack()))
-					memCh <- fmt.Sprintf("(memory query goroutine panicked: %v)", r)
-				}
-			}()
-			memCh <- p.query(ctx,
-				fmt.Sprintf(`sum(container_memory_working_set_bytes{namespace="%s"}) by (pod)`, namespace))
-		}()
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					slog.Error("restarts query goroutine panicked",
-						"recover", r,
-						"stack", string(debug.Stack()))
-					restartsCh <- fmt.Sprintf("(restarts query goroutine panicked: %v)", r)
-				}
-			}()
-			restartsCh <- p.query(ctx,
-				fmt.Sprintf(`sum(kube_pod_container_status_restarts_total{namespace="%s"}) by (pod)`, namespace))
-		}()
+		cpuCh := runAsync("cpu query", func() string {
+			return p.query(ctx, fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace="%s"}[5m])) by (pod)`, namespace))
+		})
+		memCh := runAsync("memory query", func() string {
+			return p.query(ctx, fmt.Sprintf(`sum(container_memory_working_set_bytes{namespace="%s"}) by (pod)`, namespace))
+		})
+		restartsCh := runAsync("restarts query", func() string {
+			return p.query(ctx, fmt.Sprintf(`sum(kube_pod_container_status_restarts_total{namespace="%s"}) by (pod)`, namespace))
+		})
 
-		var alertnameCh chan string
+		var alertnameCh <-chan string
 		if alertnameQueryStr != "" {
-			alertnameCh = make(chan string, 1)
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						slog.Error("alertname query goroutine panicked",
-							"recover", r,
-							"stack", string(debug.Stack()))
-						alertnameCh <- fmt.Sprintf("(alertname query goroutine panicked: %v)", r)
-					}
-				}()
-				alertnameCh <- p.query(ctx, alertnameQueryStr)
-			}()
+			alertnameCh = runAsync("alertname query", func() string {
+				return p.query(ctx, alertnameQueryStr)
+			})
 		}
 
 		sections = append(sections,
@@ -279,20 +252,11 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 		// serially after <-firingCh, doubling worst-case latency for node-level
 		// alerts (no namespace label) that match an alertname-specific branch
 		// such as "node" → kube_node_status_condition.
-		var alertnameCh chan string
+		var alertnameCh <-chan string
 		if alertnameQueryStr != "" {
-			alertnameCh = make(chan string, 1)
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						slog.Error("alertname query goroutine panicked",
-							"recover", r,
-							"stack", string(debug.Stack()))
-						alertnameCh <- fmt.Sprintf("(alertname query goroutine panicked: %v)", r)
-					}
-				}()
-				alertnameCh <- p.query(ctx, alertnameQueryStr)
-			}()
+			alertnameCh = runAsync("alertname query", func() string {
+				return p.query(ctx, alertnameQueryStr)
+			})
 		}
 		sections = append(sections, "## Active Firing Alerts", <-firingCh)
 		if alertnameCh != nil {
@@ -630,18 +594,9 @@ func GatherContext(ctx context.Context, prom PrometheusMetricsGetter, clientset 
 	promCtx, promCancel := context.WithTimeout(ctx, promTimeout)
 	defer promCancel()
 
-	promCh := make(chan string, 1)
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				slog.Error("prometheus context goroutine panicked",
-					"recover", r,
-					"stack", string(debug.Stack()))
-				promCh <- fmt.Sprintf("(prometheus context gathering panicked: %v)", r)
-			}
-		}()
-		promCh <- prom.GetMetrics(promCtx, alert)
-	}()
+	promCh := runAsync("prometheus context", func() string {
+		return prom.GetMetrics(promCtx, alert)
+	})
 
 	events, podStatus, podLogs := GetKubeContext(ctx, clientset, alert, cfg)
 
