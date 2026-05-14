@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 )
@@ -108,13 +107,7 @@ const maxAIContextBytes = 2048
 // operator-provided multi-line host context. Carriage returns (\r) are
 // dropped, so Windows-style CRLF line endings are normalised to bare \n.
 func sanitizeHostContext(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		if r == '\t' || r == '\n' || !unicode.IsControl(r) {
-			b.WriteRune(r)
-		}
-	}
-	s = strings.TrimSpace(b.String())
+	s = strings.TrimSpace(shared.SanitizeOutput(s))
 	if len(s) > maxAIContextBytes {
 		// Reserve space for the marker so the total stays within maxAIContextBytes,
 		// matching the same accounting done in shared.Truncate. strings.ToValidUTF8
