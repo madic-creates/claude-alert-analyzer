@@ -86,6 +86,18 @@ var sshTool = anthropic.ToolUnionParam{
 
 const agentToolTimeout = 10 * time.Second
 
+// outcome label values for agent_tool_calls_total. Mirrors the constants in
+// k8s/agent.go; kept local because ssh_error is checkmk-only.
+const (
+	outcomeOK            = "ok"
+	outcomeRejectedValid = "rejected_validation"
+	outcomeRejectedVerb  = "rejected_verb"
+	outcomeExecError     = "exec_error"
+	outcomeSSHError      = "ssh_error"
+	outcomeNonzeroExit   = "nonzero_exit"
+	outcomeTimeout       = "timeout"
+)
+
 // DefaultDeniedCommands is the default denylist used when SSH_DENIED_COMMANDS is not set.
 var DefaultDeniedCommands = map[string]bool{
 	"rm": true, "rmdir": true, "dd": true, "mkfs": true, "mke2fs": true,
@@ -1022,21 +1034,21 @@ func RunAgenticDiagnostics(
 			if r := recover(); r != nil {
 				slog.Error("agent tool handler panicked", "tool", name, "recover", r)
 				if metrics != nil {
-					metrics.RecordAgentToolCall(name, "exec_error", time.Since(start))
+					metrics.RecordAgentToolCall(name, outcomeExecError, time.Since(start))
 				}
 				result = fmt.Sprintf("Tool %s panicked: %v — continue with a different command", name, r)
 				err = nil
 			}
 		}()
 		out, callErr := handleTool(name, input)
-		outcome := "ok"
+		outcome := outcomeOK
 		switch {
 		case callErr != nil:
-			outcome = "exec_error"
+			outcome = outcomeExecError
 		case strings.HasPrefix(out, "Invalid command: "):
-			outcome = "rejected_validation"
+			outcome = outcomeRejectedValid
 		case strings.HasPrefix(out, "Command denied"):
-			outcome = "rejected_verb"
+			outcome = outcomeRejectedVerb
 		// Distinguish timeouts, SSH transport errors, and non-zero exits.
 		// runSSHCommand uses three distinct formats:
 		//   "[exited: timeout after <d>]"      — timer fired
@@ -1047,11 +1059,11 @@ func RunAgenticDiagnostics(
 		// ssh_error; exit-code and transport annotations are then separable.
 		case strings.Contains(out, "[exited: timeout after"),
 			strings.Contains(out, "[exited: context cancelled"):
-			outcome = "timeout"
+			outcome = outcomeTimeout
 		case strings.Contains(out, "[exited: "):
-			outcome = "ssh_error"
+			outcome = outcomeSSHError
 		case strings.Contains(out, "[exit code: "):
-			outcome = "nonzero_exit"
+			outcome = outcomeNonzeroExit
 		}
 		if metrics != nil {
 			metrics.RecordAgentToolCall(name, outcome, time.Since(start))
