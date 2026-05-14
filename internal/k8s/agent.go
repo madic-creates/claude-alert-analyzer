@@ -148,6 +148,8 @@ var flagsConsumingNextToken = map[string]bool{
 	"-v": true, "--v": true,
 	"-o": true, "--output": true,
 	"--timeout": true, "--request-timeout": true,
+	"-c": true, "--container": true, // kubectl logs: skip container name before pod positional arg
+	"--revision": true, // kubectl rollout history: skip revision number before subcommand
 }
 
 func extractVerbs(argv []string) (verb, subVerb string) {

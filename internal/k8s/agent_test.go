@@ -166,6 +166,10 @@ func TestParseKubectlInput_VerbAllowlist(t *testing.T) {
 		// as the sub-verb, causing "kubectl rollout 60s is not permitted").
 		`["rollout","--timeout","60s","history","deployment/foo"]`,
 		`["rollout","--request-timeout","30s","history","deployment/foo"]`,
+		// --revision before the sub-verb must not be mistaken for the sub-verb
+		// (its integer value token was treated as the sub-verb, causing
+		// "kubectl rollout 5 is not permitted").
+		`["rollout","--revision","5","history","deployment/foo"]`,
 	}
 	for _, c := range allowed {
 		t.Run("allowed:"+c, func(t *testing.T) {
@@ -961,6 +965,19 @@ func TestSummarizeKubectlArgv(t *testing.T) {
 			name:     "--request-timeout before resource",
 			argv:     []string{"get", "--request-timeout", "30s", "nodes"},
 			wantVerb: "get", wantRes: "nodes",
+		},
+		// Regression: -c/--container consume the next token as a container
+		// name; without this, "kubectl logs -c mycontainer pod-x" would log
+		// resource="mycontainer" instead of resource="pod-x".
+		{
+			name:     "-c before pod",
+			argv:     []string{"logs", "-c", "mycontainer", "pod-x", "-n", "default"},
+			wantVerb: "logs", wantRes: "pod-x", wantNS: "default",
+		},
+		{
+			name:     "--container before pod",
+			argv:     []string{"logs", "--container", "mycontainer", "pod-x"},
+			wantVerb: "logs", wantRes: "pod-x",
 		},
 	}
 	for _, tc := range cases {
