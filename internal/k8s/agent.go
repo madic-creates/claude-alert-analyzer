@@ -25,7 +25,7 @@ const (
 	maxArgvElements    = 64
 	maxArgLen          = 4096
 	maxTotalArgBytes   = 16384
-	maxKubectlPromQLen = 4096 // also used by parsePromQLInput in Task 8
+	maxKubectlPromQLen = 4096
 )
 
 // errVerbDenied is a typed sentinel that validateKubectlVerb and
@@ -36,8 +36,8 @@ var errVerbDenied = errors.New("verb or flag denied")
 
 // parseKubectlInput validates the argv from a kubectl_exec tool call. It
 // checks structural constraints (length, control characters) then delegates to
-// validateKubectlFlags (global-flag denylist, Task 7) and validateKubectlVerb
-// (verb allowlist, Task 6). The split keeps each concern in its own table test.
+// validateKubectlFlags (global-flag denylist) and validateKubectlVerb
+// (verb allowlist). The split keeps each concern in its own table test.
 func parseKubectlInput(input json.RawMessage) ([]string, error) {
 	var parsed struct {
 		Command []string `json:"command"`
