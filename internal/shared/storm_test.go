@@ -78,6 +78,41 @@ func TestStormDetector_BucketRotation(t *testing.T) {
 	}
 }
 
+// TestStormDetector_NegativeUnixTime exercises the `+5` guard in Record's bucket
+// index formula: `int(minute%5+5) % 5`. Without the `+5`, Go's sign-preserving
+// modulo returns -1 for minute=-1 and `d.buckets[-1]` would panic with an
+// out-of-range index. The guard is documented in storm.go but was previously
+// untested because all other tests start at time.Unix(0, 0) (minute 0).
+func TestStormDetector_NegativeUnixTime(t *testing.T) {
+	// time.Unix(-60, 0) → Unix second -60 → minute -1 (negative modulo path)
+	clock := &fakeClock{t: time.Unix(-60, 0)}
+	d := NewStormDetector(50, clock.Now)
+
+	// Record() must not panic when minute is negative.
+	for i := 0; i < 3; i++ {
+		d.Record()
+	}
+	if got := d.Count(); got != 3 {
+		t.Fatalf("count at minute -1: got %d, want 3", got)
+	}
+
+	// Advance into a second negative minute (-2) and record more.
+	clock.advance(-60 * time.Second) // minute -2
+	for i := 0; i < 2; i++ {
+		d.Record()
+	}
+	if got := d.Count(); got != 5 {
+		t.Fatalf("count spanning minutes -2..-1: got %d, want 5", got)
+	}
+
+	// Advance past the 5-minute window so minute -2 expires.
+	// At minute 3 the cutoff is 3-4 = -1, so minute -2 falls out.
+	clock.advance(5 * 60 * time.Second) // forward to minute ~3
+	if got := d.Count(); got != 3 {
+		t.Fatalf("after minute -2 expires: got %d, want 3 (only minute -1 in window)", got)
+	}
+}
+
 func TestStormDetector_ConcurrentRecord(t *testing.T) {
 	d := NewStormDetector(1000, time.Now)
 	const N = 1000
