@@ -1296,6 +1296,49 @@ func TestHandleKubectlTool_RejectedValidOutcome(t *testing.T) {
 	}
 }
 
+// TestHandleKubectlTool_NonZeroExitWithPartialOutput verifies BRANCH A in
+// handleKubectlTool: when kubectl exits with a non-zero status AND has produced
+// partial output (e.g. logs truncated before a timeout, or partial results
+// before a transient error), the result wraps the output in a fenced code block
+// before the [exited: ...] annotation. Without this branch, partial output would
+// be silently discarded, hiding the last-known state of a resource from Claude.
+func TestHandleKubectlTool_NonZeroExitWithPartialOutput(t *testing.T) {
+	kc := &fakeKubectlRunner{
+		response: "partial output from kubectl",
+		err:      fmt.Errorf("exit status 1"),
+	}
+	pq := &fakePromQLQuerier{}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
+
+	runner := &fakeToolLoopRunner{
+		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
+			result, err := handleTool("kubectl_exec", json.RawMessage(`{"command":["get","pods"]}`))
+			if err != nil {
+				t.Errorf("non-zero exit should not propagate as Go error, got: %v", err)
+			}
+			// BRANCH A: output is wrapped in a fenced code block before [exited: ...].
+			if !strings.Contains(result, "```\npartial output from kubectl\n```") {
+				t.Errorf("expected fenced code block around partial output, got: %q", result)
+			}
+			if !strings.Contains(result, "[exited: exit status 1]") {
+				t.Errorf("expected [exited: exit status 1] annotation, got: %q", result)
+			}
+			return "done", nil
+		},
+	}
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="nonzero_exit",product="k8s",tool="kubectl_exec"} 1`) {
+		t.Errorf("expected nonzero_exit metric for partial output + error; body:\n%s", body)
+	}
+}
+
 // TestParseKubectlInput_InvalidJSON verifies the JSON unmarshal error path in
 // parseKubectlInput — the "parse command input: %w" branch that wraps the
 // json.Unmarshal error, distinct from the structural validation paths exercised
