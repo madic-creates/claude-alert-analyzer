@@ -12,7 +12,6 @@ import (
 	"runtime/debug"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
@@ -531,45 +530,12 @@ func GetKubeContext(ctx context.Context, clientset kubernetes.Interface, alert A
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	var wg sync.WaitGroup
-	wg.Add(3)
-	go func() {
-		defer wg.Done()
-		defer func() {
-			if r := recover(); r != nil {
-				slog.Error("events goroutine panicked",
-					"recover", r,
-					"stack", string(debug.Stack()))
-				events = fmt.Sprintf("(events context gathering panicked: %v)", r)
-			}
-		}()
-		events = getEvents(ctx, clientset, namespace)
-	}()
-	go func() {
-		defer wg.Done()
-		defer func() {
-			if r := recover(); r != nil {
-				slog.Error("pod status goroutine panicked",
-					"recover", r,
-					"stack", string(debug.Stack()))
-				pods = fmt.Sprintf("(pod status context gathering panicked: %v)", r)
-			}
-		}()
-		pods = getPodStatus(ctx, clientset, namespace)
-	}()
-	go func() {
-		defer wg.Done()
-		defer func() {
-			if r := recover(); r != nil {
-				slog.Error("pod logs goroutine panicked",
-					"recover", r,
-					"stack", string(debug.Stack()))
-				logs = fmt.Sprintf("(pod logs context gathering panicked: %v)", r)
-			}
-		}()
-		logs = getPodLogs(ctx, clientset, namespace, cfg)
-	}()
-	wg.Wait()
+	eventsCh := runAsync("events", func() string { return getEvents(ctx, clientset, namespace) })
+	podsCh := runAsync("pod status", func() string { return getPodStatus(ctx, clientset, namespace) })
+	logsCh := runAsync("pod logs", func() string { return getPodLogs(ctx, clientset, namespace, cfg) })
+	events = <-eventsCh
+	pods = <-podsCh
+	logs = <-logsCh
 	return
 }
 

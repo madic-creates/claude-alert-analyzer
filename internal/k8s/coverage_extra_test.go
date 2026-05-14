@@ -408,7 +408,7 @@ func TestGetKubeContext_GoroutinePanicRecovery(t *testing.T) {
 
 // TestGetKubeContext_PodLogsGoroutinePanicRecovery verifies that a panic inside
 // the pod logs goroutine of GetKubeContext is recovered and the logs output
-// receives a "(pod logs context gathering panicked: ...)" sentinel without
+// receives a "(pod logs goroutine panicked: ...)" sentinel without
 // deadlocking. The events and pod-status goroutines must still complete normally.
 //
 // This closes the gap in TestGetKubeContext_GoroutinePanicRecovery, which covers
