@@ -3634,3 +3634,60 @@ func TestRunAgenticDiagnostics_RejectedVerbMetricClassification(t *testing.T) {
 		t.Errorf("expected rejected_verb metric for denied command; body:\n%s", body)
 	}
 }
+
+// TestRunAgenticDiagnostics_SSHTransportErrorMetricClassification verifies that
+// wrappedHandleTool records outcome="ssh_error" when runSSHCommand returns a
+// transport-level error (not a timeout or context cancellation). This covers
+// the `strings.Contains(out, "[exited: ")` branch that fires for errors like
+// "new session: ..." — the SSH connection was closed before the command ran.
+//
+// This test pins the contract between:
+//   - ssh.go returning `sshResult{err: fmt.Errorf("new session: %w", err)}` for
+//     session-creation failures (no exit code, no output),
+//   - handleTool formatting that as `"$ cmd\n[exited: new session: ...]"`, and
+//   - wrappedHandleTool classifying it as outcome="ssh_error" (not "timeout" or
+//     "nonzero_exit") via the ordered strings.Contains switch.
+//
+// It also validates that the pre-materialized "ssh_error" label in
+// allAgentOutcomes (prom_metrics.go) is actually reachable via the code path.
+func TestRunAgenticDiagnostics_SSHTransportErrorMetricClassification(t *testing.T) {
+	// Start a real SSH server, then immediately close the client so that
+	// NewSession() fails with a transport error rather than succeeding.
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		sendExitStatus(ch, 0)
+	})
+	client.Close()
+
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)}
+	runner := &driverToolLoopRunner{
+		driver: func(handleTool func(string, json.RawMessage) (string, error)) (string, error) {
+			result, err := handleTool("execute_command", json.RawMessage(`{"command":["uptime"]}`))
+			if err != nil {
+				t.Errorf("wrappedHandleTool returned unexpected error: %v", err)
+			}
+			// The output must contain "[exited: " (transport error prefix) but
+			// must NOT contain "timeout after" or "context cancelled" so that
+			// wrappedHandleTool routes it to ssh_error rather than timeout.
+			if !strings.Contains(result, "[exited: ") {
+				t.Errorf("expected result to contain %q for transport error, got: %q", "[exited: ", result)
+			}
+			return "analysis", nil
+		},
+	}
+
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, &fixedDialer{client: client}, metrics, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 10, "test-model",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="ssh_error",product="checkmk",tool="execute_command"} 1`) {
+		t.Errorf("expected ssh_error metric for SSH transport failure; body:\n%s", body)
+	}
+}
