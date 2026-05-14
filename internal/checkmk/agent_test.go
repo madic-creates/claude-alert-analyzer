@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
@@ -3632,6 +3633,79 @@ func TestRunAgenticDiagnostics_RejectedVerbMetricClassification(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="rejected_verb",product="checkmk",tool="execute_command"} 1`) {
 		t.Errorf("expected rejected_verb metric for denied command; body:\n%s", body)
+	}
+}
+
+// TestRunAgenticDiagnostics_PartialSSHOutputOnContextCancel verifies that when
+// an SSH command produces partial output before the context is cancelled,
+// handleTool wraps that output in a fenced code block and appends the
+// "[exited: context cancelled...]" annotation. This covers the
+// r.err != nil && r.output != "" branch in handleTool (agent.go), which was
+// untested because all prior cancel/timeout tests pre-cancelled the context
+// before the server could write any output.
+//
+// Production scenario: a diagnostic command (e.g. journalctl or netstat) starts
+// streaming output, but the caller's context is cancelled before it finishes —
+// the operator still wants to see the partial data alongside the error annotation.
+func TestRunAgenticDiagnostics_PartialSSHOutputOnContextCancel(t *testing.T) {
+	outputWritten := make(chan struct{})
+	unblockCh := make(chan struct{})
+	t.Cleanup(func() { close(unblockCh) })
+
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		_, _ = io.WriteString(ch, "partial diagnostic output\n")
+		close(outputWritten) // signal: data is in the SSH channel, client LW will receive it
+		<-unblockCh          // hold the channel open until the test is done
+	})
+
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)}
+	runner := &capturingToolRunner{
+		calls:  []agentToolCall{{name: "execute_command", input: `{"command": ["df", "-h"]}`}},
+		result: "analysis",
+	}
+	dialer := &fixedDialer{client: client}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	// Cancel the context after the server has written partial output to the SSH
+	// channel. The 20ms sleep mirrors the pattern in ssh_test.go to give the
+	// SSH transport time to deliver the data to the client-side LimitedWriter
+	// before the context deadline fires.
+	go func() {
+		<-outputWritten
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	_, _ = RunAgenticDiagnostics(
+		ctx, Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, dialer, metrics, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 3, "test-model",
+	)
+
+	if len(runner.toolOutputs) == 0 {
+		t.Fatal("capturingToolRunner: no tool outputs recorded")
+	}
+	got := runner.toolOutputs[0]
+	// handleTool must include the partial output in a fenced code block.
+	if !strings.Contains(got, "partial diagnostic output") {
+		t.Errorf("expected partial output in tool result; got: %q", got)
+	}
+	if !strings.Contains(got, "```\n") {
+		t.Errorf("expected fenced code block wrapper in tool result; got: %q", got)
+	}
+	// The [exited: context cancelled...] annotation must follow the code block.
+	if !strings.Contains(got, "[exited: context cancelled") {
+		t.Errorf("expected context-cancelled annotation in tool result; got: %q", got)
+	}
+
+	// wrappedHandleTool classifies context-cancelled as outcome="timeout".
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="timeout",product="checkmk",tool="execute_command"} 1`) {
+		t.Errorf("expected timeout metric for context-cancelled command with partial output; body:\n%s", body)
 	}
 }
 
