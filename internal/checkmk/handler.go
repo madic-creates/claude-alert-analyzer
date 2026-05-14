@@ -30,6 +30,7 @@ func HandleWebhook(
 	storm *shared.StormDetector,
 ) http.HandlerFunc {
 	cooldownTTL := time.Duration(cfg.CooldownSeconds) * time.Second
+	expectedToken := []byte("Bearer " + cfg.WebhookSecret)
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		httpStatus := http.StatusOK
@@ -37,8 +38,7 @@ func HandleWebhook(
 			metrics.RecordWebhookOutcome(shared.OutcomeForStatus(httpStatus))
 		}()
 
-		expected := []byte("Bearer " + cfg.WebhookSecret)
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), expected) != 1 {
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), expectedToken) != 1 {
 			httpStatus = http.StatusUnauthorized
 			http.Error(w, "unauthorized", httpStatus)
 			return
