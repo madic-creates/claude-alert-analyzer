@@ -442,6 +442,57 @@ func TestNtfyPublisher_Publish_DrainsBodyForConnectionReuse(t *testing.T) {
 	}
 }
 
+// TestNtfyPublisher_Publish_DrainsLargeErrorBodyForConnectionReuse verifies
+// that the drain cap is large enough to consume a realistic reverse-proxy
+// error page (e.g. a Cloudflare or nginx HTML error response sitting in front
+// of ntfy). The previous 4 KiB drain cap silently defeated connection reuse
+// whenever the error body exceeded ~4 KiB — every retry would open a fresh TCP
+// (and on real deployments TLS) connection, multiplying latency during storms.
+func TestNtfyPublisher_Publish_DrainsLargeErrorBodyForConnectionReuse(t *testing.T) {
+	var mu sync.Mutex
+	conns := make(map[net.Conn]struct{})
+
+	callCount := 0
+	// 32 KiB body — well above the previous 4 KiB cap, well below the new
+	// MaxBodyDrainBytes (64 KiB). Mirrors the size of a typical HTML error
+	// page returned by a CDN or reverse proxy.
+	const largeErrorBodySize = 32 * 1024
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, strings.Repeat("x", largeErrorBodySize))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv.Config.ConnState = func(c net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			mu.Lock()
+			conns[c] = struct{}{}
+			mu.Unlock()
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+
+	p := &NtfyPublisher{HTTP: srv.Client(), URL: srv.URL, Topic: "alerts", RetryDelays: []time.Duration{0, 0}}
+	if err := p.Publish(context.Background(), "t", "default", "body"); err != nil {
+		t.Fatalf("expected success after retries, got: %v", err)
+	}
+	if callCount != 3 {
+		t.Errorf("expected 3 attempts, got %d", callCount)
+	}
+
+	mu.Lock()
+	numConns := len(conns)
+	mu.Unlock()
+
+	if numConns != 1 {
+		t.Errorf("expected 1 TCP connection for a %d-byte error body (full drain enables reuse), got %d", largeErrorBodySize, numConns)
+	}
+}
+
 // TestNtfyPublisher_Publish_RetryContextCancelled verifies that a cancelled
 // context aborts retries before the next delay completes and that the returned
 // error wraps both the context error and the last HTTP error so callers can

@@ -13,6 +13,18 @@ import (
 // to prevent a malicious or buggy upstream from exhausting memory.
 const MaxResponseBytes = 2 * 1024 * 1024 // 2 MiB
 
+// MaxBodyDrainBytes bounds how much of a non-success response body is drained
+// to io.Discard before Close so Go's HTTP transport can return the connection
+// to the pool for reuse. Set to 64 KiB so realistic upstream error responses
+// — including HTML error pages emitted by reverse proxies (nginx, Cloudflare,
+// AWS ALB) that wrap the real service — are fully consumed. The previous 4 KiB
+// cap silently defeated connection reuse whenever an intermediate proxy
+// returned a larger error page, forcing a new TCP (and TLS) handshake on every
+// retry. The cap still bounds time spent reading from a hostile or
+// pathologically slow server; combined with the per-request HTTP client
+// timeout, total drain cost stays bounded.
+const MaxBodyDrainBytes = 64 * 1024 // 64 KiB
+
 // LimitedTransport wraps an http.RoundTripper to (a) cap response body size at
 // MaxResponseBytes and (b) observe round-trip latency in a Prometheus histogram
 // when the body is closed.

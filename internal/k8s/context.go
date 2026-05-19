@@ -74,7 +74,7 @@ func (p *PrometheusClient) query(ctx context.Context, queryStr string) string {
 		// Without this, Go's transport closes the TCP connection instead of
 		// returning it to the pool, causing a new dial on the next query.
 		// Cap the drain to avoid blocking on a pathologically large error body.
-		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096)) //nolint:errcheck
+		io.Copy(io.Discard, io.LimitReader(resp.Body, shared.MaxBodyDrainBytes)) //nolint:errcheck
 		return fmt.Sprintf("(Prometheus returned %d)", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, shared.MaxResponseBytes))

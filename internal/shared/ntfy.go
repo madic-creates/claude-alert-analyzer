@@ -123,8 +123,11 @@ func (n *NtfyPublisher) Publish(ctx context.Context, title, priority, body strin
 		// return the connection to the pool for reuse on the next attempt.
 		// Without this, the transport closes the TCP connection instead of
 		// reusing it, causing a new dial on every retry — the same pattern
-		// used in k8s/context.go for non-200 Prometheus responses.
-		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096)) //nolint:errcheck
+		// used in k8s/context.go for non-200 Prometheus responses. The cap is
+		// large enough to absorb HTML error pages emitted by reverse proxies
+		// in front of ntfy (Cloudflare, nginx) while still bounding time spent
+		// reading from a hostile upstream.
+		io.Copy(io.Discard, io.LimitReader(resp.Body, MaxBodyDrainBytes)) //nolint:errcheck
 		_ = resp.Body.Close()
 
 		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
