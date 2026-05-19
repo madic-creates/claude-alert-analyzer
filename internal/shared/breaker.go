@@ -137,6 +137,17 @@ func (b *CircuitBreaker) recordResult(p *Permit, err error) {
 	p.used = true
 
 	if p.isProbe {
+		// If halfOpenInFlight is already false the probe-watchdog (in Acquire)
+		// has already fired for this probe — it cleared the flag, transitioned
+		// the breaker to open, and treated the probe as failed. A late Done()
+		// call here must NOT override that decision: otherwise a slow probe
+		// that eventually returns nil could re-close a breaker the watchdog
+		// just re-opened, silently defeating the safety mechanism. A late
+		// Done(err) would similarly extend the open period by overwriting
+		// openedAt. Drop the late result on the floor instead.
+		if !b.halfOpenInFlight {
+			return
+		}
 		b.halfOpenInFlight = false
 		if err == nil {
 			b.state = breakerClosed

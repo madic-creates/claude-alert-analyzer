@@ -164,6 +164,75 @@ func TestCircuitBreaker_ProbeWatchdogReleasesStuckProbe(t *testing.T) {
 	}
 }
 
+// TestCircuitBreaker_ProbeWatchdogIsAuthoritative verifies that once the
+// probe-watchdog has fired (inside Acquire), a late Done() call on the same
+// probe permit does not override the watchdog's decision. The watchdog
+// treats a stuck probe as failed and re-opens the breaker; if a late
+// Done(nil) could then close the breaker, the safety mechanism would be
+// silently defeated. Late Done(err) must not extend the open period either.
+func TestCircuitBreaker_ProbeWatchdogIsAuthoritative(t *testing.T) {
+	t.Run("late_success_does_not_close", func(t *testing.T) {
+		clk := &fakeClock{t: time.Unix(0, 0)}
+		b := NewCircuitBreaker(1, 10*time.Second, 5*time.Second, clk.Now)
+
+		p, _ := b.Acquire()
+		p.Done(errors.New("fail"))
+		clk.advance(11 * time.Second)
+		probe, _ := b.Acquire()
+		if !probe.IsProbe() {
+			t.Fatal("expected probe permit")
+		}
+
+		// Advance past maxProbeDuration and call Acquire to fire the watchdog.
+		clk.advance(6 * time.Second)
+		if _, err := b.Acquire(); !errors.Is(err, ErrCircuitOpen) {
+			t.Fatalf("watchdog Acquire: err=%v, want ErrCircuitOpen", err)
+		}
+
+		// The slow probe eventually succeeds. The watchdog already decided.
+		probe.Done(nil)
+
+		// Within openDuration the breaker must remain open.
+		if _, err := b.Acquire(); !errors.Is(err, ErrCircuitOpen) {
+			t.Fatalf("after late probe success: err=%v, want ErrCircuitOpen", err)
+		}
+	})
+
+	t.Run("late_failure_does_not_extend_open", func(t *testing.T) {
+		clk := &fakeClock{t: time.Unix(0, 0)}
+		b := NewCircuitBreaker(1, 10*time.Second, 5*time.Second, clk.Now)
+
+		p, _ := b.Acquire()
+		p.Done(errors.New("fail"))
+		clk.advance(11 * time.Second)
+		probe, _ := b.Acquire()
+
+		// Fire the watchdog at t=17s, openedAt becomes 17s.
+		clk.advance(6 * time.Second)
+		if _, err := b.Acquire(); !errors.Is(err, ErrCircuitOpen) {
+			t.Fatalf("watchdog Acquire: err=%v, want ErrCircuitOpen", err)
+		}
+
+		// At t=22s, before the open period (17s + 10s = 27s) has elapsed,
+		// the slow probe finally returns an error.
+		clk.advance(5 * time.Second)
+		probe.Done(errors.New("probe failed late"))
+
+		// At t=28s (11s after watchdog), the open period from the watchdog
+		// has elapsed: Acquire must issue a fresh probe. If the late Done(err)
+		// had overwritten openedAt to 22s, the breaker would still be open
+		// until 32s.
+		clk.advance(6 * time.Second)
+		next, err := b.Acquire()
+		if err != nil {
+			t.Fatalf("post-open-period Acquire: err=%v, want fresh probe", err)
+		}
+		if !next.IsProbe() {
+			t.Fatal("expected fresh probe permit after open period elapsed")
+		}
+	})
+}
+
 func TestCircuitBreaker_ConcurrentHalfOpenAcquireGivesOnlyOneProbe(t *testing.T) {
 	clk := &fakeClock{t: time.Unix(0, 0)}
 	b := NewCircuitBreaker(1, 10*time.Second, time.Minute, clk.Now)
