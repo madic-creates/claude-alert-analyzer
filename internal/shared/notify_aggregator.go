@@ -29,6 +29,13 @@ var testHookBeforeAddSend func()
 // against. Nil in production.
 var testHookBeforeStopSelect func()
 
+// testHookBeforeDrainSelect is called by the owner goroutine in tests at the
+// top of every drain-loop iteration, just before the a.in/drainDeadline
+// select runs. It lets tests stage the "both channels ready" race that the
+// bias-toward-result drain in the drainDeadline.C branch guards against.
+// Nil in production.
+var testHookBeforeDrainSelect func()
+
 // NotifyAggregator buffers alert titles during a time interval and emits one
 // summary notification per interval. It is concurrency-safe via a single
 // owner goroutine that owns buffer + timer; Add() and Stop() communicate
@@ -238,6 +245,9 @@ func (a *NotifyAggregator) run() {
 			drainDeadline := time.NewTimer(10 * time.Millisecond)
 		drain:
 			for {
+				if testHookBeforeDrainSelect != nil {
+					testHookBeforeDrainSelect()
+				}
 				select {
 				case alertTitle := <-a.in:
 					buffer = append(buffer, alertTitle)
@@ -246,7 +256,21 @@ func (a *NotifyAggregator) run() {
 					// so no explicit Stop+drain is needed before calling Reset.
 					drainDeadline.Reset(10 * time.Millisecond)
 				case <-drainDeadline.C:
-					break drain
+					// Bias toward draining real items: when drainDeadline.C fires
+					// at the same instant an Add() completes its send into a.in,
+					// Go's select picks at random. Without this non-blocking drain,
+					// ~50% of such races would silently abandon a real alert title
+					// because the owner goroutine is about to exit and a.in is
+					// never closed. Mirrors the pattern at runSSHCommand
+					// (internal/checkmk/ssh.go) and Stop() (above).
+					for {
+						select {
+						case alertTitle := <-a.in:
+							buffer = append(buffer, alertTitle)
+						default:
+							break drain
+						}
+					}
 				}
 			}
 			drainDeadline.Stop()

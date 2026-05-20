@@ -430,6 +430,54 @@ func TestNotifyAggregator_Stop_BiasTowardAckResult(t *testing.T) {
 	}
 }
 
+// TestNotifyAggregator_Drain_BiasTowardItem exercises the race window where
+// drainDeadline.C fires at the same instant an Add() completes its send into
+// a.in. With both channels ready in the drain-loop select, Go picks at
+// random; without the bias-toward-result non-blocking drain in the
+// drainDeadline.C branch, ~50% of iterations would silently abandon the
+// alert because a.in is never closed and the owner goroutine is about to
+// exit.
+//
+// The test hook (testHookBeforeDrainSelect) makes the race deterministic on
+// the first drain-loop iteration: it waits past the 10 ms drainDeadline,
+// then injects an item directly into a.in (bypassing Add()'s stopping-flag
+// guard). The select then sees both <-a.in and <-drainDeadline.C ready.
+// Across 100 iterations the probability of all 100 happening to pick a.in
+// at random is (0.5)^100 ≈ 0, so without the fix this test fails with
+// overwhelming probability.
+func TestNotifyAggregator_Drain_BiasTowardItem(t *testing.T) {
+	for iter := 0; iter < 100; iter++ {
+		pub := &aggFakePublisher{}
+		a := NewNotifyAggregator([]Publisher{pub}, time.Hour, "S: %d", "5", newDropsCounter())
+
+		var once sync.Once
+		testHookBeforeDrainSelect = func() {
+			once.Do(func() {
+				// Sleep past the 10 ms drainDeadline so its channel is
+				// definitely ready, then inject an item so a.in is also
+				// ready. Both branches of the drain-loop select are now
+				// simultaneously selectable.
+				time.Sleep(25 * time.Millisecond)
+				a.in <- "race-item"
+			})
+		}
+
+		err := a.Stop(context.Background())
+		testHookBeforeDrainSelect = nil
+
+		if err != nil {
+			t.Fatalf("iter=%d: Stop returned %v", iter, err)
+		}
+		if got := pub.callCount(); got != 1 {
+			t.Fatalf("iter=%d: expected 1 publish, got %d (race-item lost to abandoned a.in)", iter, got)
+		}
+		body := pub.lastCall().body
+		if body != "race-item" {
+			t.Fatalf("iter=%d: expected body %q, got %q", iter, "race-item", body)
+		}
+	}
+}
+
 func TestNotifyAggregator_StopRaceNoLosses(t *testing.T) {
 	pub := &aggFakePublisher{}
 	drops := newDropsCounter()
