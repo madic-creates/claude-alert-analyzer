@@ -154,14 +154,21 @@ func (n *NtfyPublisher) Publish(ctx context.Context, title, priority, body strin
 		io.Copy(io.Discard, io.LimitReader(resp.Body, MaxBodyDrainBytes)) //nolint:errcheck
 		_ = resp.Body.Close()
 
+		// Redact and truncate before embedding the body snippet in the error.
+		// A reverse proxy in front of ntfy (Cloudflare, nginx) may reflect
+		// request headers (including our "Authorization: Bearer <token>") into
+		// the error page body, and `errors.Wrap`-style joined errors flow into
+		// the slog.Error("publish failed", ...) at PublishAll. Mirrors the
+		// pattern at k8s/context.go:80-82 and checkmk/context.go:163-164,247.
+		respText := Truncate(RedactSecrets(strings.TrimSpace(string(respSnippet))), 200)
 		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
 			// Server error or rate limit — worth retrying.
-			lastErr = fmt.Errorf("ntfy returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respSnippet)))
+			lastErr = fmt.Errorf("ntfy returned %d: %s", resp.StatusCode, respText)
 			continue
 		}
 		if resp.StatusCode >= 300 {
 			// Other client error (4xx) — retrying won't help.
-			return fmt.Errorf("ntfy returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respSnippet)))
+			return fmt.Errorf("ntfy returned %d: %s", resp.StatusCode, respText)
 		}
 		return nil
 	}

@@ -393,6 +393,39 @@ func TestNtfyPublisher_Publish_NoRetryOn4xx(t *testing.T) {
 	}
 }
 
+// TestNtfyPublisher_Publish_RedactsErrorBodySnippet verifies that when ntfy
+// (or a reverse proxy in front of it) returns a non-2xx response whose body
+// contains a credential — e.g. an upstream that reflects the request's
+// Authorization header into the error page — the snippet embedded in the
+// returned error is passed through RedactSecrets. Without this, the bearer
+// token would flow into the slog.Error("publish failed", ...) at PublishAll
+// and into any joined error returned to the caller. Mirrors the redaction
+// pattern at k8s/context.go:80-82 and checkmk/context.go:163-164,247.
+func TestNtfyPublisher_Publish_RedactsErrorBodySnippet(t *testing.T) {
+	const leakedToken = "Authorization: Bearer sk-ant-abc123secret456"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintln(w, "Upstream rejected request with "+leakedToken)
+	}))
+	defer srv.Close()
+
+	p := &NtfyPublisher{HTTP: srv.Client(), URL: srv.URL, Topic: "alerts"}
+	err := p.Publish(context.Background(), "t", "default", "body")
+	if err == nil {
+		t.Fatal("expected error for 400 response")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "400") {
+		t.Errorf("error should mention status code, got: %v", err)
+	}
+	if strings.Contains(msg, "sk-ant-abc123secret456") {
+		t.Errorf("raw token leaked into error message: %s", msg)
+	}
+	if !strings.Contains(msg, "[REDACTED]") {
+		t.Errorf("redaction marker missing from error message: %s", msg)
+	}
+}
+
 // TestNtfyPublisher_Publish_DrainsBodyForConnectionReuse verifies that when ntfy
 // returns a non-2xx response, the full response body is consumed before Close so
 // Go's HTTP transport can return the connection to the pool. Without draining,
