@@ -2,6 +2,7 @@ package shared
 
 import (
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -65,16 +66,24 @@ func (p *Permit) Done(err error) {
 
 // NewCircuitBreaker constructs a breaker with the given thresholds and clock.
 // threshold <= 0 returns nil ("disabled"). Defaults applied for zero
-// durations: openDuration=60s, maxProbeDuration=60s.
+// durations: openDuration=60s, maxProbeDuration=60s. Non-positive durations
+// emit a slog.Warn so direct callers (tests, future call sites) can spot the
+// substitution; production callers in cmd/*/main.go already enforce a
+// positive bound via ParseIntEnv so this normally fires only in test code.
 func NewCircuitBreaker(threshold int, openDuration, maxProbeDuration time.Duration, now func() time.Time) *CircuitBreaker {
 	if threshold <= 0 {
 		return nil
 	}
+	const defaultDuration = 60 * time.Second
 	if openDuration <= 0 {
-		openDuration = 60 * time.Second
+		slog.Warn("circuit breaker: non-positive duration substituted with default",
+			"param", "openDuration", "value", openDuration, "default", defaultDuration)
+		openDuration = defaultDuration
 	}
 	if maxProbeDuration <= 0 {
-		maxProbeDuration = 60 * time.Second
+		slog.Warn("circuit breaker: non-positive duration substituted with default",
+			"param", "maxProbeDuration", "value", maxProbeDuration, "default", defaultDuration)
+		maxProbeDuration = defaultDuration
 	}
 	if now == nil {
 		now = time.Now

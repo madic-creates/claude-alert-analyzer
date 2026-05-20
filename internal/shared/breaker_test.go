@@ -1,7 +1,11 @@
 package shared
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -426,6 +430,67 @@ func TestCircuitBreaker_ZeroDurationDefaults(t *testing.T) {
 	probe, err := b.Acquire()
 	if err != nil || !probe.IsProbe() {
 		t.Fatalf("expected probe at 61s (60s default): err=%v probe=%v", err, probe.IsProbe())
+	}
+}
+
+// TestCircuitBreaker_NonPositiveDurationLogsWarn verifies that the
+// non-positive duration fallback in NewCircuitBreaker emits a slog.Warn
+// record naming the offending parameter. Production callers enforce a
+// positive bound via ParseIntEnv, so the warn surfaces misuse by direct
+// callers (tests or future code paths) rather than catching real
+// misconfiguration — the value is observable instead of silent.
+func TestCircuitBreaker_NonPositiveDurationLogsWarn(t *testing.T) {
+	cases := []struct {
+		name      string
+		open      time.Duration
+		probe     time.Duration
+		wantParam string
+	}{
+		{"open_zero", 0, time.Minute, "openDuration"},
+		{"open_negative", -time.Second, time.Minute, "openDuration"},
+		{"probe_zero", time.Minute, 0, "maxProbeDuration"},
+		{"probe_negative", time.Minute, -time.Second, "maxProbeDuration"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			handler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+			old := slog.Default()
+			slog.SetDefault(slog.New(handler))
+			t.Cleanup(func() { slog.SetDefault(old) })
+
+			b := NewCircuitBreaker(1, tc.open, tc.probe, time.Now)
+			if b == nil {
+				t.Fatal("expected non-nil breaker")
+			}
+
+			found := false
+			for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+				if line == "" {
+					continue
+				}
+				var rec map[string]any
+				if json.Unmarshal([]byte(line), &rec) != nil {
+					continue
+				}
+				if rec["msg"] != "circuit breaker: non-positive duration substituted with default" {
+					continue
+				}
+				if rec["param"] != tc.wantParam {
+					continue
+				}
+				found = true
+				if _, ok := rec["value"]; !ok {
+					t.Errorf("slog record missing value field; record: %s", line)
+				}
+				if _, ok := rec["default"]; !ok {
+					t.Errorf("slog record missing default field; record: %s", line)
+				}
+			}
+			if !found {
+				t.Errorf("no slog warn record with param=%q found; log output:\n%s", tc.wantParam, buf.String())
+			}
+		})
 	}
 }
 
