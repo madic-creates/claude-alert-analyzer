@@ -1042,6 +1042,16 @@ func RunAgenticDiagnostics(
 		}()
 		out, callErr := handleTool(name, input)
 		outcome := outcomeOK
+		// The handleTool result format always appends the trailer (if any) as
+		// the final line, e.g. "$ cmd\n```\n<output>\n```\n[exited: ...]".
+		// Inspect only that last line so a successful command whose SSH output
+		// happens to contain "[exit code: 1]" or "[exited: timeout after 5s]"
+		// (common in journalctl, systemctl status, or any log dump) is not
+		// silently misclassified as a failure outcome.
+		lastLine := out
+		if i := strings.LastIndex(out, "\n"); i >= 0 {
+			lastLine = out[i+1:]
+		}
 		switch {
 		case callErr != nil:
 			outcome = outcomeExecError
@@ -1057,12 +1067,12 @@ func RunAgenticDiagnostics(
 		//   "[exit code: <N>]"                 — remote command exited non-zero
 		// The timeout patterns are checked first so they don't fall through to
 		// ssh_error; exit-code and transport annotations are then separable.
-		case strings.Contains(out, "[exited: timeout after"),
-			strings.Contains(out, "[exited: context cancelled"):
+		case strings.HasPrefix(lastLine, "[exited: timeout after"),
+			strings.HasPrefix(lastLine, "[exited: context cancelled"):
 			outcome = outcomeTimeout
-		case strings.Contains(out, "[exited: "):
+		case strings.HasPrefix(lastLine, "[exited: "):
 			outcome = outcomeSSHError
-		case strings.Contains(out, "[exit code: "):
+		case strings.HasPrefix(lastLine, "[exit code: "):
 			outcome = outcomeNonzeroExit
 		}
 		if metrics != nil {

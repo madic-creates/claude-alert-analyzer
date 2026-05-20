@@ -3765,3 +3765,56 @@ func TestRunAgenticDiagnostics_SSHTransportErrorMetricClassification(t *testing.
 		t.Errorf("expected ssh_error metric for SSH transport failure; body:\n%s", body)
 	}
 }
+
+// TestRunAgenticDiagnostics_TrailerLookalikeInOutputNotMisclassified pins
+// that wrappedHandleTool inspects only the last line of the tool result when
+// classifying outcomes, not the full string. journalctl, systemctl status,
+// and other log dumps routinely contain substrings like "[exit code: 1]" or
+// "[exited: timeout after 5s]" inside their output. The old implementation
+// used strings.Contains across the whole result, so a successful command
+// (exit 0) whose output happened to include those substrings was silently
+// misclassified as outcome="nonzero_exit" or outcome="timeout" in the
+// alert_analyzer_agent_tool_calls_total counter — corrupting the metric
+// without any user-visible symptom.
+func TestRunAgenticDiagnostics_TrailerLookalikeInOutputNotMisclassified(t *testing.T) {
+	// A successful command whose stdout contains all three trailer patterns.
+	// The exit status is 0, so the trailer appended by handleTool is just the
+	// closing ```, never "[exited: ...]" or "[exit code: ...]".
+	const cmdOutput = "May 19 10:00 backup: [exit code: 1]\n" +
+		"May 19 10:01 watchdog: [exited: timeout after 30s]\n" +
+		"May 19 10:02 daemon: [exited: context cancelled: deadline]\n"
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		_, _ = io.WriteString(ch, cmdOutput)
+		sendExitStatus(ch, 0)
+	})
+
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)}
+	runner := &capturingToolRunner{
+		calls:  []agentToolCall{{name: "execute_command", input: `{"command": ["journalctl", "--no-pager", "-n", "50"]}`}},
+		result: "analysis",
+	}
+	dialer := &fixedDialer{client: client}
+
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, dialer, metrics, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 3, "test-model",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
+	body := rec.Body.String()
+
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="ok",product="checkmk",tool="execute_command"} 1`) {
+		t.Errorf("expected ok metric for exit-0 command with trailer-lookalike output; body:\n%s", body)
+	}
+	for _, wrong := range []string{"timeout", "ssh_error", "nonzero_exit"} {
+		needle := `alert_analyzer_agent_tool_calls_total{outcome="` + wrong + `",product="checkmk",tool="execute_command"} 1`
+		if strings.Contains(body, needle) {
+			t.Errorf("exit-0 command misclassified as %q; body:\n%s", wrong, body)
+		}
+	}
+}
