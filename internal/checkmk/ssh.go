@@ -93,6 +93,11 @@ func (d *SSHDialer) Dial(ctx context.Context, hostname, ip string) (*ssh.Client,
 // truncation in agent.go (4 KiB) has a chance to run.
 const maxSSHOutputBytes = 512 * 1024 // 512 KiB
 
+// testHookBeforeRunSSHSelect is called by runSSHCommand in tests just before
+// the await-select, so tests can stage the "both channels ready" race that
+// the bias-toward-result drains guard against. Nil in production.
+var testHookBeforeRunSSHSelect func()
+
 type sshResult struct {
 	output    string
 	exitCode  int // non-zero when the remote command exited with a non-zero status
@@ -162,13 +167,33 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
-	select {
-	case r := <-done:
+	finish := func(r sshResult) sshResult {
 		if r.truncated {
 			r.output += fmt.Sprintf("\n[output truncated at %d bytes]", maxSSHOutputBytes)
 		}
 		return r
+	}
+
+	if testHookBeforeRunSSHSelect != nil {
+		testHookBeforeRunSSHSelect()
+	}
+
+	select {
+	case r := <-done:
+		return finish(r)
 	case <-timer.C:
+		// Prefer a real result already buffered in done over the generic
+		// timeout sentinel. When session.Run returns at the exact moment the
+		// timer fires, Go's select picks at random; draining done
+		// non-blockingly ensures a completed command isn't reported as a
+		// false timeout to operators or the agentic loop. Mirrors the pattern
+		// at internal/k8s/context.go:570-583 and
+		// internal/shared/notify_aggregator.go (Stop).
+		select {
+		case r := <-done:
+			return finish(r)
+		default:
+		}
 		session.Close()
 		// Return any output collected before the timeout so that slow commands
 		// (e.g. "journalctl -n 500" on a busy host) still provide diagnostic
@@ -177,6 +202,13 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 		partial, _ := lw.Snapshot()
 		return sshResult{output: partial, err: fmt.Errorf("timeout after %v", timeout)}
 	case <-ctx.Done():
+		// Same bias for context cancellation: a result that arrived at the
+		// same instant must not be lost to ctx.Err().
+		select {
+		case r := <-done:
+			return finish(r)
+		default:
+		}
 		session.Close()
 		partial, _ := lw.Snapshot()
 		return sshResult{output: partial, err: fmt.Errorf("context cancelled: %w", ctx.Err())}

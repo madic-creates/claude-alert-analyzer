@@ -382,6 +382,54 @@ func TestRunSSHCommand_NewSessionFails(t *testing.T) {
 	}
 }
 
+// TestRunSSHCommand_BiasTowardResult verifies that when the result channel,
+// the timer, and the context-cancellation channel are all ready at the moment
+// the select runs, runSSHCommand returns the real result rather than a false
+// timeout or ctx.Err() sentinel. Without the bias-drain blocks in the
+// <-timer.C and <-ctx.Done() branches, Go's pseudo-random select would
+// frequently return a spurious timeout/cancellation for a command that
+// actually succeeded, misleading both operators and the agentic loop in
+// agent.go. The hook deterministically stages the all-three-ready race
+// across 100 iterations; (1/3)^100 ≈ 0, so without the fix at least one
+// iteration would virtually always pick the wrong case.
+// Mirrors the regression test for NotifyAggregator.Stop()'s bias drain.
+func TestRunSSHCommand_BiasTowardResult(t *testing.T) {
+	for iter := 0; iter < 100; iter++ {
+		client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+			_, _ = io.WriteString(ch, "hello output\n")
+			sendExitStatus(ch, 0)
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+
+		testHookBeforeRunSSHSelect = func() {
+			testHookBeforeRunSSHSelect = nil
+			// Wait long enough for: the SSH round-trip to complete on
+			// localhost, the goroutine to receive the exit status, build
+			// sshResult, and push it to the buffered `done` chan. 50ms is
+			// orders of magnitude more than needed for a localhost SSH
+			// session. After this sleep, done is ready. timer.C (1ms
+			// timeout) is also ready. Cancelling now makes ctx.Done() ready
+			// as well — all three cases satisfied when the select runs.
+			time.Sleep(50 * time.Millisecond)
+			cancel()
+		}
+
+		r := runSSHCommand(ctx, client, []string{"echo", "hello"}, time.Millisecond)
+		testHookBeforeRunSSHSelect = nil
+		cancel()
+
+		if r.err != nil {
+			t.Fatalf("iter=%d: expected success despite all-three-ready race, got err=%v", iter, r.err)
+		}
+		if r.exitCode != 0 {
+			t.Errorf("iter=%d: exitCode=%d, want 0", iter, r.exitCode)
+		}
+		if !strings.Contains(r.output, "hello output") {
+			t.Errorf("iter=%d: unexpected output: %q", iter, r.output)
+		}
+	}
+}
+
 func TestRunSSHCommand_ShellMetacharsEscaped(t *testing.T) {
 	// The test SSH server captures the raw command string that the client
 	// sends. We verify that shell metacharacters in argv are properly
