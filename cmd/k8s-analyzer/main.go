@@ -114,36 +114,9 @@ func main() {
 
 	cfg.GroupCooldownTTL = policy.GroupCooldownTTL
 
-	breakerThreshold, err := shared.ParseIntEnv("CIRCUIT_BREAKER_THRESHOLD", "0", 0, 100)
+	spCfg, err := shared.LoadStormProtectionConfig()
 	if err != nil {
-		slog.Error("invalid CIRCUIT_BREAKER_THRESHOLD", "error", err)
-		os.Exit(1)
-	}
-	breakerOpenSecs, err := shared.ParseIntEnv("CIRCUIT_BREAKER_OPEN_SECONDS", "60", 1, 3600)
-	if err != nil {
-		slog.Error("invalid CIRCUIT_BREAKER_OPEN_SECONDS", "error", err)
-		os.Exit(1)
-	}
-	breakerProbeSecs, err := shared.ParseIntEnv("CIRCUIT_BREAKER_MAX_PROBE_SECONDS", "60", 1, 3600)
-	if err != nil {
-		slog.Error("invalid CIRCUIT_BREAKER_MAX_PROBE_SECONDS", "error", err)
-		os.Exit(1)
-	}
-	breaker := shared.NewCircuitBreaker(
-		breakerThreshold,
-		time.Duration(breakerOpenSecs)*time.Second,
-		time.Duration(breakerProbeSecs)*time.Second,
-		time.Now,
-	)
-
-	stormNotifyInterval, err := time.ParseDuration(shared.EnvOrDefault("STORM_MODE_NOTIFY_INTERVAL", "60s"))
-	if err != nil {
-		slog.Error("invalid STORM_MODE_NOTIFY_INTERVAL", "error", err)
-		os.Exit(1)
-	}
-	breakerNotifyInterval, err := time.ParseDuration(shared.EnvOrDefault("CIRCUIT_BREAKER_NOTIFY_INTERVAL", "300s"))
-	if err != nil {
-		slog.Error("invalid CIRCUIT_BREAKER_NOTIFY_INTERVAL", "error", err)
+		slog.Error("storm protection config", "error", err)
 		os.Exit(1)
 	}
 
@@ -180,20 +153,7 @@ func main() {
 		),
 	}
 
-	stormNotify := shared.NewNotifyAggregator(
-		publishers,
-		stormNotifyInterval,
-		"Storm-mode active: %d alerts in last interval",
-		"4",
-		metrics.AggregatorDropsCounter("storm"),
-	)
-	breakerNotify := shared.NewNotifyAggregator(
-		publishers,
-		breakerNotifyInterval,
-		"API rate-limited: %d alerts pending manual review",
-		"5",
-		metrics.AggregatorDropsCounter("breaker"),
-	)
+	sp := spCfg.Build(publishers, metrics)
 
 	deps := k8s.PipelineDeps{
 		Analyzer:      claudeClient,
@@ -204,9 +164,9 @@ func main() {
 		Cooldown:      cooldownMgr,
 		Metrics:       metrics,
 		Policy:        policy,
-		Breaker:       breaker,
-		StormNotify:   stormNotify,
-		BreakerNotify: breakerNotify,
+		Breaker:       sp.Breaker,
+		StormNotify:   sp.StormNotify,
+		BreakerNotify: sp.BreakerNotify,
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return k8s.GatherContext(ctx, promClient, clientset, k8s.AlertPayloadToAlert(alert), cfg)
 		},
@@ -239,20 +199,9 @@ func main() {
 	handler := k8s.HandleWebhook(cfg, cooldownMgr, srv.Enqueue, metrics, policy.Storm)
 
 	defer func() {
-		if stormNotify != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			if err := stormNotify.Stop(ctx); err != nil {
-				slog.Warn("storm aggregator stop returned error", "error", err)
-			}
-			cancel()
-		}
-		if breakerNotify != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			if err := breakerNotify.Stop(ctx); err != nil {
-				slog.Warn("breaker aggregator stop returned error", "error", err)
-			}
-			cancel()
-		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		sp.Stop(ctx)
 	}()
 	srv.Run(handler)
 }
