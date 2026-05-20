@@ -1098,6 +1098,22 @@ func TestParseCommandInput_Invalid(t *testing.T) {
 	}
 }
 
+// TestParseCommandInput_InvalidJSON verifies the JSON unmarshal error path in
+// parseCommandInput — the "parse command input: %w" branch that wraps the
+// json.Unmarshal error, distinct from the structural validation paths exercised
+// by TestParseCommandInput_Invalid (which feeds well-formed JSON with the wrong
+// shape). Mirrors TestParseKubectlInput_InvalidJSON on the k8s side so both
+// agents have explicit coverage for malformed tool-input JSON.
+func TestParseCommandInput_InvalidJSON(t *testing.T) {
+	_, err := parseCommandInput(json.RawMessage(`not-valid-json`))
+	if err == nil {
+		t.Fatal("expected error for invalid JSON, got nil")
+	}
+	if !strings.Contains(err.Error(), "parse command input:") {
+		t.Errorf("expected 'parse command input:' prefix, got: %v", err)
+	}
+}
+
 // TestParseCommandInput_EmptyElement verifies that an empty string in any
 // position of the command array is rejected. An empty argv[0] would bypass
 // isDenied because filepath.Base("") returns "." which is not in any denylist;
