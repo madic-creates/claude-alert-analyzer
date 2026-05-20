@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -38,7 +39,11 @@ func HandleWebhook(
 	storm *shared.StormDetector,
 ) http.HandlerFunc {
 	cooldownTTL := time.Duration(cfg.CooldownSeconds) * time.Second
-	expectedToken := []byte("Bearer " + cfg.WebhookSecret)
+	// Hash the expected token so the per-request comparison always operates on
+	// equal-length (32-byte) inputs. subtle.ConstantTimeCompare returns 0
+	// immediately when input lengths differ, which would otherwise let a remote
+	// caller probe the secret length by varying the Authorization header length.
+	expectedTokenHash := sha256.Sum256([]byte("Bearer " + cfg.WebhookSecret))
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		httpStatus := http.StatusOK
@@ -46,7 +51,8 @@ func HandleWebhook(
 			metrics.RecordWebhookOutcome(shared.OutcomeForStatus(httpStatus))
 		}()
 
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), expectedToken) != 1 {
+		gotHash := sha256.Sum256([]byte(r.Header.Get("Authorization")))
+		if subtle.ConstantTimeCompare(gotHash[:], expectedTokenHash[:]) != 1 {
 			httpStatus = http.StatusUnauthorized
 			http.Error(w, "unauthorized", httpStatus)
 			return

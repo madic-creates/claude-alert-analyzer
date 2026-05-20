@@ -83,6 +83,50 @@ func TestCheckmkHandleWebhook_UnauthorizedWrongToken(t *testing.T) {
 	}
 }
 
+// TestCheckmkHandleWebhook_AuthRejectionIsLengthIndependent asserts the
+// auth-failure response is identical regardless of the Authorization header
+// length, so a remote caller cannot probe the secret length through response
+// divergence. Regression guard: a previous implementation passed the raw
+// header bytes to subtle.ConstantTimeCompare, which short-circuits on length
+// mismatch.
+func TestCheckmkHandleWebhook_AuthRejectionIsLengthIndependent(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cd := shared.NewCooldownManager()
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil, nil)
+
+	wrongHeaders := []string{
+		"",
+		"x",
+		"Bearer x",
+		"Bearer wrong-tokn",                 // 1 byte shorter than secret
+		"Bearer wrong-token",                // exact length, wrong content
+		"Bearer wrong-token-suffix",         // longer
+		strings.Repeat("a", 1024),           // far longer
+		"Basic " + strings.Repeat("Z", 200), // different scheme, much longer
+	}
+
+	var firstBody string
+	for i, h := range wrongHeaders {
+		req := httptest.NewRequest("POST", "/webhook", bytes.NewReader([]byte(`{}`)))
+		if h != "" {
+			req.Header.Set("Authorization", h)
+		}
+		rr := httptest.NewRecorder()
+		handler(rr, req)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("header %q: expected 401, got %d", h, rr.Code)
+		}
+		if i == 0 {
+			firstBody = rr.Body.String()
+			continue
+		}
+		if got := rr.Body.String(); got != firstBody {
+			t.Errorf("header %q: body %q differs from baseline %q (length leak through response)", h, got, firstBody)
+		}
+	}
+}
+
 func TestCheckmkHandleWebhook_InvalidJSON(t *testing.T) {
 	cfg := makeCheckmkConfig()
 	cd := shared.NewCooldownManager()
