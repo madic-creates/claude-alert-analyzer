@@ -494,6 +494,61 @@ func TestCircuitBreaker_NonPositiveDurationLogsWarn(t *testing.T) {
 	}
 }
 
+// TestCircuitBreaker_ProbeWatchdogLogsWarn verifies that when the
+// probe-watchdog fires inside Acquire (stuck in-flight probe past
+// maxProbeDuration), a slog.Warn is emitted naming the param and the
+// elapsed duration so operators have a diagnostic signal for the gauge
+// flip back to open. Parallel to the non-positive duration warn emitted
+// by NewCircuitBreaker.
+func TestCircuitBreaker_ProbeWatchdogLogsWarn(t *testing.T) {
+	var buf bytes.Buffer
+	handler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	old := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	clk := &fakeClock{t: time.Unix(0, 0)}
+	b := NewCircuitBreaker(1, 10*time.Second, 5*time.Second, clk.Now)
+
+	p, _ := b.Acquire()
+	p.Done(errors.New("fail"))
+	clk.advance(11 * time.Second)
+	probe, _ := b.Acquire()
+	if !probe.IsProbe() {
+		t.Fatal("expected probe permit")
+	}
+
+	// Advance past maxProbeDuration and call Acquire to fire the watchdog.
+	clk.advance(6 * time.Second)
+	if _, err := b.Acquire(); !errors.Is(err, ErrCircuitOpen) {
+		t.Fatalf("watchdog Acquire: err=%v, want ErrCircuitOpen", err)
+	}
+
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		if json.Unmarshal([]byte(line), &rec) != nil {
+			continue
+		}
+		if rec["msg"] != "circuit breaker: probe watchdog re-opened breaker after stuck probe" {
+			continue
+		}
+		found = true
+		if _, ok := rec["maxProbeDuration"]; !ok {
+			t.Errorf("slog record missing maxProbeDuration field; record: %s", line)
+		}
+		if _, ok := rec["elapsed"]; !ok {
+			t.Errorf("slog record missing elapsed field; record: %s", line)
+		}
+	}
+	if !found {
+		t.Errorf("no probe-watchdog slog warn found; log output:\n%s", buf.String())
+	}
+}
+
 // TestCircuitBreaker_NilNowDefaultsToTimeNow verifies that passing nil for
 // the now func does not panic and produces a functional breaker.
 func TestCircuitBreaker_NilNowDefaultsToTimeNow(t *testing.T) {

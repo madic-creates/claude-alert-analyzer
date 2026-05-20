@@ -111,9 +111,17 @@ func (b *CircuitBreaker) Acquire() (*Permit, error) {
 
 	// Probe-watchdog: in-flight probe past the deadline counts as failed.
 	if b.halfOpenInFlight && now.Sub(b.probeStartedAt) >= b.maxProbeDuration {
+		elapsed := now.Sub(b.probeStartedAt)
 		b.halfOpenInFlight = false
 		b.state = breakerOpen
 		b.openedAt = now
+		// Operators otherwise only see the gauge flip back to open with no
+		// diagnostic signal that a probe analysis hung past the deadline
+		// (e.g. Claude API slow, SSE stream stuck, pipeline panic that never
+		// reached recordResult). Parallel to the slog.Warn emitted by
+		// NewCircuitBreaker for non-positive duration substitution.
+		slog.Warn("circuit breaker: probe watchdog re-opened breaker after stuck probe",
+			"maxProbeDuration", b.maxProbeDuration, "elapsed", elapsed)
 	}
 
 	switch b.state {
