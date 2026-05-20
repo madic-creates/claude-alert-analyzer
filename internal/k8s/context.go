@@ -81,6 +81,14 @@ func (p *PrometheusClient) query(ctx context.Context, queryStr string) string {
 	if err != nil {
 		return "(failed to read response)"
 	}
+	// If the actual body exceeds MaxResponseBytes, ReadAll stops at the limit
+	// and leaves the tail unread. Closing without consuming the rest prevents
+	// Go's transport from returning the connection to the pool — forcing a new
+	// TCP+TLS handshake on the next query. Drain up to MaxBodyDrainBytes more
+	// so realistic over-cap responses still allow keep-alive reuse, while the
+	// cap bounds time spent reading from a pathologically slow upstream. Same
+	// rationale as the error-path drain above and ntfy.go's retry drain.
+	io.Copy(io.Discard, io.LimitReader(resp.Body, shared.MaxBodyDrainBytes)) //nolint:errcheck
 
 	var result PromQueryResponse
 	if err := json.Unmarshal(body, &result); err != nil {

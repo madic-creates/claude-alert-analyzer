@@ -141,6 +141,15 @@ func (c *APIClient) ValidateAndDescribeHost(ctx context.Context, hostname, hostA
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
+	// If the actual body exceeds MaxResponseBytes, ReadAll stops at the limit
+	// and leaves the tail unread. Closing without consuming the rest prevents
+	// Go's transport from returning the connection to the pool — forcing a new
+	// TCP+TLS handshake on the next CheckMK API call. Drain up to
+	// MaxBodyDrainBytes more so realistic over-cap responses still allow
+	// keep-alive reuse, while the cap bounds time spent reading from a
+	// pathologically slow upstream. Same rationale as ntfy.go's retry drain
+	// and k8s/context.go's error-path drain.
+	io.Copy(io.Discard, io.LimitReader(resp.Body, shared.MaxBodyDrainBytes)) //nolint:errcheck
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("host %q not found in CheckMK", hostname)
@@ -223,6 +232,11 @@ func (c *APIClient) GetHostServices(ctx context.Context, hostname string) string
 	if err != nil {
 		return "(failed to read response)"
 	}
+	// See ValidateAndDescribeHost for the rationale: GetHostServices can pull
+	// hundreds of services with verbose plugin_output, so a single response can
+	// realistically exceed MaxResponseBytes. Drain any tail beyond the read cap
+	// (up to MaxBodyDrainBytes) so the connection is returned to the pool.
+	io.Copy(io.Discard, io.LimitReader(resp.Body, shared.MaxBodyDrainBytes)) //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		// Include a redacted snippet so operators can diagnose auth failures

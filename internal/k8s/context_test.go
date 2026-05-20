@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2171,5 +2173,56 @@ func TestPrometheusClient_Query(t *testing.T) {
 	got := c.Query(context.Background(), "up")
 	if !strings.Contains(got, "job=prom") || !strings.Contains(got, ": 1") {
 		t.Errorf("unexpected Query output: %q", got)
+	}
+}
+
+// TestQuery_OversizedResponseReusesConnection verifies that when a Prometheus
+// response exceeds MaxResponseBytes, the over-cap tail is drained before
+// Close so Go's HTTP transport returns the TCP connection to the keep-alive
+// pool. Without the drain, every query against a chatty Prometheus would force
+// a fresh TCP+TLS handshake, which is observable as multiple StateNew
+// transitions in the test server's ConnState callback. With the drain, all
+// sequential queries from the same client should land on a single connection.
+//
+// The over-cap amount (oversizeTail) is well under MaxBodyDrainBytes so the
+// drain fully consumes the unread tail. Picking a tail larger than the drain
+// cap would correctly defeat keep-alive — that's the cap's purpose — but is
+// not the case the fix addresses.
+func TestQuery_OversizedResponseReusesConnection(t *testing.T) {
+	const oversizeTail = 1024
+	body := strings.Repeat("x", shared.MaxResponseBytes+oversizeTail)
+
+	var newConns atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Set Content-Length so Go's transport knows when the body is
+		// fully drained; without it, chunked encoding would still need
+		// the trailing zero-chunk before reuse, which is what we want.
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+		_, _ = w.Write([]byte(body))
+	}))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			newConns.Add(1)
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+
+	// Use the server's own client so it shares one Transport across
+	// requests — that is the keep-alive pool we are exercising.
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+
+	const requests = 5
+	for i := 0; i < requests; i++ {
+		// The oversized body cannot parse as JSON; the call returns the
+		// parse-failure sentinel. The point of the test is the connection
+		// re-use, not the result — so we ignore the return value.
+		_ = prom.query(context.Background(), "up")
+	}
+
+	if got := newConns.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 new TCP connection across %d requests "+
+			"(body drain enables keep-alive reuse), got %d", requests, got)
 	}
 }
