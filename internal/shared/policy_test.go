@@ -104,6 +104,7 @@ func TestLoadPolicy_AppliesModelOverrides(t *testing.T) {
 func TestLoadPolicy_AppliesRoundsOverrides_IncludingZero(t *testing.T) {
 	t.Setenv("MAX_AGENT_ROUNDS_INFO", "0")
 	t.Setenv("MAX_AGENT_ROUNDS_WARNING", "3")
+	t.Setenv("MAX_AGENT_ROUNDS_CRITICAL", "  ") // whitespace-only must be ignored
 
 	p, err := LoadPolicy(BaseConfig{ClaudeModel: "x"})
 	if err != nil {
@@ -117,7 +118,7 @@ func TestLoadPolicy_AppliesRoundsOverrides_IncludingZero(t *testing.T) {
 		t.Errorf("warning: got %d, want 3", p.MaxRoundsFor(SeverityWarning))
 	}
 	if p.MaxRoundsFor(SeverityCritical) != 10 {
-		t.Errorf("critical (no override): got %d, want 10", p.MaxRoundsFor(SeverityCritical))
+		t.Errorf("critical (whitespace-only ignored): got %d, want default 10", p.MaxRoundsFor(SeverityCritical))
 	}
 }
 

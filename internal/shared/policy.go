@@ -102,7 +102,12 @@ func LoadPolicy(base BaseConfig) (*AnalysisPolicy, error) {
 		SeverityInfo:     "MAX_AGENT_ROUNDS_INFO",
 		SeverityUnknown:  "MAX_AGENT_ROUNDS_UNKNOWN",
 	} {
-		if os.Getenv(key) == "" {
+		// Treat whitespace-only the same as unset, matching the CLAUDE_MODEL_*
+		// loop above. Operators sometimes leave a ConfigMap value as "  " when
+		// disabling an override; the model loop silently ignores that, so the
+		// rounds loop must do the same instead of failing startup with a
+		// confusing strconv.Atoi error.
+		if strings.TrimSpace(os.Getenv(key)) == "" {
 			continue
 		}
 		v, err := ParseIntEnv(key, "", 0, 50)
