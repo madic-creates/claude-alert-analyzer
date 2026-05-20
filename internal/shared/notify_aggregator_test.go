@@ -391,6 +391,45 @@ func TestNotifyAggregator_Add_StoppedBetweenCheckAndSend(t *testing.T) {
 	}
 }
 
+// TestNotifyAggregator_Stop_BiasTowardAckResult exercises the race window
+// where the owner goroutine has already written to ack at the instant the
+// Stop-caller's context expires. With both channels ready, Go's select picks
+// at random, so without the bias-toward-result drain, ~50% of iterations
+// would report a false timeout even though the flush succeeded.
+//
+// The test hook (testHookBeforeStopSelect) lets us stage the race
+// deterministically: we wait long enough for the owner to ack, then cancel
+// ctx, then let the inner select run. Across 100 iterations the
+// probability of all 100 picking ack at random is (0.5)^100 ≈ 0, so without
+// the fix this test fails with overwhelming probability.
+func TestNotifyAggregator_Stop_BiasTowardAckResult(t *testing.T) {
+	for iter := 0; iter < 100; iter++ {
+		pub := &aggFakePublisher{}
+		a := NewNotifyAggregator([]Publisher{pub}, time.Hour, "S: %d", "5", newDropsCounter())
+		a.Add("seed")
+
+		ctx, cancel := context.WithCancel(context.Background())
+		testHookBeforeStopSelect = func() {
+			testHookBeforeStopSelect = nil
+			// Give the owner time to drain, flush, and write to ack.
+			// 50 ms comfortably exceeds the 10 ms drainDeadline.
+			time.Sleep(50 * time.Millisecond)
+			cancel()
+		}
+
+		err := a.Stop(ctx)
+		testHookBeforeStopSelect = nil
+		cancel()
+
+		if err != nil {
+			t.Fatalf("iter=%d: Stop returned %v, want nil (flush succeeded — must not surface as false timeout)", iter, err)
+		}
+		if got := pub.callCount(); got != 1 {
+			t.Fatalf("iter=%d: expected 1 publish, got %d", iter, got)
+		}
+	}
+}
+
 func TestNotifyAggregator_StopRaceNoLosses(t *testing.T) {
 	pub := &aggFakePublisher{}
 	drops := newDropsCounter()

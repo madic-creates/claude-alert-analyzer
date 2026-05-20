@@ -23,6 +23,12 @@ const notifyAggregatorBufferSize = 100
 // where the aggregator stops between those two operations. Nil in production.
 var testHookBeforeAddSend func()
 
+// testHookBeforeStopSelect is called by Stop() in tests after stopReq has
+// been sent but before the inner ack/ctx select runs, so tests can stage the
+// "both channels ready" race that the bias-toward-result drain guards
+// against. Nil in production.
+var testHookBeforeStopSelect func()
+
 // NotifyAggregator buffers alert titles during a time interval and emits one
 // summary notification per interval. It is concurrency-safe via a single
 // owner goroutine that owns buffer + timer; Add() and Stop() communicate
@@ -147,16 +153,35 @@ func (a *NotifyAggregator) Stop(ctx context.Context) error {
 		// stopReq has buffer 1 and stopOnce guarantees this is the sole writer,
 		// so the send always completes immediately without blocking.
 		a.stopReq <- stopRequest{ctx: ctx, ack: ack}
+		if testHookBeforeStopSelect != nil {
+			testHookBeforeStopSelect()
+		}
 		select {
 		case a.stopErr = <-ack:
 		case <-ctx.Done():
-			a.stopErr = ctx.Err()
+			// Prefer a real flush result already buffered in ack over the
+			// generic timeout sentinel. When the owner writes to ack at the
+			// exact moment ctx expires, Go's select picks a case at random;
+			// draining ack non-blockingly ensures a successful flush isn't
+			// reported as a false timeout to operators.
+			// Mirrors the pattern at internal/k8s/context.go:570-583.
+			select {
+			case a.stopErr = <-ack:
+			default:
+				a.stopErr = ctx.Err()
+			}
 		}
 	})
 	select {
 	case <-a.stopped:
 	case <-ctx.Done():
-		return ctx.Err()
+		// Same bias: if the owner has already finished (stopped closed) the
+		// authoritative result is sitting in stopErr; prefer it over ctx.Err().
+		select {
+		case <-a.stopped:
+		default:
+			return ctx.Err()
+		}
 	}
 	return a.stopErr
 }
