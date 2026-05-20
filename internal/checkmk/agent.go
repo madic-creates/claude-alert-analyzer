@@ -1047,7 +1047,11 @@ func RunAgenticDiagnostics(
 		// Inspect only that last line so a successful command whose SSH output
 		// happens to contain "[exit code: 1]" or "[exited: timeout after 5s]"
 		// (common in journalctl, systemctl status, or any log dump) is not
-		// silently misclassified as a failure outcome.
+		// silently misclassified as a failure outcome. Validation rejections
+		// ("Invalid command: ..." / "Command denied: ...") are single-line by
+		// construction so lastLine == out for them — using lastLine for every
+		// branch keeps a single reference point and avoids a foot-gun for any
+		// future caller that might introduce a multi-line rejection format.
 		lastLine := out
 		if i := strings.LastIndex(out, "\n"); i >= 0 {
 			lastLine = out[i+1:]
@@ -1055,9 +1059,9 @@ func RunAgenticDiagnostics(
 		switch {
 		case callErr != nil:
 			outcome = outcomeExecError
-		case strings.HasPrefix(out, "Invalid command: "):
+		case strings.HasPrefix(lastLine, "Invalid command: "):
 			outcome = outcomeRejectedValid
-		case strings.HasPrefix(out, "Command denied"):
+		case strings.HasPrefix(lastLine, "Command denied"):
 			outcome = outcomeRejectedVerb
 		// Distinguish timeouts, SSH transport errors, and non-zero exits.
 		// runSSHCommand uses three distinct formats:
