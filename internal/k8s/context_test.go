@@ -1847,6 +1847,8 @@ func TestGetMetrics_MaliciousNamespaceDroppedFromQuery(t *testing.T) {
 // TestQuery_NonOKStatusCode verifies that a non-200 HTTP response from Prometheus is
 // reported with the actual status code rather than a misleading "(failed to parse
 // response)" message that was previously emitted when the body was not valid JSON.
+// It also asserts the redacted body snippet is surfaced so operators can tell a
+// 503 gateway error apart from a 401 auth failure without replaying the request.
 func TestQuery_NonOKStatusCode(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -1861,8 +1863,38 @@ func TestQuery_NonOKStatusCode(t *testing.T) {
 	if !strings.Contains(result, "503") {
 		t.Errorf("expected HTTP status 503 in result, got: %q", result)
 	}
+	if !strings.Contains(result, "Service Unavailable") {
+		t.Errorf("expected upstream body snippet in result, got: %q", result)
+	}
 	if strings.Contains(result, "failed to parse") {
 		t.Errorf("result should not contain misleading parse-error message, got: %q", result)
+	}
+}
+
+// TestQuery_NonOKStatusCode_RedactsAndTruncates verifies that the snippet
+// surfaced for non-200 responses is redacted (so an upstream that echoes
+// credentials in an error page does not leak them into the Claude prompt)
+// and bounded (so a pathologically large error body cannot blow up logs).
+func TestQuery_NonOKStatusCode_RedactsAndTruncates(t *testing.T) {
+	largeBody := strings.Repeat("A", 4096) + " token=sk-ant-secret-xxxxxxxxxxxx"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, largeBody)
+	}))
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	alert := makeAlertWithLabels(map[string]string{})
+	result := prom.GetMetrics(context.Background(), alert)
+
+	if !strings.Contains(result, "401") {
+		t.Errorf("expected HTTP status 401 in result, got: %q", result)
+	}
+	if strings.Contains(result, "sk-ant-secret-xxxxxxxxxxxx") {
+		t.Errorf("result should redact secret-like token, got: %q", result)
+	}
+	if len(result) > 512 {
+		t.Errorf("result should be bounded; got %d bytes", len(result))
 	}
 }
 

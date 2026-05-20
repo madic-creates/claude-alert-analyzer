@@ -70,12 +70,16 @@ func (p *PrometheusClient) query(ctx context.Context, queryStr string) string {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		// Drain the body before closing so the HTTP connection can be reused.
-		// Without this, Go's transport closes the TCP connection instead of
-		// returning it to the pool, causing a new dial on the next query.
-		// Cap the drain to avoid blocking on a pathologically large error body.
-		io.Copy(io.Discard, io.LimitReader(resp.Body, shared.MaxBodyDrainBytes)) //nolint:errcheck
-		return fmt.Sprintf("(Prometheus returned %d)", resp.StatusCode)
+		// Read a bounded slice of the body and surface a redacted snippet so
+		// operators can distinguish auth failures (401/403), gateway errors
+		// (502/503), and upstream misconfigurations from the bare status code.
+		// Mirrors the pattern used in checkmk/context.go (GetHostServices,
+		// ValidateAndDescribeHost) and ntfy.go's retry path. Reading also
+		// drains the connection so Go's transport can return it to the pool;
+		// the cap bounds time spent reading from a pathologically slow upstream.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, shared.MaxBodyDrainBytes))
+		return fmt.Sprintf("(Prometheus returned %d: %s)", resp.StatusCode,
+			shared.Truncate(shared.RedactSecrets(strings.TrimSpace(string(body))), 200))
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, shared.MaxResponseBytes))
 	if err != nil {
