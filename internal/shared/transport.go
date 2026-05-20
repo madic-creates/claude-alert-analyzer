@@ -30,7 +30,6 @@ const MaxBodyDrainBytes = 64 * 1024 // 64 KiB
 // when the body is closed.
 type LimitedTransport struct {
 	inner             http.RoundTripper
-	maxBytes          int64
 	durationHistogram prometheus.Observer // optional; nil = no observation
 }
 
@@ -42,7 +41,6 @@ func NewLimitedTransport(inner http.RoundTripper, hist prometheus.Observer) *Lim
 	}
 	return &LimitedTransport{
 		inner:             inner,
-		maxBytes:          MaxResponseBytes,
 		durationHistogram: hist,
 	}
 }
@@ -55,7 +53,7 @@ func (lt *LimitedTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		return nil, err
 	}
 	resp.Body = &timedLimitedReadCloser{
-		r:       io.LimitReader(resp.Body, lt.maxBytes),
+		r:       io.LimitReader(resp.Body, MaxResponseBytes),
 		c:       resp.Body,
 		start:   start,
 		observe: lt.observe,
