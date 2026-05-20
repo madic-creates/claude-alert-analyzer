@@ -194,7 +194,14 @@ func main() {
 		"apiBaseURL", cfg.APIBaseURL,
 		"defaultRounds", policy.DefaultMaxRounds,
 		"modelOverrides", len(policy.ModelOverrides),
-		"roundsOverrides", len(policy.RoundsOverrides))
+		"roundsOverrides", len(policy.RoundsOverrides),
+		"groupCooldownTTL", policy.GroupCooldownTTL,
+		"stormThreshold", policy.Storm.Threshold(),
+		"stormNotifyInterval", spCfg.StormNotifyInterval,
+		"breakerThreshold", spCfg.BreakerThreshold,
+		"breakerOpenDuration", spCfg.BreakerOpen,
+		"breakerMaxProbeDuration", spCfg.BreakerMaxProbe,
+		"breakerNotifyInterval", spCfg.BreakerNotifyInterval)
 
 	handler := k8s.HandleWebhook(cfg, cooldownMgr, srv.Enqueue, metrics, policy.Storm)
 

@@ -205,7 +205,14 @@ func main() {
 		"sshEnabled", cfg.SSHEnabled,
 		"defaultRounds", policy.DefaultMaxRounds,
 		"modelOverrides", len(policy.ModelOverrides),
-		"roundsOverrides", len(policy.RoundsOverrides))
+		"roundsOverrides", len(policy.RoundsOverrides),
+		"groupCooldownTTL", policy.GroupCooldownTTL,
+		"stormThreshold", policy.Storm.Threshold(),
+		"stormNotifyInterval", spCfg.StormNotifyInterval,
+		"breakerThreshold", spCfg.BreakerThreshold,
+		"breakerOpenDuration", spCfg.BreakerOpen,
+		"breakerMaxProbeDuration", spCfg.BreakerMaxProbe,
+		"breakerNotifyInterval", spCfg.BreakerNotifyInterval)
 
 	handler := checkmk.HandleWebhook(cfg, cooldownMgr, srv.Enqueue, metrics, policy.Storm)
 
