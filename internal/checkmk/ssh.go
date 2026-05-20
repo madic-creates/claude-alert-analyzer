@@ -174,6 +174,17 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 		return r
 	}
 
+	// partialResult builds an sshResult from whatever output the LimitedWriter
+	// has buffered so far, preserving the truncated flag so finish() appends
+	// the marker. Without this, a chatty command that exceeds maxSSHOutputBytes
+	// AND times out (or is cancelled) returned partial output silently —
+	// callers couldn't tell whether the timeout cut off the stream or the
+	// 512 KiB cap did.
+	partialResult := func(err error) sshResult {
+		partial, truncated := lw.Snapshot()
+		return finish(sshResult{output: partial, truncated: truncated, err: err})
+	}
+
 	if testHookBeforeRunSSHSelect != nil {
 		testHookBeforeRunSSHSelect()
 	}
@@ -199,8 +210,7 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 		// (e.g. "journalctl -n 500" on a busy host) still provide diagnostic
 		// value. agent.go already handles (partial, error) returns by including
 		// the output in the tool result alongside the timeout message.
-		partial, _ := lw.Snapshot()
-		return sshResult{output: partial, err: fmt.Errorf("timeout after %v", timeout)}
+		return partialResult(fmt.Errorf("timeout after %v", timeout))
 	case <-ctx.Done():
 		// Same bias for context cancellation: a result that arrived at the
 		// same instant must not be lost to ctx.Err().
@@ -210,7 +220,6 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, argv []string, timeo
 		default:
 		}
 		session.Close()
-		partial, _ := lw.Snapshot()
-		return sshResult{output: partial, err: fmt.Errorf("context cancelled: %w", ctx.Err())}
+		return partialResult(fmt.Errorf("context cancelled: %w", ctx.Err()))
 	}
 }

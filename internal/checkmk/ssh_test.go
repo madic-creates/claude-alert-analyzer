@@ -357,6 +357,70 @@ func TestRunSSHCommand_ContextCancelled_PartialOutput(t *testing.T) {
 	}
 }
 
+// TestRunSSHCommand_Timeout_TruncationMarkerPreserved verifies that when a
+// chatty command exceeds maxSSHOutputBytes AND times out, the returned output
+// includes the "[output truncated at N bytes]" marker. Without preserving the
+// truncated flag from lw.Snapshot() in the <-timer.C branch, operators and the
+// agentic loop saw a 512 KiB output blob without any indication the stream was
+// cut off by the buffer cap rather than by the timeout — making it impossible
+// to tell whether re-running with a shorter command would have fit.
+func TestRunSSHCommand_Timeout_TruncationMarkerPreserved(t *testing.T) {
+	oversized := strings.Repeat("A", maxSSHOutputBytes*2)
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		_, _ = io.WriteString(ch, oversized)
+		// Hold the channel open so the timeout fires after the bytes land.
+		time.Sleep(10 * time.Second)
+	})
+
+	r := runSSHCommand(context.Background(), client, []string{"flood"}, 200*time.Millisecond)
+	if r.err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !strings.Contains(r.err.Error(), "timeout") {
+		t.Errorf("expected timeout error, got: %v", r.err)
+	}
+	if !strings.Contains(r.output, "[output truncated at") {
+		t.Errorf("expected truncation marker in timeout output, got %d bytes without marker", len(r.output))
+	}
+}
+
+// TestRunSSHCommand_ContextCancelled_TruncationMarkerPreserved mirrors the
+// timeout-path coverage above for the ctx.Done() branch. Same regression:
+// without preserving the truncated flag from lw.Snapshot() in the
+// <-ctx.Done() branch, a cancelled command that had overflowed the 512 KiB
+// cap returned 512 KiB of output silently.
+func TestRunSSHCommand_ContextCancelled_TruncationMarkerPreserved(t *testing.T) {
+	oversized := strings.Repeat("B", maxSSHOutputBytes*2)
+	outputWritten := make(chan struct{})
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		_, _ = io.WriteString(ch, oversized)
+		close(outputWritten)
+		time.Sleep(10 * time.Second)
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		<-outputWritten
+		// Allow the SSH packets to arrive at the client and be written into
+		// lw before cancelling, otherwise we race the buffer fill.
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	r := runSSHCommand(ctx, client, []string{"flood"}, 30*time.Second)
+	if r.err == nil {
+		t.Fatal("expected error when context is cancelled")
+	}
+	if !strings.Contains(r.err.Error(), "context cancelled") {
+		t.Errorf("expected 'context cancelled' error message, got: %v", r.err)
+	}
+	if !strings.Contains(r.output, "[output truncated at") {
+		t.Errorf("expected truncation marker in cancelled output, got %d bytes without marker", len(r.output))
+	}
+}
+
 // TestRunSSHCommand_NewSessionFails verifies that runSSHCommand returns a
 // "new session: ..." error when the underlying SSH connection is closed before
 // NewSession is called. This is a real production failure mode: in an agentic
