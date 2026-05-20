@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -490,6 +491,75 @@ func TestNtfyPublisher_Publish_DrainsLargeErrorBodyForConnectionReuse(t *testing
 
 	if numConns != 1 {
 		t.Errorf("expected 1 TCP connection for a %d-byte error body (full drain enables reuse), got %d", largeErrorBodySize, numConns)
+	}
+}
+
+// TestNtfyPublisher_Publish_RetryBiasTowardCancel verifies that when ctx.Done()
+// and the retry-delay timer become ready at the same instant, Publish returns
+// the cancellation immediately rather than racing into a doomed HTTP attempt.
+//
+// Without the post-select cancellation re-check, Go's random select would take
+// timer.C ~50% of the time when both channels are ready simultaneously,
+// causing one extra HTTP roundtrip per Publish during graceful shutdown plus
+// a misleading "retrying ntfy publish" log line. The test stages the race by
+// (a) cancelling ctx after the first failed attempt buffers lastErr, then (b)
+// using a one-shot test hook to block the goroutine inside Publish until the
+// timer has fired, so that by the time the post-select check runs, both
+// ctx.Done() and timer.C are ready. The hook is installed inside a sync.Once
+// so it fires exactly once per test, deterministically catching the race
+// window: 100 iterations × ~0% chance of false negative ≈ 0 in practice.
+func TestNtfyPublisher_Publish_RetryBiasTowardCancel(t *testing.T) {
+	prev := testHookBeforeNtfyRetryRecheck
+	defer func() { testHookBeforeNtfyRetryRecheck = prev }()
+
+	for i := 0; i < 100; i++ {
+		var attemptCount int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&attemptCount, 1)
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}))
+
+		ctx, cancel := context.WithCancel(context.Background())
+
+		// One-shot hook: cancel ctx the first time the post-select check
+		// is about to run. By that point the retry-delay timer has already
+		// fired and selected the timer.C branch — so ctx.Done() and the
+		// authoritative "must abort" signal are *both* ready when the
+		// re-check executes. Without the bias guard, Publish would proceed
+		// to a doomed second HTTP attempt; with the guard, it returns the
+		// cancellation immediately.
+		var once sync.Once
+		testHookBeforeNtfyRetryRecheck = func() {
+			once.Do(func() { cancel() })
+		}
+
+		p := &NtfyPublisher{
+			HTTP:        srv.Client(),
+			URL:         srv.URL,
+			Topic:       "alerts",
+			RetryDelays: []time.Duration{0, 0},
+		}
+		err := p.Publish(ctx, "t", "default", "body")
+		srv.Close()
+		cancel()
+
+		if err == nil {
+			t.Fatalf("iteration %d: expected error, got nil", i)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("iteration %d: expected error to wrap context.Canceled, got: %v", i, err)
+		}
+		// The 503 from the first attempt must be preserved in the error so
+		// operators still see why the retry was happening.
+		if !strings.Contains(err.Error(), "503") {
+			t.Fatalf("iteration %d: expected error to contain last HTTP status (503), got: %v", i, err)
+		}
+		// Exactly one HTTP attempt must have reached the server. A second
+		// attempt would mean the bias check failed to short-circuit and
+		// timer.C continued to the doomed HTTP call.
+		if got := atomic.LoadInt32(&attemptCount); got != 1 {
+			t.Fatalf("iteration %d: expected exactly 1 HTTP attempt (bias short-circuits after timer wins), got %d", i, got)
+		}
 	}
 }
 

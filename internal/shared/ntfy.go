@@ -15,6 +15,13 @@ import (
 // attempts total: one initial try plus one retry after each delay.
 var DefaultNtfyRetryDelays = []time.Duration{2 * time.Second, 5 * time.Second}
 
+// testHookBeforeNtfyRetryRecheck is called by Publish in tests after the
+// retry-delay select returns via timer.C but before the post-select
+// cancellation re-check. It lets tests stage the "ctx.Done() and timer.C
+// ready at the same instant" race that the bias guard below defeats.
+// Nil in production.
+var testHookBeforeNtfyRetryRecheck func()
+
 // NtfyPublisher sends notifications to an ntfy server.
 type NtfyPublisher struct {
 	HTTP        *http.Client
@@ -97,6 +104,23 @@ func (n *NtfyPublisher) Publish(ctx context.Context, title, priority, body strin
 				// exit the function without incrementing attempt.
 				return fmt.Errorf("%w; last publish error: %w", ctx.Err(), lastErr)
 			case <-timer.C:
+			}
+			if testHookBeforeNtfyRetryRecheck != nil {
+				testHookBeforeNtfyRetryRecheck()
+			}
+			// Bias toward cancellation: when ctx.Done() and timer.C become
+			// ready at the same instant, Go's select picks at random. Taking
+			// timer.C in that case proceeds to an HTTP attempt that the
+			// cancelled context will reject anyway, burning a TCP/TLS roundtrip
+			// during graceful shutdown and emitting a misleading "retrying"
+			// log line. The cycles-26/27/28 pattern biases timeout/cancel
+			// branches toward a buffered result; this is the inverse — the
+			// authoritative signal here is the cancellation, not a result —
+			// but the underlying race is the same. Mirrors the post-select
+			// re-check pattern at runSSHCommand (internal/checkmk/ssh.go) and
+			// NotifyAggregator.Stop (internal/shared/notify_aggregator.go).
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("%w; last publish error: %w", err, lastErr)
 			}
 			slog.Warn("retrying ntfy publish", "attempt", attempt+1, "after", delay)
 		}
