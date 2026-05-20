@@ -225,9 +225,32 @@ func (s *Server) Run(webhookHandler http.HandlerFunc) {
 	case <-done:
 		slog.Info("all workers finished")
 	case <-drainTimer.C:
-		slog.Warn("worker drain timeout, cancelling")
-		workerCancel()
-		wg.Wait()
+		// Bias toward done: when workers finish at the same instant the
+		// drain timer fires, Go's select picks at random. Without this
+		// non-blocking re-check, a clean shutdown can emit a misleading
+		// "drain timeout, cancelling" log line and invoke workerCancel()
+		// even though all workers actually completed in time. Mirrors the
+		// pattern at NotifyAggregator's drain loop (notify_aggregator.go),
+		// runSSHCommand (internal/checkmk/ssh.go), and Publish's retry
+		// select (internal/shared/ntfy.go).
+		if testHookBeforeServerDrainRecheck != nil {
+			testHookBeforeServerDrainRecheck()
+		}
+		select {
+		case <-done:
+			slog.Info("all workers finished")
+		default:
+			slog.Warn("worker drain timeout, cancelling")
+			workerCancel()
+			wg.Wait()
+		}
 	}
 	slog.Info("shutdown complete")
 }
+
+// testHookBeforeServerDrainRecheck is called by Run() in tests after the
+// drain-timer select picks the timer branch but before the post-select
+// re-check of done. It lets tests stage the "done and drainTimer.C ready at
+// the same instant" race that the bias guard above defeats. Nil in
+// production.
+var testHookBeforeServerDrainRecheck func()

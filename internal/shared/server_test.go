@@ -189,6 +189,109 @@ func (h *stackCaptureHandler) Handle(_ context.Context, r slog.Record) error {
 func (h *stackCaptureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 func (h *stackCaptureHandler) WithGroup(_ string) slog.Handler      { return h }
 
+// TestServer_Run_DrainTimerBiasTowardDone verifies the bias guard in Run():
+// when workers finish at the same instant the drain timer fires, the outer
+// select may pick the timer branch — but the inner non-blocking re-check on
+// done must still pick done and avoid emitting the misleading "worker drain
+// timeout, cancelling" log line. We force the drain-timer branch to be
+// selected deterministically by blocking the worker until the test hook
+// fires; the hook then releases the worker and waits long enough for the
+// done channel to close before returning.
+func TestServer_Run_DrainTimerBiasTowardDone(t *testing.T) {
+	release := make(chan struct{})
+	var processed atomic.Int64
+	metrics := NewAlertMetrics(nil)
+
+	srv := NewServer(ServerConfig{
+		Port:         "0",
+		MetricsPort:  "0",
+		WorkerCount:  1,
+		QueueSize:    5,
+		DrainTimeout: 5 * time.Millisecond,
+	}, metrics, func(ctx context.Context, alert AlertPayload) {
+		<-release
+		processed.Add(1)
+	})
+
+	var warnSeen atomic.Bool
+	old := slog.Default()
+	slog.SetDefault(slog.New(&warnSubstringCaptureHandler{
+		seen:      &warnSeen,
+		substring: "worker drain timeout",
+	}))
+	defer slog.SetDefault(old)
+
+	var hookFired atomic.Bool
+	testHookBeforeServerDrainRecheck = func() {
+		hookFired.Store(true)
+		// Release the blocked worker so it can complete cleanly. After the
+		// worker returns from safeProcess, the goroutine exits the range
+		// over the now-closed queue and signals wg.Done(); the trampoline
+		// goroutine then closes done. Poll until processed reaches 1, then
+		// give the trampoline a brief window to close done before we
+		// return into the inner re-check.
+		close(release)
+		deadline := time.Now().Add(500 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			if processed.Load() == 1 {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	defer func() { testHookBeforeServerDrainRecheck = nil }()
+
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		srv.Run(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	srv.Enqueue(AlertPayload{Fingerprint: "drain-bias-test"})
+
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatalf("send SIGTERM: %v", err)
+	}
+
+	select {
+	case <-runDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return within 10 seconds of SIGTERM")
+	}
+
+	if !hookFired.Load() {
+		t.Fatal("test hook never fired — drain-timer branch was not exercised; test does not cover the race")
+	}
+	if processed.Load() != 1 {
+		t.Errorf("processed = %d, want 1 (worker should have finished cleanly)", processed.Load())
+	}
+	if warnSeen.Load() {
+		t.Error("misleading 'worker drain timeout' warn log emitted despite workers completing in time — bias re-check did not pick done")
+	}
+}
+
+type warnSubstringCaptureHandler struct {
+	seen      *atomic.Bool
+	substring string
+}
+
+func (h *warnSubstringCaptureHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+
+func (h *warnSubstringCaptureHandler) Handle(_ context.Context, r slog.Record) error {
+	if r.Level >= slog.LevelWarn && strings.Contains(r.Message, h.substring) {
+		h.seen.Store(true)
+	}
+	return nil
+}
+
+func (h *warnSubstringCaptureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *warnSubstringCaptureHandler) WithGroup(_ string) slog.Handler      { return h }
+
 func TestServer_Run_GracefulShutdown(t *testing.T) {
 	var processed atomic.Int64
 	metrics := NewAlertMetrics(nil)
