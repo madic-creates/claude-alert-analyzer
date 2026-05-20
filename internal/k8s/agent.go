@@ -16,17 +16,10 @@ import (
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 )
 
-// Argv-shape limits — identical to the values used in
-// internal/checkmk/agent.go's parseCommandInput. Same threat model:
-// a hallucinatory or adversarial Claude could emit oversized argv to OOM
-// shellQuote, fill structured logs, or smuggle control characters that
-// defeat exact-match denylist lookups.
-const (
-	maxArgvElements    = 64
-	maxArgLen          = 4096
-	maxTotalArgBytes   = 16384
-	maxKubectlPromQLen = 4096
-)
+// maxKubectlPromQLen caps the byte length of a PromQL query passed to the
+// promql_query tool. Argv-shape limits for kubectl_exec live in
+// internal/shared/argv.go (MaxArgvElements, MaxArgLen, MaxTotalArgBytes).
+const maxKubectlPromQLen = 4096
 
 // errVerbDenied is a typed sentinel that validateKubectlVerb and
 // validateKubectlFlags wrap their denial errors with. handleKubectlTool uses
@@ -45,45 +38,8 @@ func parseKubectlInput(input json.RawMessage) ([]string, error) {
 	if err := json.Unmarshal(input, &parsed); err != nil {
 		return nil, fmt.Errorf("parse command input: %w", err)
 	}
-	if len(parsed.Command) == 0 {
-		return nil, fmt.Errorf("empty command")
-	}
-	if len(parsed.Command) > maxArgvElements {
-		return nil, fmt.Errorf("command has %d elements, maximum is %d", len(parsed.Command), maxArgvElements)
-	}
-	totalBytes := 0
-	for i, arg := range parsed.Command {
-		if arg == "" {
-			return nil, fmt.Errorf("argument %d is empty", i)
-		}
-		if strings.TrimSpace(arg) == "" {
-			return nil, fmt.Errorf("argument %d is whitespace-only", i)
-		}
-		if len(arg) > maxArgLen {
-			return nil, fmt.Errorf("argument %d exceeds maximum length of %d bytes", i, maxArgLen)
-		}
-		// Explicit null-byte and newline checks before the C0 range loop so
-		// Claude receives a targeted error message ("contains null byte" /
-		// "contains newline") rather than the generic "control character 0x0a".
-		// The C0 loop below remains the authoritative backstop.
-		if strings.ContainsRune(arg, '\x00') {
-			return nil, fmt.Errorf("argument %d contains null byte", i)
-		}
-		if strings.ContainsRune(arg, '\n') || strings.ContainsRune(arg, '\r') {
-			return nil, fmt.Errorf("argument %d contains newline", i)
-		}
-		if strings.TrimSpace(arg) != arg {
-			return nil, fmt.Errorf("argument %d has leading or trailing whitespace", i)
-		}
-		for _, r := range arg {
-			if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
-				return nil, fmt.Errorf("argument %d contains control character 0x%02x", i, r)
-			}
-		}
-		totalBytes += len(arg)
-	}
-	if totalBytes > maxTotalArgBytes {
-		return nil, fmt.Errorf("command total size %d bytes exceeds maximum of %d bytes", totalBytes, maxTotalArgBytes)
+	if err := shared.ValidateArgv(parsed.Command); err != nil {
+		return nil, err
 	}
 	if err := validateKubectlFlags(parsed.Command); err != nil {
 		return nil, err

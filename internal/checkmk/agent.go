@@ -852,25 +852,10 @@ func denyReason(denied map[string]bool, argv []string) string {
 	return fmt.Sprintf("Command denied: %q is not allowed (destructive or privileged command)", cmd)
 }
 
-// maxArgvElements is the maximum number of elements accepted in the command
-// array from a Claude tool call. A legitimate diagnostic command rarely needs
-// more than a handful of arguments; an unbounded array could cause OOM in
-// shellQuote and flood structured logs with multi-megabyte "command" fields.
-const maxArgvElements = 64
-
-// maxArgLen is the maximum byte length of a single argument in the command
-// array. Arguments longer than this are almost certainly not a real command
-// option; capping them prevents shellQuote from allocating huge strings.
-const maxArgLen = 4096
-
-// maxTotalArgBytes is the maximum combined byte length of all arguments in a
-// single command. Per-element limits alone allow up to maxArgvElements *
-// maxArgLen = 256 KB per invocation; a total cap closes that gap so that
-// shellQuote and log fields stay bounded even when many arguments are near
-// their individual limit. Real diagnostic commands (df -h, ps aux, cat
-// /path/to/file) never approach this ceiling.
-const maxTotalArgBytes = 16384
-
+// parseCommandInput unmarshals a Claude SSH tool call payload and applies the
+// shared argv byte-level validation. Verb/flag policy lives separately in
+// isDenied / denyReason and runs after this returns. Keep this function thin:
+// it owns only the JSON-shape concerns specific to the SSH tool.
 func parseCommandInput(input json.RawMessage) ([]string, error) {
 	var parsed struct {
 		Command []string `json:"command"`
@@ -878,67 +863,8 @@ func parseCommandInput(input json.RawMessage) ([]string, error) {
 	if err := json.Unmarshal(input, &parsed); err != nil {
 		return nil, fmt.Errorf("parse command input: %w", err)
 	}
-	if len(parsed.Command) == 0 {
-		return nil, fmt.Errorf("empty command")
-	}
-	if len(parsed.Command) > maxArgvElements {
-		return nil, fmt.Errorf("command has %d elements, maximum is %d", len(parsed.Command), maxArgvElements)
-	}
-	totalBytes := 0
-	for i, arg := range parsed.Command {
-		if arg == "" {
-			return nil, fmt.Errorf("argument %d is empty", i)
-		}
-		if strings.TrimSpace(arg) == "" {
-			return nil, fmt.Errorf("argument %d is whitespace-only", i)
-		}
-		if len(arg) > maxArgLen {
-			return nil, fmt.Errorf("argument %d exceeds maximum length of %d bytes", i, maxArgLen)
-		}
-		if strings.ContainsRune(arg, '\x00') {
-			return nil, fmt.Errorf("argument %d contains null byte", i)
-		}
-		if strings.ContainsRune(arg, '\n') || strings.ContainsRune(arg, '\r') {
-			return nil, fmt.Errorf("argument %d contains newline", i)
-		}
-		// Reject leading/trailing whitespace (spaces, tabs) that are not caught
-		// by the newline check above. A leading space in an argument like " -i"
-		// shifts byte positions and bypasses the sed -i denylist check that
-		// inspects arg[:2] for "-i"/"-I": " -i"[:2] is " -", not "-i". The
-		// newline check already closes this class of bypass for "\n-i"; this
-		// guard ensures the same invariant holds for spaces and tabs. No
-		// legitimate diagnostic command argument has surrounding whitespace.
-		if strings.TrimSpace(arg) != arg {
-			return nil, fmt.Errorf("argument %d has leading or trailing whitespace", i)
-		}
-		// Reject the full C0 control range (0x00–0x1f) and DEL (0x7f). No
-		// legitimate diagnostic command argument contains any of these bytes.
-		// The null-byte, newline, and carriage-return checks above already
-		// reject 0x00, 0x0a, and 0x0d individually; keeping this check
-		// unconditional for the entire C0/DEL range adds defense in depth —
-		// if those earlier checks were ever reordered or removed, this loop
-		// still closes the bypass. It also catches tab (0x09): TrimSpace
-		// rejects leading/trailing tabs but not a tab embedded mid-argument,
-		// so "-exec\t" would pass TrimSpace unchanged and silently defeat
-		// exact-match denylist lookups (findExecFlags stores "-exec", not
-		// "-exec\t").
-		//
-		// C1 Unicode control characters (U+0080–U+009F) are also rejected.
-		// Although they are multi-byte in UTF-8, they are valid Unicode code
-		// points and JSON decodes them transparently (e.g. "\u0080"). Appending
-		// a C1 character to a flag name — e.g. "-exec\u0080" — produces a
-		// string that defeats exact-match denylist lookups in isDenied because
-		// the map stores "-exec", not "-exec\u0080". Blocking U+0080–U+009F
-		// closes this bypass without affecting any legitimate command argument.
-		for _, r := range arg {
-			if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
-				return nil, fmt.Errorf("argument %d contains control character 0x%02x", i, r)
-			}
-		}
-		totalBytes += len(arg)
-	}
-	if totalBytes > maxTotalArgBytes {
-		return nil, fmt.Errorf("command total size %d bytes exceeds maximum of %d bytes", totalBytes, maxTotalArgBytes)
+	if err := shared.ValidateArgv(parsed.Command); err != nil {
+		return nil, err
 	}
 	return parsed.Command, nil
 }

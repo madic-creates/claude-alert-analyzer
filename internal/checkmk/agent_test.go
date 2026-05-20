@@ -1164,14 +1164,14 @@ func TestParseCommandInput_WhitespaceOnlyElement(t *testing.T) {
 // flood structured logs with multi-megabyte "command" fields.
 func TestParseCommandInput_TooManyElements(t *testing.T) {
 	// Build a command array with one more element than the limit.
-	args := make([]string, maxArgvElements+1)
+	args := make([]string, shared.MaxArgvElements+1)
 	for i := range args {
 		args[i] = "ls"
 	}
 	data, _ := json.Marshal(map[string]any{"command": args})
 	_, err := parseCommandInput(json.RawMessage(data))
 	if err == nil {
-		t.Fatalf("expected error for command with %d elements (limit %d)", len(args), maxArgvElements)
+		t.Fatalf("expected error for command with %d elements (limit %d)", len(args), shared.MaxArgvElements)
 	}
 	if !strings.Contains(err.Error(), "maximum") {
 		t.Errorf("error should mention the maximum, got: %v", err)
@@ -1179,14 +1179,14 @@ func TestParseCommandInput_TooManyElements(t *testing.T) {
 }
 
 // TestParseCommandInput_ArgTooLong verifies that a single argument exceeding
-// maxArgLen is rejected. An oversized argument would cause shellQuote to
+// shared.MaxArgLen is rejected. An oversized argument would cause shellQuote to
 // allocate a huge string and could flood log lines.
 func TestParseCommandInput_ArgTooLong(t *testing.T) {
-	oversized := strings.Repeat("A", maxArgLen+1)
+	oversized := strings.Repeat("A", shared.MaxArgLen+1)
 	data, _ := json.Marshal(map[string]any{"command": []string{"cat", oversized}})
 	_, err := parseCommandInput(json.RawMessage(data))
 	if err == nil {
-		t.Fatalf("expected error for argument of length %d (limit %d)", maxArgLen+1, maxArgLen)
+		t.Fatalf("expected error for argument of length %d (limit %d)", shared.MaxArgLen+1, shared.MaxArgLen)
 	}
 	if !strings.Contains(err.Error(), "maximum length") {
 		t.Errorf("error should mention maximum length, got: %v", err)
@@ -1195,12 +1195,12 @@ func TestParseCommandInput_ArgTooLong(t *testing.T) {
 
 // TestParseCommandInput_ExactLimitsAccepted verifies that inputs right at the
 // per-element limits (not over) are accepted without error, provided the total
-// byte count also stays within maxTotalArgBytes.
+// byte count also stays within shared.MaxTotalArgBytes.
 func TestParseCommandInput_ExactLimitsAccepted(t *testing.T) {
 	// Two elements: command name + one argument at the per-element ceiling.
-	// Total bytes = len("cat") + maxArgLen = 3 + 4096 = 4099, well under
-	// maxTotalArgBytes, so both limits are satisfied simultaneously.
-	args := []string{"cat", strings.Repeat("A", maxArgLen)}
+	// Total bytes = len("cat") + shared.MaxArgLen = 3 + 4096 = 4099, well under
+	// shared.MaxTotalArgBytes, so both limits are satisfied simultaneously.
+	args := []string{"cat", strings.Repeat("A", shared.MaxArgLen)}
 	data, _ := json.Marshal(map[string]any{"command": args})
 	_, err := parseCommandInput(json.RawMessage(data))
 	if err != nil {
@@ -1210,14 +1210,14 @@ func TestParseCommandInput_ExactLimitsAccepted(t *testing.T) {
 
 // TestParseCommandInput_TotalSizeTooLarge verifies that a command whose
 // individual arguments each satisfy per-element limits but whose combined size
-// exceeds maxTotalArgBytes is rejected. This closes the gap where an adversary
-// (or hallucinating model) could pass maxArgvElements * maxArgLen = 256 KB in a
+// exceeds shared.MaxTotalArgBytes is rejected. This closes the gap where an adversary
+// (or hallucinating model) could pass shared.MaxArgvElements * shared.MaxArgLen = 256 KB in a
 // single call, causing shellQuote to allocate a large string.
 func TestParseCommandInput_TotalSizeTooLarge(t *testing.T) {
-	// Build a command whose total byte count just exceeds maxTotalArgBytes.
-	// Each individual argument is well under maxArgLen; the violation is the sum.
+	// Build a command whose total byte count just exceeds shared.MaxTotalArgBytes.
+	// Each individual argument is well under shared.MaxArgLen; the violation is the sum.
 	argSize := 1024
-	numArgs := (maxTotalArgBytes / argSize) + 1 // just enough to push over the limit
+	numArgs := (shared.MaxTotalArgBytes / argSize) + 1 // just enough to push over the limit
 	args := make([]string, numArgs+1)
 	args[0] = "cat"
 	for i := 1; i <= numArgs; i++ {
@@ -1226,7 +1226,7 @@ func TestParseCommandInput_TotalSizeTooLarge(t *testing.T) {
 	data, _ := json.Marshal(map[string]any{"command": args})
 	_, err := parseCommandInput(json.RawMessage(data))
 	if err == nil {
-		t.Fatalf("expected error for command with total size > %d bytes", maxTotalArgBytes)
+		t.Fatalf("expected error for command with total size > %d bytes", shared.MaxTotalArgBytes)
 	}
 	if !strings.Contains(err.Error(), "total size") {
 		t.Errorf("error should mention total size, got: %v", err)
