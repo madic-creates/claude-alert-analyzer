@@ -626,6 +626,57 @@ func TestRunToolLoop_MaxRounds_NoConsecutiveUserMessages(t *testing.T) {
 	}
 }
 
+// TestRunToolLoop_ForcedSummaryMaxTokens verifies that when the forced-summary
+// request (issued after max rounds) returns stop_reason "max_tokens",
+// runForcedSummary still returns the partial text without an error. Parallels
+// TestAnalyze_MaxTokensStopReason on the static-analysis path; a slog.Warn is
+// emitted so operators can spot truncated summaries in logs.
+func TestRunToolLoop_ForcedSummaryMaxTokens(t *testing.T) {
+	var callCount atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+
+		if call == 1 {
+			// Round 1 (only round, maxRounds=1): request a tool call.
+			fmt.Fprint(w, `{
+				"content": [
+					{"type": "tool_use", "id": "toolu_1", "name": "execute_command", "input": {"command": ["uptime"]}}
+				],
+				"stop_reason": "tool_use",
+				"usage": {"input_tokens": 50, "output_tokens": 10}
+			}`)
+		} else {
+			// Call 2 = forced summary, truncated by max_tokens.
+			fmt.Fprint(w, `{
+				"content": [{"type": "text", "text": "Partial summary cut off"}],
+				"stop_reason": "max_tokens",
+				"usage": {"input_tokens": 200, "output_tokens": 4096}
+			}`)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv, "test", "test-key", 0)
+	tools := []anthropic.ToolUnionParam{{
+		OfTool: &anthropic.ToolParam{Name: "execute_command"},
+	}}
+
+	result, _, _, err := client.RunToolLoop(context.Background(), SeverityWarning, "test-model", "system", "user prompt", tools, 1,
+		func(name string, input json.RawMessage) (string, error) { return "load: 0.1", nil })
+
+	if err != nil {
+		t.Fatalf("unexpected error for max_tokens forced summary: %v", err)
+	}
+	if result != "Partial summary cut off" {
+		t.Errorf("unexpected result: %q", result)
+	}
+	if callCount.Load() != 2 {
+		t.Errorf("expected exactly 2 API calls, got %d", callCount.Load())
+	}
+}
+
 func TestRunToolLoop_SummaryRequestFails(t *testing.T) {
 	var callCount atomic.Int32
 

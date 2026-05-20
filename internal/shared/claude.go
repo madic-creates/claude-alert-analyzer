@@ -256,6 +256,10 @@ func (c *ClaudeClient) runForcedSummary(ctx context.Context, model, systemPrompt
 		"totalCacheCreationTokens", *totalCacheCreation,
 		"totalCacheReadTokens", *totalCacheRead,
 		"analysisLen", len(analysis))
+	if msg.StopReason != "" && msg.StopReason != anthropic.StopReasonEndTurn {
+		slog.Warn("forced summary response may be truncated", "stop_reason", string(msg.StopReason),
+			"model", model, "outputTokens", msg.Usage.OutputTokens)
+	}
 	if len(analysis) == 0 {
 		slog.Warn("forced summary produced empty analysis", "contentBlocks", len(msg.Content))
 	}
