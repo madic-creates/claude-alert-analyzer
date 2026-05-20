@@ -30,6 +30,11 @@ func loadConfig() k8s.Config {
 		slog.Error("config error", "error", err)
 		os.Exit(1)
 	}
+	skipResolved, err := shared.ParseBoolEnv("SKIP_RESOLVED", true)
+	if err != nil {
+		slog.Error("invalid SKIP_RESOLVED", "error", err)
+		os.Exit(1)
+	}
 
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	authToken := os.Getenv("ANTHROPIC_AUTH_TOKEN")
@@ -71,7 +76,7 @@ func loadConfig() k8s.Config {
 		PrometheusURL:   shared.EnvOrDefault("PROMETHEUS_URL", "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"),
 		ClaudeModel:     shared.EnvOrDefault("CLAUDE_MODEL", "claude-sonnet-4-6"),
 		CooldownSeconds: cooldown,
-		SkipResolved:    shared.EnvOrDefault("SKIP_RESOLVED", "true") != "false",
+		SkipResolved:    skipResolved,
 		Port:            shared.EnvOrDefault("PORT", "8080"),
 		MetricsPort:     shared.EnvOrDefault("METRICS_PORT", "9101"),
 		WebhookSecret:   webhookSecret,

@@ -29,6 +29,27 @@ func ParseIntEnv(key, fallback string, min, max int) (int, error) {
 	return v, nil
 }
 
+// ParseBoolEnv reads a boolean environment variable using strconv.ParseBool
+// semantics: "1", "t", "T", "TRUE", "true", "True" are true; "0", "f", "F",
+// "FALSE", "false", "False" are false. Unset or empty returns fallback.
+// An unrecognised value returns an error so misconfiguration fails fast at
+// startup rather than silently coercing to a (possibly unintended) bool.
+//
+// This replaces ad-hoc patterns like EnvOrDefault(key, "true") == "true",
+// which silently treat "TRUE"/"1"/"yes" as the negative case — typically
+// the opposite of the operator's intent.
+func ParseBoolEnv(key string, fallback bool) (bool, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback, nil
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s=%q: not a valid boolean (expected 1/0, true/false, t/f, TRUE/FALSE)", key, raw)
+	}
+	return v, nil
+}
+
 // RequireEnv returns the value of the environment variable key,
 // or an error if it is not set or empty.
 func RequireEnv(key string) (string, error) {

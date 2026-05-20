@@ -54,6 +54,12 @@ func loadConfig() checkmk.Config {
 	_ = os.Unsetenv("ANTHROPIC_AUTH_TOKEN")
 	_ = os.Unsetenv("ANTHROPIC_BASE_URL")
 
+	sshEnabled, err := shared.ParseBoolEnv("SSH_ENABLED", true)
+	if err != nil {
+		slog.Error("invalid SSH_ENABLED", "error", err)
+		os.Exit(1)
+	}
+
 	// SSH_DENIED_COMMANDS: not set = default denylist, empty = no guardrails, value = custom list
 	var sshDeniedCommands map[string]bool
 	if val, ok := os.LookupEnv("SSH_DENIED_COMMANDS"); ok {
@@ -81,7 +87,7 @@ func loadConfig() checkmk.Config {
 		CheckMKAPIURL:     shared.EnvOrDefault("CHECKMK_API_URL", "http://checkmk-service.monitoring:5000/cmk/check_mk/api/1.0/"),
 		CheckMKAPIUser:    checkmkUser,
 		CheckMKAPISecret:  checkmkSecret,
-		SSHEnabled:        shared.EnvOrDefault("SSH_ENABLED", "true") == "true",
+		SSHEnabled:        sshEnabled,
 		SSHUser:           shared.EnvOrDefault("SSH_USER", "nagios"),
 		SSHKeyPath:        shared.EnvOrDefault("SSH_KEY_PATH", "/ssh/id_ed25519"),
 		SSHKnownHostsPath: shared.EnvOrDefault("SSH_KNOWN_HOSTS_PATH", "/ssh/known_hosts"),
