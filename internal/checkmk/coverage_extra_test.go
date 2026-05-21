@@ -134,6 +134,64 @@ func TestSSHDialer_Dial_HandshakeFailure(t *testing.T) {
 	}
 }
 
+// TestSSHDialer_Dial_HandshakeCtxCancelled verifies that cancelling the context
+// during the SSH handshake (after TCP connects but before the banner exchange
+// completes) causes SSHDialer.Dial to return promptly rather than blocking for
+// the full 10-second hard timeout. Before this fix, ssh.NewClientConn ignored
+// the context; a graceful-shutdown cancellation mid-handshake would stall for
+// up to 10 seconds. The fix adds a watcher goroutine that closes the underlying
+// TCP connection on ctx.Done(), causing ssh.NewClientConn to return immediately.
+// SSHDialer.Dial hardcodes port 22; the test is skipped if port 22 is unavailable.
+func TestSSHDialer_Dial_HandshakeCtxCancelled(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:22")
+	if err != nil {
+		t.Skipf("cannot listen on 127.0.0.1:22 (already in use or no permission): %v", err)
+	}
+	defer ln.Close()
+
+	// Start a TCP server that accepts the connection but never sends the SSH
+	// banner, so the handshake blocks indefinitely until interrupted.
+	accepted := make(chan struct{})
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		close(accepted) // signal: TCP layer is up, handshake is now stalling
+		time.Sleep(30 * time.Second)
+		conn.Close()
+	}()
+
+	d, err := buildTestDialer(t)
+	if err != nil {
+		t.Fatalf("buildTestDialer: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Cancel the context once the TCP connection is established so that the
+	// cancellation fires during the SSH handshake (not before the TCP dial).
+	go func() {
+		<-accepted
+		cancel()
+	}()
+
+	start := time.Now()
+	_, dialErr := d.Dial(ctx, "localhost", "127.0.0.1")
+	elapsed := time.Since(start)
+
+	if dialErr == nil {
+		t.Fatal("expected error when context cancelled mid-handshake, got nil")
+	}
+	// The watcher goroutine must close the connection immediately on ctx.Done(),
+	// unblocking ssh.NewClientConn well before the 10-second hard deadline.
+	const wantMax = 5 * time.Second
+	if elapsed > wantMax {
+		t.Errorf("Dial took %v; expected <%v when ctx is cancelled mid-handshake (watcher goroutine fix missing?)", elapsed, wantMax)
+	}
+}
+
 // TestSSHDialer_Dial_HappyPath verifies that SSHDialer.Dial returns a live
 // *ssh.Client when both the TCP connection and SSH handshake succeed.
 // SSHDialer.Dial hardcodes port 22; the test is skipped if port 22 is unavailable.

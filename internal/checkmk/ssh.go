@@ -53,16 +53,18 @@ func NewSSHDialer(cfg Config) (*SSHDialer, error) {
 // known_hosts callback. This ensures the TCP connection goes to the
 // CheckMK-verified IP address (preventing DNS hijacking) while still
 // allowing known_hosts entries that are keyed by hostname to match.
-// The ctx is forwarded to net.DialContext so that a cancelled context
-// (e.g. during graceful shutdown) terminates the TCP dial immediately
-// instead of blocking for the full connect timeout.
+// ctx cancellation is propagated through both the TCP dial (net.DialContext)
+// and the SSH handshake (via a watcher goroutine that closes the connection
+// on ctx.Done()), so a cancelled context — e.g. during graceful shutdown —
+// terminates immediately rather than stalling for the hard dial timeout.
 func (d *SSHDialer) Dial(ctx context.Context, hostname, ip string) (*ssh.Client, error) {
 	const dialTimeout = 10 * time.Second
 	sshCfg := &ssh.ClientConfig{
 		User:            d.user,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(d.signer)},
 		HostKeyCallback: d.hostKeyCallback,
-		Timeout:         dialTimeout,
+		// No Timeout: the hard deadline is enforced via context.WithTimeout
+		// below; ctx cancellation propagates via the watcher goroutine.
 	}
 	// Establish the TCP connection directly to the verified IP so that no
 	// DNS resolution can redirect us to a different host. DialContext is
@@ -74,14 +76,39 @@ func (d *SSHDialer) Dial(ctx context.Context, hostname, ip string) (*ssh.Client,
 	if err != nil {
 		return nil, fmt.Errorf("TCP dial %s: %w", ipAddr, err)
 	}
+
+	// Wrap ctx with a hard deadline for the handshake. ssh.NewClientConn
+	// ignores ctx, so without this a stalled SSH banner would block
+	// indefinitely when the parent ctx has no deadline of its own.
+	dialCtx, dialCancel := context.WithTimeout(ctx, dialTimeout)
+	defer dialCancel()
+
+	// Propagate cancellation into the SSH handshake: close the underlying
+	// TCP connection when dialCtx is done (either parent cancelled or the
+	// dialTimeout expired) so that ssh.NewClientConn returns immediately
+	// instead of stalling until its own internal timeout.
+	handshakeDone := make(chan struct{})
+	go func() {
+		select {
+		case <-dialCtx.Done():
+			_ = conn.Close()
+		case <-handshakeDone:
+		}
+	}()
+
 	// Pass hostname (not ipAddr) as the addr argument to NewClientConn so
 	// that the known_hosts callback receives the hostname as the key.
 	// known_hosts entries are typically recorded by hostname; using the IP
 	// here would cause verification to fail for hostname-keyed entries.
 	hostnameAddr := net.JoinHostPort(hostname, "22")
 	c, chans, reqs, err := ssh.NewClientConn(conn, hostnameAddr, sshCfg)
+	close(handshakeDone)
+
 	if err != nil {
 		_ = conn.Close()
+		if dialCtx.Err() != nil {
+			return nil, fmt.Errorf("SSH handshake with %s (ip %s): %w", hostname, ip, dialCtx.Err())
+		}
 		return nil, fmt.Errorf("SSH handshake with %s (ip %s): %w", hostname, ip, err)
 	}
 	return ssh.NewClient(c, chans, reqs), nil
