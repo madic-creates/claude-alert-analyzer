@@ -443,3 +443,19 @@ func TestAnalysisPolicy_AllModels_DefaultModelIsFirst(t *testing.T) {
 		t.Errorf("AllModels[0] = %q, want DefaultModel %q first", got[0], "claude-sonnet-4-6")
 	}
 }
+
+// TestAnalysisPolicy_NilReceiver verifies that ModelFor, MaxRoundsFor, and
+// AllModels are nil-safe, matching the existing nil-guard in IsDegraded.
+func TestAnalysisPolicy_NilReceiver(t *testing.T) {
+	var p *AnalysisPolicy
+
+	if got := p.ModelFor(SeverityWarning); got != "" {
+		t.Errorf("ModelFor on nil policy = %q, want empty string", got)
+	}
+	if got := p.MaxRoundsFor(SeverityWarning); got != 0 {
+		t.Errorf("MaxRoundsFor on nil policy = %d, want 0", got)
+	}
+	if got := p.AllModels(); got != nil {
+		t.Errorf("AllModels on nil policy = %v, want nil", got)
+	}
+}

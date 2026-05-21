@@ -22,6 +22,9 @@ type AnalysisPolicy struct {
 // ModelFor returns the configured model for a given severity, falling back
 // to DefaultModel when no override is set.
 func (p *AnalysisPolicy) ModelFor(sev Severity) string {
+	if p == nil {
+		return ""
+	}
 	if model, ok := p.ModelOverrides[sev]; ok && model != "" {
 		return model
 	}
@@ -33,6 +36,9 @@ func (p *AnalysisPolicy) ModelFor(sev Severity) string {
 // so dashboard queries return 0 instead of "no data" before the first Claude
 // call.
 func (p *AnalysisPolicy) AllModels() []string {
+	if p == nil {
+		return nil
+	}
 	seen := map[string]struct{}{}
 	out := []string{}
 	add := func(m string) {
@@ -56,6 +62,9 @@ func (p *AnalysisPolicy) AllModels() []string {
 // severity, falling back to DefaultMaxRounds. A return value of 0 means
 // "static-only analysis" (caller uses Analyze, not RunToolLoop).
 func (p *AnalysisPolicy) MaxRoundsFor(sev Severity) int {
+	if p == nil {
+		return 0
+	}
 	if rounds, ok := p.RoundsOverrides[sev]; ok {
 		return rounds
 	}
