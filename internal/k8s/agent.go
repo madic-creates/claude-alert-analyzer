@@ -489,11 +489,12 @@ func RunAgenticDiagnostics(
 	prom PromQLQuerier,
 	metrics *shared.AlertMetrics,
 	severity shared.Severity,
+	alertname string,
 	userPrompt string,
 	maxRounds int,
 	model string,
 ) (string, error) {
-	slog.Info("starting agentic k8s diagnostics", "maxRounds", maxRounds)
+	slog.Info("starting agentic k8s diagnostics", "alertname", alertname, "maxRounds", maxRounds)
 
 	handleTool := func(name string, input json.RawMessage) (string, error) {
 		start := time.Now()
@@ -517,7 +518,7 @@ func RunAgenticDiagnostics(
 		start := time.Now()
 		defer func() {
 			if r := recover(); r != nil {
-				slog.Error("agent tool handler panicked", "tool", name, "recover", r)
+				slog.Error("agent tool handler panicked", "alertname", alertname, "tool", name, "recover", r)
 				if metrics != nil {
 					metrics.RecordAgentToolCall(name, outcomeExecError, time.Since(start))
 				}
@@ -545,7 +546,7 @@ func RunAgenticDiagnostics(
 		return "", fmt.Errorf("agentic loop failed: %w", err)
 	}
 	slog.Info("agentic k8s diagnostics complete",
-		"rounds", rounds, "exhausted", exhausted)
+		"alertname", alertname, "rounds", rounds, "exhausted", exhausted)
 	return analysis, nil
 }
 

@@ -181,7 +181,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	if rounds == 0 {
 		analysis, analysisErr = deps.Analyzer.Analyze(ctx, alert.SeverityLevel, model, StaticAnalysisSystemPrompt, userPrompt)
 	} else {
-		analysis, analysisErr = RunAgenticDiagnostics(ctx, deps.ToolRunner, deps.KubectlRunner, deps.Prom, deps.Metrics, alert.SeverityLevel, userPrompt, rounds, model)
+		analysis, analysisErr = RunAgenticDiagnostics(ctx, deps.ToolRunner, deps.KubectlRunner, deps.Prom, deps.Metrics, alert.SeverityLevel, alertname, userPrompt, rounds, model)
 	}
 	if analysisErr != nil {
 		slog.Error("analysis failed", "alertname", alertname, "error", analysisErr)

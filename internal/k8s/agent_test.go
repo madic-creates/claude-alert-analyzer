@@ -607,7 +607,7 @@ func TestRunAgenticDiagnostics_HappyPath(t *testing.T) {
 
 	got, err := RunAgenticDiagnostics(
 		context.Background(), runner, kc, pq, metrics, shared.SeverityWarning,
-		"## Alert: Foo\nbody", 10, "test-model",
+		"test-alert", "## Alert: Foo\nbody", 10, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -640,7 +640,7 @@ func TestRunAgenticDiagnostics_PromQLDispatch(t *testing.T) {
 			return "ok", nil
 		},
 	}
-	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "test-alert", "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(pq.calls) != 1 || pq.calls[0] != "up" {
@@ -762,7 +762,7 @@ func TestRunAgenticDiagnostics_ValidationRejected(t *testing.T) {
 			return "stopped early", nil
 		},
 	}
-	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "test-alert", "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -781,7 +781,7 @@ func TestRunAgenticDiagnostics_UnknownTool(t *testing.T) {
 			return "ok", nil
 		},
 	}
-	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "test-alert", "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -799,7 +799,7 @@ func TestRunAgenticDiagnostics_RecordsMetrics(t *testing.T) {
 			return "done", nil
 		},
 	}
-	_, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model")
+	_, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "test-alert", "ctx", 10, "test-model")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -847,7 +847,7 @@ func TestRunAgenticDiagnostics_PanicRecovery(t *testing.T) {
 
 	out, err := RunAgenticDiagnostics(
 		context.Background(), runner, panickyKubectlRunner{}, pq, metrics, shared.SeverityWarning,
-		"ctx", 10, "test-model",
+		"test-alert", "ctx", 10, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("loop should not return error after recovered panic: %v", err)
@@ -899,7 +899,7 @@ func TestRunAgenticDiagnostics_ForcedSummary(t *testing.T) {
 	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
 	runner := &fakeToolLoopRunnerExhausted{maxRounds: 10}
 
-	out, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model")
+	out, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "test-alert", "ctx", 10, "test-model")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -940,7 +940,7 @@ func TestRunAgenticDiagnostics_RBACForbidden(t *testing.T) {
 			return "ok", nil
 		},
 	}
-	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "test-alert", "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -1133,7 +1133,7 @@ func TestRunAgenticDiagnostics_EmptyOutputError(t *testing.T) {
 		},
 	}
 
-	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "test-alert", "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -1170,7 +1170,7 @@ func TestHandleKubectlTool_ExecErrorOutcome(t *testing.T) {
 			return "done", nil
 		},
 	}
-	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "test-alert", "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -1206,7 +1206,7 @@ func TestHandleKubectlTool_TimeoutOutcomeViaErrString(t *testing.T) {
 			return "done", nil
 		},
 	}
-	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "test-alert", "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -1252,7 +1252,7 @@ func TestHandleKubectlTool_CtxCancelledOutcomeIsTimeout(t *testing.T) {
 			return "done", nil
 		},
 	}
-	if _, err := RunAgenticDiagnostics(ctx, runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
+	if _, err := RunAgenticDiagnostics(ctx, runner, kc, pq, metrics, shared.SeverityWarning, "test-alert", "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -1323,7 +1323,7 @@ func TestHandlePromQLTool_RejectedValidOutcome(t *testing.T) {
 			return "done", nil
 		},
 	}
-	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "test-alert", "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -1363,7 +1363,7 @@ func TestHandleKubectlTool_RejectedValidOutcome(t *testing.T) {
 			return "done", nil
 		},
 	}
-	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "test-alert", "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -1406,7 +1406,7 @@ func TestHandleKubectlTool_NonZeroExitWithPartialOutput(t *testing.T) {
 			return "done", nil
 		},
 	}
-	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "ctx", 10, "test-model"); err != nil {
+	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "test-alert", "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
