@@ -22,7 +22,15 @@ type APIClient struct {
 	Secret string
 }
 
-// NewAPIClient creates a client from config with default 10s timeout.
+// defaultCheckMKAPITimeout is the deadline applied to CheckMK REST API calls
+// when cfg.CheckMKAPITimeout is zero. Mirrors the KubeAPITimeout/PromTimeout
+// pattern in the k8s analyzer so operators can tune slow-CheckMK environments
+// via CHECKMK_API_TIMEOUT without code changes.
+const defaultCheckMKAPITimeout = 10 * time.Second
+
+// NewAPIClient creates a client from config. The HTTP timeout honours
+// cfg.CheckMKAPITimeout when set; otherwise it falls back to
+// defaultCheckMKAPITimeout (10s).
 // The URL is normalised to always end with "/" so that path concatenation
 // (e.g. url+"objects/host_config/"+hostname) produces a valid URL regardless
 // of whether the operator included a trailing slash in CHECKMK_API_URL.
@@ -31,8 +39,12 @@ func NewAPIClient(cfg Config) *APIClient {
 	if !strings.HasSuffix(apiURL, "/") {
 		apiURL += "/"
 	}
+	timeout := cfg.CheckMKAPITimeout
+	if timeout <= 0 {
+		timeout = defaultCheckMKAPITimeout
+	}
 	return &APIClient{
-		HTTP:   &http.Client{Timeout: 10 * time.Second},
+		HTTP:   &http.Client{Timeout: timeout},
 		URL:    apiURL,
 		User:   cfg.CheckMKAPIUser,
 		Secret: cfg.CheckMKAPISecret,

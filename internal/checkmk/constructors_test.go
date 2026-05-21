@@ -54,6 +54,28 @@ func TestNewAPIClient_HTTPClientIsNotDefault(t *testing.T) {
 	}
 }
 
+// TestNewAPIClient_TimeoutOverride verifies that a non-zero
+// Config.CheckMKAPITimeout replaces the default 10s timeout. Mirrors the
+// KUBE_API_TIMEOUT / PROM_TIMEOUT escape hatch in the k8s analyzer.
+func TestNewAPIClient_TimeoutOverride(t *testing.T) {
+	c := NewAPIClient(Config{CheckMKAPITimeout: 45 * time.Second})
+	if c.HTTP.Timeout != 45*time.Second {
+		t.Errorf("HTTP.Timeout = %v, want 45s", c.HTTP.Timeout)
+	}
+}
+
+// TestNewAPIClient_NegativeTimeoutFallsBack verifies that a negative
+// CheckMKAPITimeout falls back to the default. The env-var path uses
+// time.ParseDuration which can accept negative durations; the fallback keeps
+// the client from setting a non-positive http.Client.Timeout (which disables
+// the timeout entirely).
+func TestNewAPIClient_NegativeTimeoutFallsBack(t *testing.T) {
+	c := NewAPIClient(Config{CheckMKAPITimeout: -1 * time.Second})
+	if c.HTTP.Timeout != 10*time.Second {
+		t.Errorf("HTTP.Timeout = %v, want 10s default", c.HTTP.Timeout)
+	}
+}
+
 // TestConfig_BaseConfig verifies that Config.BaseConfig() correctly maps the
 // overlapping fields into the returned shared.BaseConfig.
 func TestConfig_BaseConfig(t *testing.T) {

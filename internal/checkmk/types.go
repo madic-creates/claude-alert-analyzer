@@ -37,6 +37,7 @@ type Config struct {
 	SSHKnownHostsPath string
 	SSHDeniedCommands map[string]bool // nil = use default, empty = no guardrails
 	GroupCooldownTTL  time.Duration   // 0 == group-cooldown disabled
+	CheckMKAPITimeout time.Duration   // Timeout for CheckMK REST API calls (0 = default 10s)
 }
 
 // BaseConfig returns a shared.BaseConfig derived from this Config.
