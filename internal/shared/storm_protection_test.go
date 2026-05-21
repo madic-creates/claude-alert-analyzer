@@ -1,12 +1,26 @@
 package shared
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
 	"time"
 )
+
+// alwaysFailPublisher implements Publisher and always returns the same error.
+// Used to drive NotifyAggregator.Stop's final flush into returning a non-nil
+// error so the StormProtection.Stop slog.Warn branches can be exercised.
+type alwaysFailPublisher struct{ err error }
+
+func (p *alwaysFailPublisher) Name() string { return "alwaysfail" }
+func (p *alwaysFailPublisher) Publish(_ context.Context, _, _, _ string) error {
+	return p.err
+}
 
 // stormProtectionUnsetAll clears every env var LoadStormProtectionConfig
 // reads so each test starts from a clean baseline. t.Setenv inside individual
@@ -95,6 +109,64 @@ func TestStormProtection_StopNil(t *testing.T) {
 	// deferred at the call site without a presence guard.
 	var sp *StormProtection
 	sp.Stop(context.Background())
+}
+
+// TestStormProtection_Stop_LogsWarnOnAggregatorError verifies the two
+// slog.Warn branches in StormProtection.Stop fire when an aggregator's
+// final flush returns an error. Without this test the storm/breaker error
+// branches sit at 0% coverage and a regression could turn them into silent
+// failures during shutdown.
+func TestStormProtection_Stop_LogsWarnOnAggregatorError(t *testing.T) {
+	var buf bytes.Buffer
+	handler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	old := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	fail := &alwaysFailPublisher{err: errors.New("publish boom")}
+	// Interval=time.Hour keeps the periodic timer from firing before Stop,
+	// so the buffered title survives to the shutdown flush where it will
+	// trigger PublishAll's error path.
+	storm := NewNotifyAggregator([]Publisher{fail}, time.Hour, "storm %d", "4", newDropsCounter())
+	breaker := NewNotifyAggregator([]Publisher{fail}, time.Hour, "breaker %d", "5", newDropsCounter())
+	if storm == nil || breaker == nil {
+		t.Fatal("expected non-nil aggregators")
+	}
+	sp := &StormProtection{StormNotify: storm, BreakerNotify: breaker}
+
+	if !sp.StormNotify.Add("storm-title") {
+		t.Fatal("storm Add() returned false")
+	}
+	if !sp.BreakerNotify.Add("breaker-title") {
+		t.Fatal("breaker Add() returned false")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	sp.Stop(ctx)
+
+	foundStorm, foundBreaker := false, false
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			continue
+		}
+		switch rec["msg"] {
+		case "storm aggregator stop returned error":
+			foundStorm = true
+		case "breaker aggregator stop returned error":
+			foundBreaker = true
+		}
+	}
+	if !foundStorm {
+		t.Errorf("storm aggregator slog.Warn not emitted; log output:\n%s", buf.String())
+	}
+	if !foundBreaker {
+		t.Errorf("breaker aggregator slog.Warn not emitted; log output:\n%s", buf.String())
+	}
 }
 
 func TestLoadStormProtectionConfig_EnvVarErrors(t *testing.T) {
