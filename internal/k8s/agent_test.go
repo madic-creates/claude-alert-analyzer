@@ -664,7 +664,7 @@ func TestHandlePromQLTool_TimeoutOutcome(t *testing.T) {
 	cancel()
 
 	pq := &fakePromQLQuerier{err: fmt.Errorf("query failed: context canceled")}
-	out, err := handlePromQLTool(ctx, pq, metrics, json.RawMessage(`{"query":"up"}`), time.Now())
+	out, err := handlePromQLTool(ctx, pq, metrics, "test-alert", json.RawMessage(`{"query":"up"}`), time.Now())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -703,7 +703,7 @@ func TestHandlePromQLTool_ExecErrorOutcome(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
 			pq := &fakePromQLQuerier{err: tc.err}
-			out, err := handlePromQLTool(context.Background(), pq, metrics, json.RawMessage(`{"query":"up"}`), time.Now())
+			out, err := handlePromQLTool(context.Background(), pq, metrics, "test-alert", json.RawMessage(`{"query":"up"}`), time.Now())
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -729,7 +729,7 @@ func TestHandlePromQLTool_ExecErrorOutcome(t *testing.T) {
 func TestHandlePromQLTool_NoDataIsOK(t *testing.T) {
 	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
 	pq := &fakePromQLQuerier{response: "(no data)"}
-	if _, err := handlePromQLTool(context.Background(), pq, metrics, json.RawMessage(`{"query":"up"}`), time.Now()); err != nil {
+	if _, err := handlePromQLTool(context.Background(), pq, metrics, "test-alert", json.RawMessage(`{"query":"up"}`), time.Now()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 

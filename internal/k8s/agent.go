@@ -500,9 +500,9 @@ func RunAgenticDiagnostics(
 		start := time.Now()
 		switch name {
 		case "kubectl_exec":
-			return handleKubectlTool(ctx, kc, metrics, input, start)
+			return handleKubectlTool(ctx, kc, metrics, alertname, input, start)
 		case "promql_query":
-			return handlePromQLTool(ctx, prom, metrics, input, start)
+			return handlePromQLTool(ctx, prom, metrics, alertname, input, start)
 		default:
 			return "", fmt.Errorf("unknown tool: %s", name)
 		}
@@ -550,7 +550,7 @@ func RunAgenticDiagnostics(
 	return analysis, nil
 }
 
-func handleKubectlTool(ctx context.Context, kc KubectlRunner, metrics *shared.AlertMetrics, input json.RawMessage, start time.Time) (string, error) {
+func handleKubectlTool(ctx context.Context, kc KubectlRunner, metrics *shared.AlertMetrics, alertname string, input json.RawMessage, start time.Time) (string, error) {
 	argv, err := parseKubectlInput(input)
 	if err != nil {
 		// Distinguish verb/flag rejection from byte-level validation so
@@ -559,7 +559,7 @@ func handleKubectlTool(ctx context.Context, kc KubectlRunner, metrics *shared.Al
 		if errors.Is(err, errVerbDenied) {
 			outcome = outcomeRejectedVerb
 		}
-		recordToolCall(metrics, "kubectl_exec", outcome, time.Since(start), nil)
+		recordToolCall(alertname, metrics, "kubectl_exec", outcome, time.Since(start), nil)
 		// Validation errors return the message as the tool result (not a Go
 		// error) so Claude can self-correct.
 		return err.Error(), nil
@@ -578,20 +578,20 @@ func handleKubectlTool(ctx context.Context, kc KubectlRunner, metrics *shared.Al
 		} else if isExecError(err) {
 			outcome = outcomeExecError
 		}
-		recordToolCall(metrics, "kubectl_exec", outcome, time.Since(start), argv)
+		recordToolCall(alertname, metrics, "kubectl_exec", outcome, time.Since(start), argv)
 		if out != "" {
 			return fmt.Sprintf("$ %s\n```\n%s\n```\n[exited: %v]", cmdLine, out, err), nil
 		}
 		return fmt.Sprintf("$ %s\n[exited: %v]", cmdLine, err), nil
 	}
-	recordToolCall(metrics, "kubectl_exec", outcomeOK, time.Since(start), argv)
+	recordToolCall(alertname, metrics, "kubectl_exec", outcomeOK, time.Since(start), argv)
 	return fmt.Sprintf("$ %s\n```\n%s\n```", cmdLine, out), nil
 }
 
-func handlePromQLTool(ctx context.Context, prom PromQLQuerier, metrics *shared.AlertMetrics, input json.RawMessage, start time.Time) (string, error) {
+func handlePromQLTool(ctx context.Context, prom PromQLQuerier, metrics *shared.AlertMetrics, alertname string, input json.RawMessage, start time.Time) (string, error) {
 	q, err := parsePromQLInput(input)
 	if err != nil {
-		recordToolCall(metrics, "promql_query", outcomeRejectedValid, time.Since(start), nil)
+		recordToolCall(alertname, metrics, "promql_query", outcomeRejectedValid, time.Since(start), nil)
 		return err.Error(), nil
 	}
 	queryCtx, cancel := context.WithTimeout(ctx, agentToolTimeout)
@@ -619,12 +619,13 @@ func handlePromQLTool(ctx context.Context, prom PromQLQuerier, metrics *shared.A
 	out := shared.SanitizeOutput(display)
 	out = shared.RedactSecrets(out)
 	out = shared.Truncate(out, 4096)
-	recordToolCall(metrics, "promql_query", outcome, time.Since(start), nil)
+	recordToolCall(alertname, metrics, "promql_query", outcome, time.Since(start), nil)
 	return fmt.Sprintf("# PromQL: %s\n```\n%s\n```", q, out), nil
 }
 
-func recordToolCall(metrics *shared.AlertMetrics, tool, outcome string, dur time.Duration, argv []string) {
+func recordToolCall(alertname string, metrics *shared.AlertMetrics, tool, outcome string, dur time.Duration, argv []string) {
 	attrs := []any{
+		"alertname", alertname,
 		"tool", tool,
 		"duration_ms", dur.Milliseconds(),
 		"outcome", outcome,
