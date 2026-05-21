@@ -169,7 +169,7 @@ func HandleWebhook(
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, "queued")
 		} else {
-			slog.Warn("queue full", "hostname", notif.Hostname)
+			slog.Warn("queue full", "hostname", notif.Hostname, "service", notif.ServiceDescription)
 			cooldown.Clear(fp)
 			cooldown.ClearGroup(groupKey)
 			metrics.RecordDropped(shared.DropReasonQueueFull)
