@@ -74,7 +74,7 @@ var allowedKubectlSubVerbs = map[string]map[string]bool{
 func validateKubectlVerb(argv []string) error {
 	verb, subVerb := extractVerbs(argv)
 	if verb == "" {
-		return fmt.Errorf("kubectl command has no verb; allowed verbs: %s", listAllowedVerbs())
+		return fmt.Errorf("kubectl command has no verb; allowed verbs: %s: %w", listAllowedVerbs(), errVerbDenied)
 	}
 	if !allowedKubectlVerbs[verb] {
 		return fmt.Errorf("command denied: kubectl %s is not permitted; allowed verbs: %s: %w", verb, listAllowedVerbs(), errVerbDenied)

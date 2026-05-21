@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"os"
@@ -1441,6 +1442,14 @@ func TestValidateKubectlVerb_NoVerb(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "kubectl command has no verb") {
 		t.Errorf("expected 'no verb' error, got: %v", err)
+	}
+	// Must wrap errVerbDenied so handleKubectlTool classifies the outcome as
+	// rejected_verb (a policy rejection) instead of rejected_validation (a
+	// byte-level structural failure). The empty verb is semantically a
+	// missing-from-allowlist case, symmetric with the other verb-rejection
+	// paths in validateKubectlVerb / validateKubectlFlags.
+	if !errors.Is(err, errVerbDenied) {
+		t.Errorf("expected errors.Is(err, errVerbDenied) for no-verb case, got: %v", err)
 	}
 }
 
