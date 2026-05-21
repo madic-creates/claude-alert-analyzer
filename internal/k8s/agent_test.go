@@ -679,6 +679,67 @@ func TestHandlePromQLTool_TimeoutOutcome(t *testing.T) {
 	}
 }
 
+// TestHandlePromQLTool_ExecErrorOutcome verifies that when PrometheusClient.Query
+// returns one of its parenthesized error markers (HTTP failure, non-200 status,
+// parse failure, upstream "query error" response), handlePromQLTool records
+// outcome="exec_error" rather than outcome="ok". Before this fix every
+// non-timeout failure was silently classified as success in the
+// agent_tool_calls_total metric, hiding Prometheus outages from operators.
+func TestHandlePromQLTool_ExecErrorOutcome(t *testing.T) {
+	cases := []struct {
+		name     string
+		response string
+	}{
+		{"http_failure", "(query failed: connection refused)"},
+		{"non_200", "(Prometheus returned 502: Bad Gateway)"},
+		{"request_build", "(request error: parse url)"},
+		{"read_body", "(failed to read response)"},
+		{"parse_body", "(failed to parse response)"},
+		{"query_error_typed", "(query error: bad_data: invalid expression)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
+			pq := &fakePromQLQuerier{response: tc.response}
+			out, err := handlePromQLTool(context.Background(), pq, metrics, json.RawMessage(`{"query":"up"}`), time.Now())
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !strings.Contains(out, "up") {
+				t.Errorf("expected query name in output, got %q", out)
+			}
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("GET", "/metrics", nil)
+			promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
+			body := rec.Body.String()
+			if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="exec_error",product="k8s",tool="promql_query"} 1`) {
+				t.Errorf("expected exec_error outcome for %q; body:\n%s", tc.response, body)
+			}
+		})
+	}
+}
+
+// TestHandlePromQLTool_NoDataIsOK verifies that the "(no data)" empty-result
+// sentinel is classified as outcome="ok", not "exec_error". An empty result set
+// is a successful query that found no matching time-series — operators should
+// not see it counted as a Prometheus failure.
+func TestHandlePromQLTool_NoDataIsOK(t *testing.T) {
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
+	pq := &fakePromQLQuerier{response: "(no data)"}
+	if _, err := handlePromQLTool(context.Background(), pq, metrics, json.RawMessage(`{"query":"up"}`), time.Now()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="ok",product="k8s",tool="promql_query"} 1`) {
+		t.Errorf("expected ok outcome for (no data); body:\n%s", body)
+	}
+}
+
 func TestRunAgenticDiagnostics_ValidationRejected(t *testing.T) {
 	kc := &fakeKubectlRunner{}
 	pq := &fakePromQLQuerier{}

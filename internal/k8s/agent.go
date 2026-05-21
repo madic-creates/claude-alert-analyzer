@@ -590,21 +590,48 @@ func handlePromQLTool(ctx context.Context, prom PromQLQuerier, metrics *shared.A
 	}
 	queryCtx, cancel := context.WithTimeout(ctx, agentToolTimeout)
 	defer cancel()
-	out := prom.Query(queryCtx, q)
-	out = shared.SanitizeOutput(out)
-	out = shared.RedactSecrets(out)
-	out = shared.Truncate(out, 4096)
-	// Detect timeout: if queryCtx expired (or its parent was cancelled) while
-	// prom.Query was running, record the outcome as "timeout" rather than "ok"
-	// so operators can distinguish slow/unreachable Prometheus from successful
-	// queries in the agent_tool_calls_total metric. Without this check every
-	// PromQL call — including timed-out ones — was recorded as outcome="ok".
+	raw := prom.Query(queryCtx, q)
+	// Classify outcome on the raw return BEFORE sanitize/redact/truncate so the
+	// parenthesized error markers emitted by PrometheusClient.query (see
+	// context.go: "(query failed: ...)", "(Prometheus returned 502: ...)", etc.)
+	// are visible to the detector. queryCtx.Err() dominates: when the context
+	// is cancelled the HTTP error wins the classification even if it also
+	// surfaced as a "(query failed: ...)" string. Without this check every
+	// non-timeout failure — HTTP errors, 5xx responses, parse failures, upstream
+	// "query error" responses — was recorded as outcome="ok", masking real
+	// Prometheus problems in the agent_tool_calls_total metric.
 	outcome := outcomeOK
 	if queryCtx.Err() != nil {
 		outcome = outcomeTimeout
+	} else if isPromQueryError(raw) {
+		outcome = outcomeExecError
 	}
+	out := shared.SanitizeOutput(raw)
+	out = shared.RedactSecrets(out)
+	out = shared.Truncate(out, 4096)
 	recordToolCall(metrics, "promql_query", outcome, time.Since(start), nil)
 	return fmt.Sprintf("# PromQL: %s\n```\n%s\n```", q, out), nil
+}
+
+// isPromQueryError returns true if s is one of the parenthesized error markers
+// emitted by PrometheusClient.query when an HTTP, parse, or upstream-status
+// failure prevents the query from returning data. Successful queries return
+// either a list of "labels: value" lines or the sentinel "(no data)" for an
+// empty result set; both are NOT errors. The prefixes mirror the small fixed
+// set of fmt.Sprintf calls in context.go. Detection is by prefix rather than
+// exact match because two of the markers ("(query failed: %v)" and
+// "(Prometheus returned %d: %s)") embed dynamic content.
+func isPromQueryError(s string) bool {
+	switch {
+	case strings.HasPrefix(s, "(request error:"),
+		strings.HasPrefix(s, "(query failed:"),
+		strings.HasPrefix(s, "(Prometheus returned "),
+		strings.HasPrefix(s, "(failed to read response"),
+		strings.HasPrefix(s, "(failed to parse response"),
+		strings.HasPrefix(s, "(query error:"):
+		return true
+	}
+	return false
 }
 
 func recordToolCall(metrics *shared.AlertMetrics, tool, outcome string, dur time.Duration, argv []string) {
