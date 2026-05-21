@@ -2202,7 +2202,10 @@ func TestPrometheusClient_Query(t *testing.T) {
 	defer server.Close()
 
 	c := NewPrometheusClient(server.URL)
-	got := c.Query(context.Background(), "up")
+	got, err := c.Query(context.Background(), "up")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if !strings.Contains(got, "job=prom") || !strings.Contains(got, ": 1") {
 		t.Errorf("unexpected Query output: %q", got)
 	}
@@ -2248,9 +2251,9 @@ func TestQuery_OversizedResponseReusesConnection(t *testing.T) {
 	const requests = 5
 	for i := 0; i < requests; i++ {
 		// The oversized body cannot parse as JSON; the call returns the
-		// parse-failure sentinel. The point of the test is the connection
-		// re-use, not the result — so we ignore the return value.
-		_ = prom.query(context.Background(), "up")
+		// parse-failure error. The point of the test is the connection
+		// re-use, not the result — so we ignore the return values.
+		_, _ = prom.query(context.Background(), "up")
 	}
 
 	if got := newConns.Load(); got != 1 {

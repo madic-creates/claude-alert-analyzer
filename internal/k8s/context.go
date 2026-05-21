@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -58,15 +59,15 @@ func isValidNamespace(s string) bool {
 	return validK8sName.MatchString(s)
 }
 
-func (p *PrometheusClient) query(ctx context.Context, queryStr string) string {
+func (p *PrometheusClient) query(ctx context.Context, queryStr string) (string, error) {
 	u := fmt.Sprintf("%s/api/v1/query?query=%s", p.URL, url.QueryEscape(queryStr))
 	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
-		return fmt.Sprintf("(request error: %v)", err)
+		return "", fmt.Errorf("request error: %w", err)
 	}
 	resp, err := p.HTTP.Do(req)
 	if err != nil {
-		return fmt.Sprintf("(query failed: %v)", err)
+		return "", fmt.Errorf("query failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
@@ -78,12 +79,12 @@ func (p *PrometheusClient) query(ctx context.Context, queryStr string) string {
 		// drains the connection so Go's transport can return it to the pool;
 		// the cap bounds time spent reading from a pathologically slow upstream.
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, shared.MaxBodyDrainBytes))
-		return fmt.Sprintf("(Prometheus returned %d: %s)", resp.StatusCode,
+		return "", fmt.Errorf("prometheus returned %d: %s", resp.StatusCode,
 			shared.Truncate(shared.RedactSecrets(strings.TrimSpace(string(body))), 200))
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, shared.MaxResponseBytes))
 	if err != nil {
-		return "(failed to read response)"
+		return "", errors.New("failed to read response")
 	}
 	// If the actual body exceeds MaxResponseBytes, ReadAll stops at the limit
 	// and leaves the tail unread. Closing without consuming the rest prevents
@@ -96,7 +97,7 @@ func (p *PrometheusClient) query(ctx context.Context, queryStr string) string {
 
 	var result PromQueryResponse
 	if err := json.Unmarshal(body, &result); err != nil {
-		return "(failed to parse response)"
+		return "", errors.New("failed to parse response")
 	}
 	if result.Status != "success" {
 		if result.Error != "" {
@@ -105,14 +106,14 @@ func (p *PrometheusClient) query(ctx context.Context, queryStr string) string {
 			// newlines in errorType or error to inject fake Markdown sections
 			// (e.g. "\n## INJECTED"). This mirrors the sanitization applied
 			// to Prometheus label keys/values and Kubernetes event fields.
-			return fmt.Sprintf("(query error: %s: %s)",
+			return "", fmt.Errorf("query error: %s: %s",
 				shared.SanitizeAlertField(result.ErrorType),
 				shared.SanitizeAlertField(result.Error))
 		}
-		return fmt.Sprintf("(query error: status=%q)", result.Status)
+		return "", fmt.Errorf("query error: status=%q", result.Status)
 	}
 	if len(result.Data.Result) == 0 {
-		return "(no data)"
+		return "(no data)", nil
 	}
 
 	// Cap the number of result lines injected into the Claude prompt.
@@ -149,16 +150,29 @@ func (p *PrometheusClient) query(ctx context.Context, queryStr string) string {
 	if total > maxPromResultLines {
 		lines = append(lines[:maxPromResultLines], fmt.Sprintf("... [%d more results truncated]", total-maxPromResultLines))
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), nil
 }
 
 // Query is the public entry point for the agent loop. It delegates to the
-// existing private query method, which already applies result-line truncation,
-// label/value sanitization, and JSON parsing. Errors and timeouts are returned
-// as human-readable strings prefixed with "(...)" so the agent can surface them
-// to Claude as tool results.
-func (p *PrometheusClient) Query(ctx context.Context, queryStr string) string {
+// private query method, which applies result-line truncation, label/value
+// sanitization, and JSON parsing. On HTTP, parse, or upstream-status failure
+// it returns ("", err); on success it returns the formatted result string and
+// nil. The empty-result sentinel "(no data)" is a successful return.
+func (p *PrometheusClient) Query(ctx context.Context, queryStr string) (string, error) {
 	return p.query(ctx, queryStr)
+}
+
+// queryForPrompt wraps query and formats any error as a parenthesized marker
+// suitable for inclusion in the Claude prompt's static prefetch sections.
+// Used by GetMetrics where the result feeds directly into a string-joined
+// prompt block; the agent path uses Query directly and handles errors as
+// typed errors instead.
+func (p *PrometheusClient) queryForPrompt(ctx context.Context, queryStr string) string {
+	out, err := p.query(ctx, queryStr)
+	if err != nil {
+		return fmt.Sprintf("(%v)", err)
+	}
+	return out
 }
 
 // runAsync launches f in a goroutine, sends its return value on a buffered
@@ -220,7 +234,7 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	// goroutines were even started. Worst-case latency drops from ~20 s
 	// (serial ALERTS + parallel namespace queries) to ~10 s (all in parallel).
 	firingCh := runAsync("firing alerts", func() string {
-		return p.query(ctx, `ALERTS{alertstate="firing"}`)
+		return p.queryForPrompt(ctx, `ALERTS{alertstate="firing"}`)
 	})
 
 	var sections []string
@@ -231,19 +245,19 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 		// applies, run it in a fourth goroutine so it overlaps with the namespace
 		// queries instead of waiting for all three to complete first.
 		cpuCh := runAsync("cpu query", func() string {
-			return p.query(ctx, fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace="%s"}[5m])) by (pod)`, namespace))
+			return p.queryForPrompt(ctx, fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace="%s"}[5m])) by (pod)`, namespace))
 		})
 		memCh := runAsync("memory query", func() string {
-			return p.query(ctx, fmt.Sprintf(`sum(container_memory_working_set_bytes{namespace="%s"}) by (pod)`, namespace))
+			return p.queryForPrompt(ctx, fmt.Sprintf(`sum(container_memory_working_set_bytes{namespace="%s"}) by (pod)`, namespace))
 		})
 		restartsCh := runAsync("restarts query", func() string {
-			return p.query(ctx, fmt.Sprintf(`sum(kube_pod_container_status_restarts_total{namespace="%s"}) by (pod)`, namespace))
+			return p.queryForPrompt(ctx, fmt.Sprintf(`sum(kube_pod_container_status_restarts_total{namespace="%s"}) by (pod)`, namespace))
 		})
 
 		var alertnameCh <-chan string
 		if alertnameQueryStr != "" {
 			alertnameCh = runAsync("alertname query", func() string {
-				return p.query(ctx, alertnameQueryStr)
+				return p.queryForPrompt(ctx, alertnameQueryStr)
 			})
 		}
 
@@ -266,7 +280,7 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 		var alertnameCh <-chan string
 		if alertnameQueryStr != "" {
 			alertnameCh = runAsync("alertname query", func() string {
-				return p.query(ctx, alertnameQueryStr)
+				return p.queryForPrompt(ctx, alertnameQueryStr)
 			})
 		}
 		sections = append(sections, "## Active Firing Alerts", <-firingCh)

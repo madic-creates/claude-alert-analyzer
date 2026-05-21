@@ -579,11 +579,12 @@ func (f *fakeKubectlRunner) Exec(ctx context.Context, argv []string, timeout tim
 type fakePromQLQuerier struct {
 	calls    []string
 	response string
+	err      error
 }
 
-func (f *fakePromQLQuerier) Query(ctx context.Context, q string) string {
+func (f *fakePromQLQuerier) Query(ctx context.Context, q string) (string, error) {
 	f.calls = append(f.calls, q)
-	return f.response
+	return f.response, f.err
 }
 
 func TestRunAgenticDiagnostics_HappyPath(t *testing.T) {
@@ -662,7 +663,7 @@ func TestHandlePromQLTool_TimeoutOutcome(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	pq := &fakePromQLQuerier{response: "(query failed: context canceled)"}
+	pq := &fakePromQLQuerier{err: fmt.Errorf("query failed: context canceled")}
 	out, err := handlePromQLTool(ctx, pq, metrics, json.RawMessage(`{"query":"up"}`), time.Now())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -681,27 +682,27 @@ func TestHandlePromQLTool_TimeoutOutcome(t *testing.T) {
 }
 
 // TestHandlePromQLTool_ExecErrorOutcome verifies that when PrometheusClient.Query
-// returns one of its parenthesized error markers (HTTP failure, non-200 status,
-// parse failure, upstream "query error" response), handlePromQLTool records
-// outcome="exec_error" rather than outcome="ok". Before this fix every
-// non-timeout failure was silently classified as success in the
-// agent_tool_calls_total metric, hiding Prometheus outages from operators.
+// returns a non-nil error (HTTP failure, non-200 status, parse failure, upstream
+// "query error" response), handlePromQLTool records outcome="exec_error" rather
+// than outcome="ok". Before the typed-error refactor every non-timeout failure
+// was silently classified as success in the agent_tool_calls_total metric,
+// hiding Prometheus outages from operators.
 func TestHandlePromQLTool_ExecErrorOutcome(t *testing.T) {
 	cases := []struct {
-		name     string
-		response string
+		name string
+		err  error
 	}{
-		{"http_failure", "(query failed: connection refused)"},
-		{"non_200", "(Prometheus returned 502: Bad Gateway)"},
-		{"request_build", "(request error: parse url)"},
-		{"read_body", "(failed to read response)"},
-		{"parse_body", "(failed to parse response)"},
-		{"query_error_typed", "(query error: bad_data: invalid expression)"},
+		{"http_failure", fmt.Errorf("query failed: connection refused")},
+		{"non_200", fmt.Errorf("prometheus returned 502: Bad Gateway")},
+		{"request_build", fmt.Errorf("request error: parse url")},
+		{"read_body", fmt.Errorf("failed to read response")},
+		{"parse_body", fmt.Errorf("failed to parse response")},
+		{"query_error_typed", fmt.Errorf("query error: bad_data: invalid expression")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
-			pq := &fakePromQLQuerier{response: tc.response}
+			pq := &fakePromQLQuerier{err: tc.err}
 			out, err := handlePromQLTool(context.Background(), pq, metrics, json.RawMessage(`{"query":"up"}`), time.Now())
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -715,7 +716,7 @@ func TestHandlePromQLTool_ExecErrorOutcome(t *testing.T) {
 			promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
 			body := rec.Body.String()
 			if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="exec_error",product="k8s",tool="promql_query"} 1`) {
-				t.Errorf("expected exec_error outcome for %q; body:\n%s", tc.response, body)
+				t.Errorf("expected exec_error outcome for %q; body:\n%s", tc.err, body)
 			}
 		})
 	}

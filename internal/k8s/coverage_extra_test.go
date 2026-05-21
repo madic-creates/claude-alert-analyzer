@@ -31,7 +31,7 @@ import (
 func TestQuery_RequestCreateError(t *testing.T) {
 	// A null byte in the URL makes NewRequestWithContext return an error.
 	prom := &PrometheusClient{HTTP: http.DefaultClient, URL: "http://host\x00invalid"}
-	result := prom.query(context.Background(), "up")
+	result := prom.queryForPrompt(context.Background(), "up")
 	if !strings.Contains(result, "request error") {
 		t.Errorf("expected '(request error: ...)' for invalid URL, got: %s", result)
 	}
@@ -56,7 +56,7 @@ func TestQuery_FailedToReadResponse(t *testing.T) {
 	defer srv.Close()
 
 	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
-	result := prom.query(context.Background(), "up")
+	result := prom.queryForPrompt(context.Background(), "up")
 	if !strings.Contains(result, "failed to read response") {
 		t.Errorf("expected '(failed to read response)', got: %s", result)
 	}
@@ -74,7 +74,7 @@ func TestQuery_StatusWithNoErrorField(t *testing.T) {
 	defer srv.Close()
 
 	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
-	result := prom.query(context.Background(), "up")
+	result := prom.queryForPrompt(context.Background(), "up")
 	if !strings.Contains(result, "query error") {
 		t.Errorf("expected '(query error: ...)' for non-success status without error, got: %s", result)
 	}
@@ -96,7 +96,7 @@ func TestQuery_FailedToParseResponse(t *testing.T) {
 	defer srv.Close()
 
 	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
-	result := prom.query(context.Background(), "up")
+	result := prom.queryForPrompt(context.Background(), "up")
 	if result != "(failed to parse response)" {
 		t.Errorf("expected '(failed to parse response)', got: %s", result)
 	}
@@ -650,7 +650,7 @@ func TestQuery_ErrorFieldsSanitized(t *testing.T) {
 	defer srv.Close()
 
 	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
-	result := prom.query(context.Background(), "up")
+	result := prom.queryForPrompt(context.Background(), "up")
 
 	// The injected headings must not appear as standalone Markdown sections.
 	// After sanitization the embedded \n characters are stripped, fusing the

@@ -452,8 +452,11 @@ func parsePromQLInput(input json.RawMessage) (string, error) {
 
 // PromQLQuerier is the interface the agent loop uses to issue arbitrary
 // PromQL queries. *PrometheusClient satisfies it via its public Query method.
+// On HTTP, parse, or upstream-status failure it returns ("", err); on success
+// it returns the formatted result string and nil. The empty-result sentinel
+// "(no data)" is a successful return.
 type PromQLQuerier interface {
-	Query(ctx context.Context, query string) string
+	Query(ctx context.Context, query string) (string, error)
 }
 
 // per-tool wall-clock timeout. Mirrors checkmk's runSSHCommand.
@@ -590,48 +593,31 @@ func handlePromQLTool(ctx context.Context, prom PromQLQuerier, metrics *shared.A
 	}
 	queryCtx, cancel := context.WithTimeout(ctx, agentToolTimeout)
 	defer cancel()
-	raw := prom.Query(queryCtx, q)
-	// Classify outcome on the raw return BEFORE sanitize/redact/truncate so the
-	// parenthesized error markers emitted by PrometheusClient.query (see
-	// context.go: "(query failed: ...)", "(Prometheus returned 502: ...)", etc.)
-	// are visible to the detector. queryCtx.Err() dominates: when the context
-	// is cancelled the HTTP error wins the classification even if it also
-	// surfaced as a "(query failed: ...)" string. Without this check every
-	// non-timeout failure — HTTP errors, 5xx responses, parse failures, upstream
-	// "query error" responses — was recorded as outcome="ok", masking real
-	// Prometheus problems in the agent_tool_calls_total metric.
+	raw, queryErr := prom.Query(queryCtx, q)
+	// queryCtx.Err() dominates: when the context is cancelled the HTTP error
+	// wins the classification even if it also surfaced as a wrapped error.
+	// Without this check every non-timeout failure — HTTP errors, 5xx responses,
+	// parse failures, upstream "query error" responses — would be recorded as
+	// outcome="ok", masking real Prometheus problems in the
+	// agent_tool_calls_total metric.
 	outcome := outcomeOK
 	if queryCtx.Err() != nil {
 		outcome = outcomeTimeout
-	} else if isPromQueryError(raw) {
+	} else if queryErr != nil {
 		outcome = outcomeExecError
 	}
-	out := shared.SanitizeOutput(raw)
+	// For the prompt, format error back into a parenthesized marker so Claude
+	// can see what went wrong. Mirrors the queryForPrompt helper used by the
+	// static prefetch path in GetMetrics.
+	display := raw
+	if queryErr != nil {
+		display = fmt.Sprintf("(%v)", queryErr)
+	}
+	out := shared.SanitizeOutput(display)
 	out = shared.RedactSecrets(out)
 	out = shared.Truncate(out, 4096)
 	recordToolCall(metrics, "promql_query", outcome, time.Since(start), nil)
 	return fmt.Sprintf("# PromQL: %s\n```\n%s\n```", q, out), nil
-}
-
-// isPromQueryError returns true if s is one of the parenthesized error markers
-// emitted by PrometheusClient.query when an HTTP, parse, or upstream-status
-// failure prevents the query from returning data. Successful queries return
-// either a list of "labels: value" lines or the sentinel "(no data)" for an
-// empty result set; both are NOT errors. The prefixes mirror the small fixed
-// set of fmt.Sprintf calls in context.go. Detection is by prefix rather than
-// exact match because two of the markers ("(query failed: %v)" and
-// "(Prometheus returned %d: %s)") embed dynamic content.
-func isPromQueryError(s string) bool {
-	switch {
-	case strings.HasPrefix(s, "(request error:"),
-		strings.HasPrefix(s, "(query failed:"),
-		strings.HasPrefix(s, "(Prometheus returned "),
-		strings.HasPrefix(s, "(failed to read response"),
-		strings.HasPrefix(s, "(failed to parse response"),
-		strings.HasPrefix(s, "(query error:"):
-		return true
-	}
-	return false
 }
 
 func recordToolCall(metrics *shared.AlertMetrics, tool, outcome string, dur time.Duration, argv []string) {

@@ -549,7 +549,7 @@ func TestPromqlQuery_Success(t *testing.T) {
 	defer srv.Close()
 
 	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
-	result := prom.query(context.Background(), `up`)
+	result := prom.queryForPrompt(context.Background(), `up`)
 	if result == "" {
 		t.Error("expected non-empty result")
 	}
@@ -565,7 +565,7 @@ func TestPromqlQuery_NoData(t *testing.T) {
 	defer srv.Close()
 
 	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
-	result := prom.query(context.Background(), `up`)
+	result := prom.queryForPrompt(context.Background(), `up`)
 	if result != "(no data)" {
 		t.Errorf("expected (no data), got %q", result)
 	}
@@ -581,7 +581,7 @@ func TestPromqlQuery_ServerError(t *testing.T) {
 	// The query function returns early for non-200 status codes, reporting the
 	// HTTP status without attempting to parse the body.
 	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
-	result := prom.query(context.Background(), `up`)
+	result := prom.queryForPrompt(context.Background(), `up`)
 	if result == "" {
 		t.Error("expected non-empty error result")
 	}
@@ -592,7 +592,7 @@ func TestPromqlQuery_ServerError(t *testing.T) {
 
 func TestPromqlQuery_Unreachable(t *testing.T) {
 	prom := &PrometheusClient{HTTP: &http.Client{Timeout: time.Second}, URL: "http://127.0.0.1:1"}
-	result := prom.query(context.Background(), `up`)
+	result := prom.queryForPrompt(context.Background(), `up`)
 	if result == "" {
 		t.Error("expected non-empty error result for unreachable server")
 	}
