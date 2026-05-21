@@ -291,6 +291,86 @@ func TestRunToolLoop_OneToolRoundThenEnd(t *testing.T) {
 	}
 }
 
+// TestRunToolLoop_EndTurnEmptyContent verifies the end_turn exit path handles
+// an empty content response (no text blocks) by returning an empty analysis
+// without error. A slog.Warn is emitted so operators can spot silent empty
+// publications in logs; this mirrors the symmetric guard in runForcedSummary.
+func TestRunToolLoop_EndTurnEmptyContent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"content": [],
+			"stop_reason": "end_turn",
+			"usage": {"input_tokens": 10, "output_tokens": 0}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv, "test", "test-key", 0)
+	tools := []anthropic.ToolUnionParam{{
+		OfTool: &anthropic.ToolParam{Name: "execute_command"},
+	}}
+
+	result, rounds, forced, err := client.RunToolLoop(context.Background(), SeverityWarning, "test-model", "system", "user prompt", tools, 5,
+		func(name string, input json.RawMessage) (string, error) {
+			t.Fatal("tool handler should not be called")
+			return "", nil
+		})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "" {
+		t.Errorf("expected empty result, got %q", result)
+	}
+	if rounds != 1 {
+		t.Errorf("expected 1 round, got %d", rounds)
+	}
+	if forced {
+		t.Error("forced summary should not be triggered on end_turn exit")
+	}
+}
+
+// TestRunToolLoop_NoToolUseEmptyContent verifies the no-tool-use exit path
+// (e.g. stop_reason=max_tokens with content that exhausted budget before any
+// text or tool_use blocks) returns empty analysis without error. A second
+// slog.Warn is emitted so operators can identify these silent empty exits.
+func TestRunToolLoop_NoToolUseEmptyContent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"content": [],
+			"stop_reason": "max_tokens",
+			"usage": {"input_tokens": 100, "output_tokens": 4096}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv, "test", "test-key", 0)
+	tools := []anthropic.ToolUnionParam{{
+		OfTool: &anthropic.ToolParam{Name: "execute_command"},
+	}}
+
+	result, rounds, forced, err := client.RunToolLoop(context.Background(), SeverityWarning, "test-model", "system", "user prompt", tools, 5,
+		func(name string, input json.RawMessage) (string, error) {
+			t.Fatal("tool handler should not be called")
+			return "", nil
+		})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "" {
+		t.Errorf("expected empty result, got %q", result)
+	}
+	if rounds != 1 {
+		t.Errorf("expected 1 round, got %d", rounds)
+	}
+	if forced {
+		t.Error("forced summary should not be triggered on no-tool-use exit")
+	}
+}
+
 func TestRunToolLoop_MaxRoundsForcesSummary(t *testing.T) {
 	var callCount atomic.Int32
 

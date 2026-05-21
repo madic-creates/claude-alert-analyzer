@@ -194,7 +194,12 @@ func (c *ClaudeClient) RunToolLoop(ctx context.Context, severity Severity,
 				"totalInputTokens", totalInput, "totalOutputTokens", totalOutput,
 				"totalCacheCreationTokens", totalCacheCreation,
 				"totalCacheReadTokens", totalCacheRead)
-			return extractText(msg), round + 1, false, nil
+			analysis := extractText(msg)
+			if len(analysis) == 0 {
+				slog.Warn("tool loop end_turn produced empty analysis",
+					"contentBlocks", len(msg.Content), "round", round+1)
+			}
+			return analysis, round + 1, false, nil
 		}
 
 		var toolResults []anthropic.ContentBlockParamUnion
@@ -216,7 +221,12 @@ func (c *ClaudeClient) RunToolLoop(ctx context.Context, severity Severity,
 		if len(toolResults) == 0 {
 			slog.Warn("tool loop: no tool_use blocks, returning text as final answer",
 				"stop_reason", string(msg.StopReason), "round", round+1)
-			return extractText(msg), round + 1, false, nil
+			analysis := extractText(msg)
+			if len(analysis) == 0 {
+				slog.Warn("tool loop no-tool-use exit produced empty analysis",
+					"contentBlocks", len(msg.Content), "round", round+1)
+			}
+			return analysis, round + 1, false, nil
 		}
 		messages = appendToolResultsAndCacheTail(messages, toolResults)
 	}
