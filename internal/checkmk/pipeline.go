@@ -224,11 +224,8 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	// === Post-API phase ===
 	phase = phasePostAPI
 
-	priorityMap := map[string]string{"critical": "5", "warning": "4", "unknown": "3", "ok": "2"}
-	priority := priorityMap[alert.Severity]
-	if priority == "" {
-		priority = "3"
-	}
+	priorityMap := map[string]string{"critical": "5", "warning": "4", "info": "2", "unknown": "3"}
+	priority := priorityMap[alert.SeverityLevel.String()]
 	title := fmt.Sprintf("Analysis: %s", safeTitle)
 
 	if stormMode && deps.StormNotify != nil {

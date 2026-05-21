@@ -309,16 +309,17 @@ func TestProcessAlert_SSH_Success(t *testing.T) {
 	}
 
 	alert := shared.AlertPayload{
-		Fingerprint: "ssh-success-fp",
-		Title:       "host1 - High Load",
-		Severity:    "warning",
-		Fields:      map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+		Fingerprint:   "ssh-success-fp",
+		Title:         "host1 - High Load",
+		Severity:      "warning",
+		SeverityLevel: shared.SeverityWarning,
+		Fields:        map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
 	}
 
 	ProcessAlert(context.Background(), deps, alert)
 
-	if int64(testutil.ToFloat64(metrics.Prom.AlertsProcessed.WithLabelValues("unknown"))) != 1 {
-		t.Errorf("AlertsProcessed = %d, want 1", int64(testutil.ToFloat64(metrics.Prom.AlertsProcessed.WithLabelValues("unknown"))))
+	if int64(testutil.ToFloat64(metrics.Prom.AlertsProcessed.WithLabelValues("warning"))) != 1 {
+		t.Errorf("AlertsProcessed = %d, want 1", int64(testutil.ToFloat64(metrics.Prom.AlertsProcessed.WithLabelValues("warning"))))
 	}
 	if int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)) != 0 {
 		t.Errorf("AlertsFailed = %d, want 0", int64(testutil.ToFloat64(metrics.Prom.AlertsFailed)))
@@ -536,24 +537,21 @@ func TestProcessAlert_EmptyAnalysis(t *testing.T) {
 	}
 }
 
-// TestProcessAlert_PriorityMapping verifies the checkmk severity → ntfy priority
-// table and that an unrecognised severity falls back to "3".
+// TestProcessAlert_PriorityMapping verifies the SeverityLevel → ntfy priority table.
 func TestProcessAlert_PriorityMapping(t *testing.T) {
 	cases := []struct {
-		severity string
-		want     string
+		level shared.Severity
+		want  string
 	}{
-		{"critical", "5"},
-		{"warning", "4"},
-		{"unknown", "3"},
-		{"ok", "2"},
-		{"", "3"},         // empty → default
-		{"CRITICAL", "3"}, // case-sensitive → default
+		{shared.SeverityCritical, "5"},
+		{shared.SeverityWarning, "4"},
+		{shared.SeverityInfo, "2"},
+		{shared.SeverityUnknown, "3"},
 	}
 
 	for _, tc := range cases {
 		tc := tc
-		t.Run(fmt.Sprintf("severity=%q", tc.severity), func(t *testing.T) {
+		t.Run(tc.level.String(), func(t *testing.T) {
 			pub := &mockPublisher{}
 			metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductCheckMK))
 
@@ -573,10 +571,10 @@ func TestProcessAlert_PriorityMapping(t *testing.T) {
 			}
 
 			alert := shared.AlertPayload{
-				Fingerprint: "fp-" + tc.severity,
-				Title:       "TestAlert",
-				Severity:    tc.severity,
-				Fields:      map[string]string{"hostname": "h", "host_address": "1.2.3.4"},
+				Fingerprint:   fmt.Sprintf("fp-%d", tc.level),
+				Title:         "TestAlert",
+				SeverityLevel: tc.level,
+				Fields:        map[string]string{"hostname": "h", "host_address": "1.2.3.4"},
 			}
 			ProcessAlert(context.Background(), deps, alert)
 

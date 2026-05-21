@@ -40,7 +40,7 @@ func TestSeverityFromCheckMK(t *testing.T) {
 		{"service_ok_overrides_host_down", "OK", "DOWN", SeverityInfo},
 		{"host_down", "", "DOWN", SeverityCritical},
 		{"host_unreachable", "", "UNREACHABLE", SeverityCritical},
-		{"host_ok_fallback", "", "UP", SeverityWarning},
+		{"host_up", "", "UP", SeverityInfo},
 		{"empty_both_defaults_to_warning", "", "", SeverityWarning},
 	}
 	for _, tt := range tests {

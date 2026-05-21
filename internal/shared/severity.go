@@ -63,6 +63,8 @@ func SeverityFromCheckMK(serviceState, hostState string) Severity {
 	switch hostState {
 	case "DOWN", "UNREACHABLE":
 		return SeverityCritical
+	case "UP":
+		return SeverityInfo
 	}
 	return SeverityWarning
 }
