@@ -1107,22 +1107,36 @@ func TestGroupKeyFromNotif(t *testing.T) {
 		{
 			name: "service present",
 			n:    CheckMKNotification{Hostname: "web01", ServiceDescription: "CPU"},
-			want: "web01:CPU",
+			want: "5:web013:CPU",
 		},
 		{
 			name: "empty service uses _host_ sentinel",
 			n:    CheckMKNotification{Hostname: "web01", ServiceDescription: ""},
-			want: "web01:_host_",
+			want: "5:web016:_host_",
 		},
 		{
 			name: "empty hostname",
 			n:    CheckMKNotification{Hostname: "", ServiceDescription: "Disk /"},
-			want: ":Disk /",
+			want: "0:6:Disk /",
 		},
 		{
 			name: "both empty",
 			n:    CheckMKNotification{Hostname: "", ServiceDescription: ""},
-			want: ":_host_",
+			want: "0:6:_host_",
+		},
+		{
+			// CheckMK ServiceDescriptions commonly contain ":" (e.g.
+			// "Disk: /var"). Length-prefixing ensures these two notifications
+			// — which would both produce "web01:Disk: /var" under a plain
+			// join — yield distinct group keys.
+			name: "service description containing colon",
+			n:    CheckMKNotification{Hostname: "web01", ServiceDescription: "Disk: /var"},
+			want: "5:web0110:Disk: /var",
+		},
+		{
+			name: "colon in hostname",
+			n:    CheckMKNotification{Hostname: "web01:Disk", ServiceDescription: " /var"},
+			want: "10:web01:Disk5: /var",
 		},
 	}
 	for _, tc := range cases {

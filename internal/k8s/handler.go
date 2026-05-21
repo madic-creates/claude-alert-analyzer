@@ -174,11 +174,14 @@ func HandleWebhook(
 // groupKeyFromLabels derives the group cooldown key from Alertmanager labels.
 // Empty namespace is replaced with the sentinel "_cluster_" so cluster-wide
 // alerts (e.g. KubeAPIDown) don't collide with each other or with alerts
-// that happen to have an empty Namespace label.
+// that happen to have an empty Namespace label. Parts are length-prefixed so
+// alertnames or namespaces containing ":" cannot collide with adjacent parts
+// (same rationale as fingerprint() in the checkmk handler).
 func groupKeyFromLabels(labels map[string]string) string {
+	name := labels["alertname"]
 	ns := labels["namespace"]
 	if ns == "" {
 		ns = "_cluster_"
 	}
-	return labels["alertname"] + ":" + ns
+	return fmt.Sprintf("%d:%s%d:%s", len(name), name, len(ns), ns)
 }

@@ -183,13 +183,16 @@ func HandleWebhook(
 // groupKeyFromNotif derives the group cooldown key from a CheckMK notification.
 // Empty service description (host-level events) is replaced with the sentinel
 // "_host_" so they don't collide with each other or with services that
-// happen to have an empty description.
+// happen to have an empty description. Parts are length-prefixed because
+// CheckMK ServiceDescriptions commonly contain ":" (e.g. "Disk: /var"); a
+// plain "host:svc" join would let "h:Disk: /var" and "h:Disk:" + " /var"
+// collide. Same length-prefix rationale as fingerprint() below.
 func groupKeyFromNotif(n CheckMKNotification) string {
 	svc := n.ServiceDescription
 	if svc == "" {
 		svc = "_host_"
 	}
-	return n.Hostname + ":" + svc
+	return fmt.Sprintf("%d:%s%d:%s", len(n.Hostname), n.Hostname, len(svc), svc)
 }
 
 // fingerprint hashes the supplied parts using length-prefixed encoding so that

@@ -857,22 +857,35 @@ func TestGroupKeyFromLabels(t *testing.T) {
 		{
 			name:   "namespace present",
 			labels: map[string]string{"alertname": "PodCrashLooping", "namespace": "prod"},
-			want:   "PodCrashLooping:prod",
+			want:   "15:PodCrashLooping4:prod",
 		},
 		{
 			name:   "empty namespace uses _cluster_ sentinel",
 			labels: map[string]string{"alertname": "KubeAPIDown", "namespace": ""},
-			want:   "KubeAPIDown:_cluster_",
+			want:   "11:KubeAPIDown9:_cluster_",
 		},
 		{
 			name:   "missing namespace key uses _cluster_ sentinel",
 			labels: map[string]string{"alertname": "KubeAPIDown"},
-			want:   "KubeAPIDown:_cluster_",
+			want:   "11:KubeAPIDown9:_cluster_",
 		},
 		{
 			name:   "empty alertname",
 			labels: map[string]string{"alertname": "", "namespace": "staging"},
-			want:   ":staging",
+			want:   "0:7:staging",
+		},
+		{
+			// Length prefixes prevent collision when alertname or namespace
+			// contains ":" — otherwise these two inputs would both produce
+			// "Foo:bar:baz" under the old plain-join scheme.
+			name:   "colon in alertname does not collide with colon in namespace",
+			labels: map[string]string{"alertname": "Foo:bar", "namespace": "baz"},
+			want:   "7:Foo:bar3:baz",
+		},
+		{
+			name:   "colon-prefixed namespace",
+			labels: map[string]string{"alertname": "Foo", "namespace": "bar:baz"},
+			want:   "3:Foo7:bar:baz",
 		},
 	}
 	for _, tc := range cases {
