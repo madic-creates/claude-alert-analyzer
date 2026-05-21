@@ -28,6 +28,8 @@ Environment-variable reference for both analyzers.
 | `MAX_LOG_BYTES` | `2048` | Per-pod log truncation limit |
 | `SKIP_RESOLVED` | `true` | Ignore resolved alerts |
 | `NTFY_PUBLISH_TOPIC` | `kubernetes-analysis` | Default ntfy topic |
+| `KUBE_API_TIMEOUT` | `30s` | Deadline applied to all Kubernetes API calls during context gathering (events + pod status + logs share this budget). Go `time.ParseDuration` syntax (e.g. `30s`, `1m`). Empty or `0` uses the default |
+| `PROM_TIMEOUT` | `30s` | Deadline applied to Prometheus metric queries during context gathering. Go `time.ParseDuration` syntax. Empty or `0` uses the default |
 
 ## CheckMK analyzer
 
@@ -42,6 +44,7 @@ Environment-variable reference for both analyzers.
 | `SSH_KNOWN_HOSTS_PATH` | `/ssh/known_hosts` | Path to known_hosts file |
 | `SSH_DENIED_COMMANDS` | *(built-in default)* | Comma-separated denylist. Empty = no guardrails. See [`DefaultDeniedCommands`](../internal/checkmk/agent.go) for the current default list |
 | `NTFY_PUBLISH_TOPIC` | `checkmk-analysis` | Default ntfy topic |
+| `CHECKMK_API_TIMEOUT` | `10s` | HTTP-client timeout for CheckMK REST API requests. Go `time.ParseDuration` syntax (e.g. `10s`, `30s`). Empty or non-positive value uses the default; explicit `0` does **not** disable the timeout |
 
 The default denylist is defined in [`internal/checkmk/agent.go`](../internal/checkmk/agent.go) as `DefaultDeniedCommands` — consult the source for the authoritative, always-current list. It covers destructive filesystem commands, privilege escalation, process/user management, networking and mount tools, shells and interpreters, and similar classes.
 
