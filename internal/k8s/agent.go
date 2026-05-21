@@ -237,6 +237,7 @@ var kubectlTool = anthropic.ToolUnionParam{
 					"type":        "array",
 					"description": "kubectl arguments as argv array, without the leading 'kubectl'",
 					"items":       map[string]any{"type": "string"},
+					"minItems":    1,
 				},
 			},
 			Required: []string{"command"},
@@ -255,6 +256,7 @@ var promqlTool = anthropic.ToolUnionParam{
 				"query": map[string]any{
 					"type":        "string",
 					"description": "PromQL expression",
+					"minLength":   1,
 				},
 			},
 			Required: []string{"query"},

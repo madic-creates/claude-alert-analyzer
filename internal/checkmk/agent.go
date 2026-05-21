@@ -79,6 +79,7 @@ var sshTool = anthropic.ToolUnionParam{
 					"type":        "array",
 					"description": "Command and arguments as array, e.g. [\"df\", \"-h\"] or [\"journalctl\", \"--no-pager\", \"-n\", \"50\"]",
 					"items":       map[string]any{"type": "string"},
+					"minItems":    1,
 				},
 			},
 			Required: []string{"command"},
