@@ -53,6 +53,12 @@ func SeverityFromCheckMK(serviceState, hostState string) Severity {
 		return SeverityWarning
 	case "UNKNOWN":
 		return SeverityUnknown
+	case "OK":
+		// Service is healthy; map to info so operators can route these
+		// notifications through a lighter analysis policy (e.g.
+		// MAX_AGENT_ROUNDS_INFO=0 for static-only) without affecting
+		// problem-severity alerts.
+		return SeverityInfo
 	}
 	switch hostState {
 	case "DOWN", "UNREACHABLE":
