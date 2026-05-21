@@ -961,7 +961,7 @@ func RunAgenticDiagnostics(
 		// the entire alert analysis. Matches the same recovery pattern in k8s.
 		defer func() {
 			if r := recover(); r != nil {
-				slog.Error("agent tool handler panicked", "tool", name, "recover", r)
+				slog.Error("agent tool handler panicked", "hostname", hostname, "tool", name, "recover", r)
 				if metrics != nil {
 					metrics.RecordAgentToolCall(name, outcomeExecError, time.Since(start))
 				}
@@ -1008,9 +1008,11 @@ func RunAgenticDiagnostics(
 		case strings.HasPrefix(lastLine, "[exit code: "):
 			outcome = outcomeNonzeroExit
 		}
+		elapsed := time.Since(start)
 		if metrics != nil {
-			metrics.RecordAgentToolCall(name, outcome, time.Since(start))
+			metrics.RecordAgentToolCall(name, outcome, elapsed)
 		}
+		slog.Info("agent tool call", "hostname", hostname, "tool", name, "outcome", outcome, "duration_ms", elapsed.Milliseconds())
 		return out, callErr
 	}
 
