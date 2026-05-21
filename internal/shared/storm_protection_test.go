@@ -110,7 +110,11 @@ func TestLoadStormProtectionConfig_EnvVarErrors(t *testing.T) {
 		{"open_seconds too large", "CIRCUIT_BREAKER_OPEN_SECONDS", "3601", "CIRCUIT_BREAKER_OPEN_SECONDS"},
 		{"probe_seconds zero", "CIRCUIT_BREAKER_MAX_PROBE_SECONDS", "0", "CIRCUIT_BREAKER_MAX_PROBE_SECONDS"},
 		{"storm interval invalid", "STORM_MODE_NOTIFY_INTERVAL", "notaduration", "STORM_MODE_NOTIFY_INTERVAL"},
+		{"storm interval zero", "STORM_MODE_NOTIFY_INTERVAL", "0s", "STORM_MODE_NOTIFY_INTERVAL"},
+		{"storm interval negative", "STORM_MODE_NOTIFY_INTERVAL", "-1s", "STORM_MODE_NOTIFY_INTERVAL"},
 		{"breaker interval invalid", "CIRCUIT_BREAKER_NOTIFY_INTERVAL", "notaduration", "CIRCUIT_BREAKER_NOTIFY_INTERVAL"},
+		{"breaker interval zero", "CIRCUIT_BREAKER_NOTIFY_INTERVAL", "0s", "CIRCUIT_BREAKER_NOTIFY_INTERVAL"},
+		{"breaker interval negative", "CIRCUIT_BREAKER_NOTIFY_INTERVAL", "-30s", "CIRCUIT_BREAKER_NOTIFY_INTERVAL"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
