@@ -212,6 +212,7 @@ func (c *ClaudeClient) RunToolLoop(ctx context.Context, severity Severity,
 			output, err := handleTool(tu.Name, tu.Input)
 			isError := err != nil
 			if isError {
+				slog.Warn("tool call error", "round", round+1, "tool", tu.Name, "err", err)
 				output = fmt.Sprintf("error: %v", err)
 			}
 			toolResults = append(toolResults, anthropic.NewToolResultBlock(tu.ID, output, isError))
