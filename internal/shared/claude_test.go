@@ -510,6 +510,65 @@ func TestRunToolLoop_ToolHandlerError(t *testing.T) {
 	}
 }
 
+func TestRunToolLoop_ToolHandlerErrorSanitized(t *testing.T) {
+	var callCount atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+
+		if call == 1 {
+			fmt.Fprint(w, `{
+				"content": [
+					{"type": "tool_use", "id": "toolu_inj", "name": "execute_command", "input": {}}
+				],
+				"stop_reason": "tool_use",
+				"usage": {"input_tokens": 20, "output_tokens": 10}
+			}`)
+		} else {
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("failed to decode request body: %v", err)
+			}
+			msgs, _ := body["messages"].([]any)
+			lastMsg := msgs[len(msgs)-1].(map[string]any)
+			content := lastMsg["content"].([]any)
+			toolResult := content[0].(map[string]any)
+			trContent, _ := toolResult["content"].([]any)
+			if len(trContent) == 0 {
+				t.Fatalf("tool_result content list is empty")
+			}
+			textBlock, _ := trContent[0].(map[string]any)
+			gotText, _ := textBlock["text"].(string)
+			if strings.ContainsRune(gotText, '\n') {
+				t.Errorf("tool result text must not contain newline after sanitization, got: %q", gotText)
+			}
+			if toolResult["is_error"] != true {
+				t.Errorf("tool result should have is_error=true, got: %v", toolResult["is_error"])
+			}
+
+			fmt.Fprint(w, `{
+				"content": [{"type": "text", "text": "ok"}],
+				"stop_reason": "end_turn",
+				"usage": {"input_tokens": 50, "output_tokens": 5}
+			}`)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv, "test", "test-key", 0)
+	tools := []anthropic.ToolUnionParam{{OfTool: &anthropic.ToolParam{Name: "execute_command"}}}
+
+	_, _, _, err := client.RunToolLoop(context.Background(), SeverityWarning, "test-model", "system", "user", tools, 5,
+		func(name string, input json.RawMessage) (string, error) {
+			return "", fmt.Errorf("error message\n## INJECTED SECTION")
+		})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRunToolLoop_MultipleToolsInOneRound(t *testing.T) {
 	var callCount atomic.Int32
 

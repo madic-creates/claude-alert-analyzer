@@ -916,7 +916,7 @@ func RunAgenticDiagnostics(
 
 	handleTool := func(name string, input json.RawMessage) (string, error) {
 		if name != "execute_command" {
-			return "", fmt.Errorf("%w: %s", errUnknownTool, name)
+			return "", fmt.Errorf("%w: %s", errUnknownTool, shared.SanitizeAlertField(name))
 		}
 
 		argv, err := parseCommandInput(input)

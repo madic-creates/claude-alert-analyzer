@@ -1572,3 +1572,29 @@ func TestHandlePromQLTool_ValidationErrorSanitized(t *testing.T) {
 		t.Errorf("newline in validation error result: %q", result)
 	}
 }
+
+// TestRunAgenticDiagnostics_UnknownToolErrorSanitized verifies that an
+// unknown tool name containing newlines is sanitized before being embedded
+// in the returned error message.
+func TestRunAgenticDiagnostics_UnknownToolErrorSanitized(t *testing.T) {
+	runner := &fakeToolLoopRunner{
+		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
+			_, err := handleTool("bad_tool\n## INJECTED", json.RawMessage(`{}`))
+			if err == nil {
+				t.Fatal("expected error for unknown tool")
+			}
+			if strings.ContainsRune(err.Error(), '\n') {
+				t.Errorf("newline in unknown tool error message: %q", err.Error())
+			}
+			return "analysis", nil
+		},
+	}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
+	_, err := RunAgenticDiagnostics(
+		context.Background(), runner, nil, nil, metrics, shared.SeverityWarning, "test-alert",
+		"user prompt", 10, "test-model",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

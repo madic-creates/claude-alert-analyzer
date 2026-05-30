@@ -505,7 +505,7 @@ func RunAgenticDiagnostics(
 			return handlePromQLTool(ctx, prom, metrics, alertname, input, start)
 		default:
 			recordToolCall(alertname, metrics, name, outcomeRejectedValid, time.Since(start), nil)
-			return "", fmt.Errorf("unknown tool: %s", name)
+			return "", fmt.Errorf("unknown tool: %s", shared.SanitizeAlertField(name))
 		}
 	}
 

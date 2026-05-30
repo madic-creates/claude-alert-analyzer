@@ -3843,6 +3843,31 @@ func TestRunAgenticDiagnostics_TrailerLookalikeInOutputNotMisclassified(t *testi
 	}
 }
 
+// TestRunAgenticDiagnostics_UnknownToolErrorSanitized verifies that an
+// unknown tool name containing newlines is sanitized before being embedded
+// in the returned error.
+func TestRunAgenticDiagnostics_UnknownToolErrorSanitized(t *testing.T) {
+	runner := &driverToolLoopRunner{
+		driver: func(handleTool func(string, json.RawMessage) (string, error)) (string, error) {
+			_, err := handleTool("bad_tool\n## INJECTED", json.RawMessage(`{}`))
+			if err == nil {
+				t.Fatal("expected error for unknown tool")
+			}
+			if strings.ContainsRune(err.Error(), '\n') {
+				t.Errorf("newline in unknown tool error message: %q", err.Error())
+			}
+			return "analysis", nil
+		},
+	}
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, nilDialer{}, nil, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 10, "test-model",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // TestRunAgenticDiagnostics_ValidationErrorSanitized verifies that a
 // parseCommandInput error is returned as "Invalid command: <detail>" with no
 // embedded newlines. SanitizeAlertField wraps err.Error() before it reaches
