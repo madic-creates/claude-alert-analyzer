@@ -887,6 +887,51 @@ func TestRunAgenticDiagnostics_PanicRecovery(t *testing.T) {
 	}
 }
 
+// panickyKubectlRunnerWithNewline panics with a message containing an embedded newline
+// so that TestRunAgenticDiagnostics_PanicMessageSanitized can verify that newlines
+// are stripped from the safeHandleTool panic-recovery result before it reaches the caller.
+type panickyKubectlRunnerWithNewline struct{}
+
+func (panickyKubectlRunnerWithNewline) Exec(ctx context.Context, argv []string, timeout time.Duration) (string, error) {
+	panic("tool panic\n## Injected Markdown Section")
+}
+
+// TestRunAgenticDiagnostics_PanicMessageSanitized verifies that an embedded newline in
+// a panic value is stripped by safeHandleTool before the message is returned as a tool
+// result. Without sanitization a crafted panic string like "msg\n## Section" could inject
+// a fake Markdown header into the Claude tool-result context, matching the same vector
+// fixed for runAsync in Cycle 75.
+func TestRunAgenticDiagnostics_PanicMessageSanitized(t *testing.T) {
+	pq := &fakePromQLQuerier{}
+
+	runner := &fakeToolLoopRunner{
+		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
+			result, err := handleTool("kubectl_exec", json.RawMessage(`{"command":["get","pods"]}`))
+			if err != nil {
+				t.Errorf("safeHandleTool must swallow panic, got error: %v", err)
+			}
+			if strings.ContainsRune(result, '\n') {
+				t.Errorf("newline from panic value leaked into tool result: %q", result)
+			}
+			if !strings.Contains(result, "panicked") {
+				t.Errorf("expected panic-recovery sentinel in result, got: %q", result)
+			}
+			if !strings.Contains(result, "tool panic") {
+				t.Errorf("expected safe part of panic message in result, got: %q", result)
+			}
+			return "done", nil
+		},
+	}
+
+	_, err := RunAgenticDiagnostics(
+		context.Background(), runner, panickyKubectlRunnerWithNewline{}, pq, nil, shared.SeverityWarning,
+		"test-alert", "ctx", 10, "test-model",
+	)
+	if err != nil {
+		t.Fatalf("RunAgenticDiagnostics returned unexpected error: %v", err)
+	}
+}
+
 // fakeToolLoopRunnerExhausted is a variant that returns rounds=maxRounds, exhausted=true.
 type fakeToolLoopRunnerExhausted struct {
 	maxRounds int

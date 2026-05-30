@@ -523,7 +523,7 @@ func RunAgenticDiagnostics(
 				if metrics != nil {
 					metrics.RecordAgentToolCall(name, outcomeExecError, time.Since(start))
 				}
-				result = fmt.Sprintf("Tool %s panicked: %v — continue with a different command", name, r)
+				result = fmt.Sprintf("Tool %s panicked: %s — continue with a different command", name, shared.SanitizeAlertField(fmt.Sprintf("%v", r)))
 				err = nil
 			}
 		}()
