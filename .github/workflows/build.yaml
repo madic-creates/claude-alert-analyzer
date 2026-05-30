@@ -15,6 +15,17 @@ on:
       - ".semrelrc"
   workflow_dispatch:
 
+# Cancel an in-flight run for the same ref when a newer commit is pushed.
+# This guarantees the release job only ever runs on the current branch tip,
+# so go-semantic-release's "latest release" baseline is always an ancestor of
+# HEAD. Without this, two rapid pushes (e.g. back-to-back Renovate merges) race:
+# the older-commit run can release *after* the newer one, fail to find its
+# baseline, and re-analyze the entire history (bogus minor bump + bloated
+# changelog). The release-job staleness guard below is the second line of defence.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   packages: write
@@ -89,7 +100,26 @@ jobs:
       - name: Make binaries executable
         run: chmod +x k8s-analyzer checkmk-analyzer
 
+      # Defence-in-depth against the concurrent-release race (see top-level
+      # concurrency comment). If this run's commit is no longer the tip of main,
+      # a newer run already owns the release — skip, so we never release from a
+      # stale commit whose baseline would be a *descendant* (unreachable) commit.
+      - name: Skip release if not the current main tip
+        id: guard
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TIP="$(gh api "repos/${{ github.repository }}/commits/main" --jq .sha)"
+          if [ "$TIP" != "${{ github.sha }}" ]; then
+            echo "::notice::HEAD ${{ github.sha }} is no longer the main tip (${TIP}); skipping release."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install pinned semantic-release binary
+        if: steps.guard.outputs.proceed == 'true'
         run: |
           curl -fsSL \
             https://github.com/go-semantic-release/semantic-release/releases/download/v2.31.0/semantic-release_v2.31.0_linux_amd64 \
@@ -99,6 +129,7 @@ jobs:
 
       - name: Determine next version (dry-run)
         id: semrel-dry
+        if: steps.guard.outputs.proceed == 'true'
         # go-semantic-release/action v1.24.1
         uses: go-semantic-release/action@2e9dc4247a6004f8377781bef4cb9dad273a741f
         with:
