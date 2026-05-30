@@ -3,6 +3,7 @@ package checkmk
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -100,6 +101,11 @@ const (
 	outcomeNonzeroExit   = "nonzero_exit"
 	outcomeTimeout       = "timeout"
 )
+
+// errUnknownTool is returned by handleTool when the tool name is not recognised.
+// wrappedHandleTool detects it via errors.Is to record outcomeRejectedValid rather
+// than outcomeExecError, matching k8s/agent.go's explicit classification.
+var errUnknownTool = errors.New("unknown tool")
 
 // DefaultDeniedCommands is the default denylist used when SSH_DENIED_COMMANDS is not set.
 var DefaultDeniedCommands = map[string]bool{
@@ -910,7 +916,7 @@ func RunAgenticDiagnostics(
 
 	handleTool := func(name string, input json.RawMessage) (string, error) {
 		if name != "execute_command" {
-			return "", fmt.Errorf("unknown tool: %s", name)
+			return "", fmt.Errorf("%w: %s", errUnknownTool, name)
 		}
 
 		argv, err := parseCommandInput(input)
@@ -986,6 +992,8 @@ func RunAgenticDiagnostics(
 			lastLine = out[i+1:]
 		}
 		switch {
+		case errors.Is(callErr, errUnknownTool):
+			outcome = outcomeRejectedValid
 		case callErr != nil:
 			outcome = outcomeExecError
 		case strings.HasPrefix(lastLine, "Invalid command: "):

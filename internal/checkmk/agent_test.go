@@ -190,6 +190,7 @@ func TestRunAgenticDiagnostics_UnknownToolReturnsError(t *testing.T) {
 		sendExitStatus(ch, 0)
 	})
 
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)}
 	runner := &capturingToolRunner{
 		calls:  []agentToolCall{{name: "unknown_tool", input: `{}`}},
 		result: "analysis",
@@ -198,7 +199,7 @@ func TestRunAgenticDiagnostics_UnknownToolReturnsError(t *testing.T) {
 
 	_, err := RunAgenticDiagnostics(
 		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
-		runner, dialer, nil, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 3, "test-model",
+		runner, dialer, metrics, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 3, "test-model",
 	)
 	if err != nil {
 		t.Fatalf("unexpected top-level error: %v", err)
@@ -212,6 +213,13 @@ func TestRunAgenticDiagnostics_UnknownToolReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(runner.toolErrors[0].Error(), "unknown tool") {
 		t.Errorf("unexpected error: %v", runner.toolErrors[0])
+	}
+
+	rec := httptest.NewRecorder()
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	body := rec.Body.String()
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="rejected_validation",product="checkmk",tool="unknown_tool"} 1`) {
+		t.Errorf("unknown tool should record rejected_validation metric; body:\n%s", body)
 	}
 }
 
