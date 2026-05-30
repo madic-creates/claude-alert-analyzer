@@ -188,7 +188,11 @@ func runAsync(label string, f func() string) <-chan string {
 					"label", label,
 					"recover", r,
 					"stack", string(debug.Stack()))
-				ch <- fmt.Sprintf("(%s goroutine panicked: %v)", label, r)
+				// Sanitize the panic value before injecting it into the prompt.
+				// A panic from a Prometheus or kube client library could carry
+				// embedded control characters or newlines that would create fake
+				// Markdown sections in the Claude prompt (prompt injection).
+				ch <- fmt.Sprintf("(%s goroutine panicked: %s)", label, shared.SanitizeAlertField(fmt.Sprintf("%v", r)))
 			}
 		}()
 		ch <- f()

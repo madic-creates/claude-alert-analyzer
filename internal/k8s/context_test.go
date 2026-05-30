@@ -2261,3 +2261,34 @@ func TestQuery_OversizedResponseReusesConnection(t *testing.T) {
 			"(body drain enables keep-alive reuse), got %d", requests, got)
 	}
 }
+
+// TestRunAsync_PanicMessageSanitized verifies that control characters embedded
+// in a panic value are stripped before the panic message is sent on the result
+// channel. A panic from a Prometheus or kube client could carry a crafted string
+// with embedded newlines (e.g. "\n## Injected Section") that would create fake
+// Markdown sections in the Claude prompt. SanitizeAlertField is applied to the
+// formatted panic value to close this prompt-injection path.
+func TestRunAsync_PanicMessageSanitized(t *testing.T) {
+	ch := runAsync("test label", func() string {
+		panic("simulated panic\n## Injected Markdown Section")
+	})
+
+	var result string
+	select {
+	case result = <-ch:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runAsync deadlocked after goroutine panic")
+	}
+
+	// The newline is the actual injection vector: without it, "## Injected …"
+	// is harmless inline text rather than a Markdown section header.
+	if strings.ContainsRune(result, '\n') {
+		t.Errorf("newline from panic message leaked into result: %q", result)
+	}
+	if !strings.Contains(result, "test label goroutine panicked") {
+		t.Errorf("expected panic sentinel in result, got: %q", result)
+	}
+	if !strings.Contains(result, "simulated panic") {
+		t.Errorf("expected safe part of panic message in result, got: %q", result)
+	}
+}
