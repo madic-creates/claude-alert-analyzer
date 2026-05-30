@@ -1898,6 +1898,29 @@ func TestQuery_NonOKStatusCode_RedactsAndTruncates(t *testing.T) {
 	}
 }
 
+// TestQuery_NonOKStatusCode_SanitizesBody verifies that newlines in a non-200
+// Prometheus error body are stripped before being embedded in the error string.
+// A compromised or misconfigured Prometheus could return a body containing
+// "\n## INJECTED HEADER", which would create a fake Markdown section in the
+// Claude prompt if not sanitized.
+func TestQuery_NonOKStatusCode_SanitizesBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprint(w, "upstream error\n## INJECTED HEADER")
+	}))
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	_, err := prom.query(context.Background(), "up")
+
+	if err == nil {
+		t.Fatal("expected error for non-200 response, got nil")
+	}
+	if strings.Contains(err.Error(), "\n") {
+		t.Errorf("error message must not contain newlines, got: %q", err.Error())
+	}
+}
+
 // TestGetEvents_SortsByRecencyDescending verifies that getEvents returns the most
 // recent warning events when the namespace has more events than maxEvents. The
 // Kubernetes API returns events in etcd insertion order (oldest first), so without

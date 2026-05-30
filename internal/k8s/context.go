@@ -80,7 +80,7 @@ func (p *PrometheusClient) query(ctx context.Context, queryStr string) (string, 
 		// the cap bounds time spent reading from a pathologically slow upstream.
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, shared.MaxBodyDrainBytes))
 		return "", fmt.Errorf("prometheus returned %d: %s", resp.StatusCode,
-			shared.Truncate(shared.RedactSecrets(strings.TrimSpace(string(body))), 200))
+			shared.SanitizeAlertField(shared.Truncate(shared.RedactSecrets(strings.TrimSpace(string(body))), 200)))
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, shared.MaxResponseBytes))
 	if err != nil {
