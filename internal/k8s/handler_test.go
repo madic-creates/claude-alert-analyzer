@@ -63,7 +63,7 @@ func TestHandleWebhook_UnauthorizedMissingToken(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	}, nil, nil)
+	}, nil, nil, shared.NewNopHistoryStore())
 
 	req := httptest.NewRequest("POST", "/webhook", bytes.NewReader([]byte(`{}`)))
 	rr := httptest.NewRecorder()
@@ -80,7 +80,7 @@ func TestHandleWebhook_UnauthorizedMissingToken(t *testing.T) {
 func TestHandleWebhook_UnauthorizedWrongToken(t *testing.T) {
 	cfg := makeConfig()
 	cd := shared.NewCooldownManager()
-	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil, nil)
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil, nil, shared.NewNopHistoryStore())
 
 	rr := postWebhook(t, handler, "wrong-secret", makeWebhook(nil))
 	if rr.Code != http.StatusUnauthorized {
@@ -96,7 +96,7 @@ func TestHandleWebhook_UnauthorizedWrongToken(t *testing.T) {
 func TestHandleWebhook_AuthRejectionIsLengthIndependent(t *testing.T) {
 	cfg := makeConfig()
 	cd := shared.NewCooldownManager()
-	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil, nil)
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil, nil, shared.NewNopHistoryStore())
 
 	// Cover lengths shorter, equal, and longer than the real expected token
 	// ("Bearer test-secret" = 18 bytes), plus an empty header.
@@ -136,7 +136,7 @@ func TestHandleWebhook_AuthRejectionIsLengthIndependent(t *testing.T) {
 func TestHandleWebhook_InvalidJSON(t *testing.T) {
 	cfg := makeConfig()
 	cd := shared.NewCooldownManager()
-	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil, nil)
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil, nil, shared.NewNopHistoryStore())
 
 	req := httptest.NewRequest("POST", "/webhook", bytes.NewReader([]byte(`not json`)))
 	req.Header.Set("Authorization", "Bearer test-secret")
@@ -153,7 +153,7 @@ func TestHandleWebhook_InvalidJSON(t *testing.T) {
 func TestHandleWebhook_InvalidJSON_NoInternalDetails(t *testing.T) {
 	cfg := makeConfig()
 	cd := shared.NewCooldownManager()
-	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil, nil)
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil, nil, shared.NewNopHistoryStore())
 
 	req := httptest.NewRequest("POST", "/webhook", bytes.NewReader([]byte(`{"alerts": [1, 2, `)))
 	req.Header.Set("Authorization", "Bearer test-secret")
@@ -178,7 +178,7 @@ func TestHandleWebhook_EmptyAlerts(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	}, nil, nil)
+	}, nil, nil, shared.NewNopHistoryStore())
 
 	rr := postWebhook(t, handler, "test-secret", makeWebhook([]Alert{}))
 	if rr.Code != http.StatusOK {
@@ -197,7 +197,7 @@ func TestHandleWebhook_SkipsResolvedAlerts(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	}, nil, nil)
+	}, nil, nil, shared.NewNopHistoryStore())
 
 	alerts := []Alert{
 		makeAlert("fp1", "TestAlert", "resolved"),
@@ -220,7 +220,7 @@ func TestHandleWebhook_ResolvedClearsCooldown(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	}, nil, nil)
+	}, nil, nil, shared.NewNopHistoryStore())
 
 	// Step 1: fire the alert → enqueued, cooldown set.
 	firingAlerts := []Alert{makeAlert("fp-resolved", "TestFlap", "firing")}
@@ -256,7 +256,7 @@ func TestHandleWebhook_ResolvedClearsGroupCooldown(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	}, nil, nil)
+	}, nil, nil, shared.NewNopHistoryStore())
 
 	// Step 1: fire alert with fingerprint fp-a, sets both FP and group cooldowns.
 	alertA := Alert{Fingerprint: "fp-a", Labels: map[string]string{"alertname": "PodCrashLooping", "namespace": "prod", "severity": "warning"}, Status: "firing"}
@@ -291,7 +291,7 @@ func TestHandleWebhook_EnqueuesFiringAlert(t *testing.T) {
 		enqueued.Add(1)
 		receivedAlert = ap
 		return true
-	}, nil, nil)
+	}, nil, nil, shared.NewNopHistoryStore())
 
 	alerts := []Alert{
 		makeAlert("fp-firing", "TestFiring", "firing"),
@@ -328,7 +328,7 @@ func TestHandleWebhook_CooldownDeduplicates(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	}, nil, nil)
+	}, nil, nil, shared.NewNopHistoryStore())
 
 	alerts := []Alert{makeAlert("fp-dedup", "TestDedup", "firing")}
 
@@ -352,7 +352,7 @@ func TestHandleWebhook_CooldownIncrementsMetric(t *testing.T) {
 	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		return true
-	}, metrics, nil)
+	}, metrics, nil, shared.NewNopHistoryStore())
 
 	alerts := []Alert{makeAlert("fp-metric", "TestMetric", "firing")}
 
@@ -379,7 +379,7 @@ func TestHandleWebhook_CooldownIncrementsPrometheusCounter(t *testing.T) {
 	cfg.CooldownSeconds = 60
 	cd := shared.NewCooldownManager()
 	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
-	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, metrics, nil)
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, metrics, nil, shared.NewNopHistoryStore())
 
 	alerts := []Alert{makeAlert("fp-prom-cd", "TestPrometheus", "firing")}
 	// First request: accepted, cooldown set — RecordCooldown not called yet.
@@ -398,7 +398,7 @@ func TestHandleWebhook_QueueFull_Returns503(t *testing.T) {
 	cd := shared.NewCooldownManager()
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		return false // queue always full
-	}, nil, nil)
+	}, nil, nil, shared.NewNopHistoryStore())
 
 	alerts := []Alert{makeAlert("fp-full", "TestFull", "firing")}
 	rr := postWebhook(t, handler, "test-secret", makeWebhook(alerts))
@@ -413,7 +413,7 @@ func TestHandleWebhook_QueueFull_ClearsCooldown(t *testing.T) {
 	cd := shared.NewCooldownManager()
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		return false // queue always full
-	}, nil, nil)
+	}, nil, nil, shared.NewNopHistoryStore())
 
 	alerts := []Alert{makeAlert("fp-clear", "TestClear", "firing")}
 	postWebhook(t, handler, "test-secret", makeWebhook(alerts))
@@ -423,7 +423,7 @@ func TestHandleWebhook_QueueFull_ClearsCooldown(t *testing.T) {
 	handler2 := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	}, nil, nil)
+	}, nil, nil, shared.NewNopHistoryStore())
 	postWebhook(t, handler2, "test-secret", makeWebhook(alerts))
 	if enqueued.Load() != 1 {
 		t.Errorf("expected alert re-enqueued after cooldown cleared, got %d", enqueued.Load())
@@ -441,7 +441,7 @@ func TestHandleWebhook_MultipleAlerts_PartialEnqueue(t *testing.T) {
 			return true
 		}
 		return false // queue full for fp2
-	}, nil, nil)
+	}, nil, nil, shared.NewNopHistoryStore())
 
 	alerts := []Alert{
 		makeAlert("fp-multi-1", "Alert1", "firing"),
@@ -465,7 +465,7 @@ func TestHandleWebhook_ResolvedNotSkipped_WhenDisabled(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	}, nil, nil)
+	}, nil, nil, shared.NewNopHistoryStore())
 
 	alerts := []Alert{makeAlert("fp-res", "TestResolved", "resolved")}
 	postWebhook(t, handler, "test-secret", makeWebhook(alerts))
@@ -481,7 +481,7 @@ func TestHandleWebhook_AlertFieldsPopulated(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		received = ap
 		return true
-	}, nil, nil)
+	}, nil, nil, shared.NewNopHistoryStore())
 
 	alert := Alert{
 		Fingerprint: "fp-fields",
@@ -513,7 +513,7 @@ func TestHandleWebhook_AlertFieldsPopulated(t *testing.T) {
 func TestHandleWebhook_BodyTooLarge_Returns413(t *testing.T) {
 	cfg := makeConfig()
 	cd := shared.NewCooldownManager()
-	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil, nil)
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil, nil, shared.NewNopHistoryStore())
 
 	// Build a body slightly larger than the 1 MiB limit.
 	oversized := make([]byte, maxWebhookBodyBytes+1)
@@ -607,7 +607,7 @@ func TestHandleWebhook_TooManyAlerts(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	}, nil, nil)
+	}, nil, nil, shared.NewNopHistoryStore())
 
 	alerts := make([]Alert, maxAlertsPerBatch+1)
 	for i := range alerts {
@@ -632,7 +632,7 @@ func TestHandleWebhook_ExactMaxAlerts(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	}, nil, nil)
+	}, nil, nil, shared.NewNopHistoryStore())
 
 	alerts := make([]Alert, maxAlertsPerBatch)
 	for i := range alerts {
@@ -659,7 +659,7 @@ func TestHandleWebhook_EmptyFingerprintSkipped(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	}, nil, nil)
+	}, nil, nil, shared.NewNopHistoryStore())
 
 	alerts := []Alert{
 		{
@@ -690,7 +690,7 @@ func TestHandleWebhook_OversizedFingerprintSkipped(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		enqueued.Add(1)
 		return true
-	}, nil, nil)
+	}, nil, nil, shared.NewNopHistoryStore())
 
 	oversizedFP := strings.Repeat("a", maxFingerprintLen+1)
 	alerts := []Alert{
@@ -721,7 +721,7 @@ func TestHandler_PopulatesSeverityLevel(t *testing.T) {
 	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
 		captured = ap
 		return true
-	}, nil, nil)
+	}, nil, nil, shared.NewNopHistoryStore())
 
 	alert := Alert{
 		Fingerprint: "fp-severity",
@@ -747,7 +747,7 @@ func TestHandleWebhook_InvalidFingerprintIncrementsMetric(t *testing.T) {
 	cfg := makeConfig()
 	cd := shared.NewCooldownManager()
 	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
-	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, metrics, nil)
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, metrics, nil, shared.NewNopHistoryStore())
 
 	// One alert with empty fingerprint, one with oversized fingerprint.
 	oversizedFP := strings.Repeat("x", maxFingerprintLen+1)
@@ -772,7 +772,7 @@ func TestHandleWebhook_GroupCooldownDeduplicates(t *testing.T) {
 	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
 
 	cfg := Config{WebhookSecret: "s", CooldownSeconds: 60, GroupCooldownTTL: time.Minute}
-	h := HandleWebhook(cfg, cm, enqueue, metrics, nil) // nil StormDetector
+	h := HandleWebhook(cfg, cm, enqueue, metrics, nil, shared.NewNopHistoryStore()) // nil StormDetector
 
 	body1 := `{"alerts":[{"fingerprint":"fp1","labels":{"alertname":"PodCrashLooping","namespace":"prod","severity":"warning"}}]}`
 	req := httptest.NewRequest("POST", "/webhook", strings.NewReader(body1))
@@ -803,7 +803,7 @@ func TestHandleWebhook_GroupKeyEmptyNamespaceFallback(t *testing.T) {
 	enqueue := func(shared.AlertPayload) bool { enqueued++; return true }
 	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
 	cfg := Config{WebhookSecret: "s", CooldownSeconds: 60, GroupCooldownTTL: time.Minute}
-	h := HandleWebhook(cfg, cm, enqueue, metrics, nil)
+	h := HandleWebhook(cfg, cm, enqueue, metrics, nil, shared.NewNopHistoryStore())
 
 	// Two alerts with same alertname, no namespace — both should map to alertname:_cluster_ group
 	bodies := []string{
@@ -825,7 +825,7 @@ func TestHandleWebhook_StormRecordIncrementsAfterCooldownCheck(t *testing.T) {
 	enqueue := func(shared.AlertPayload) bool { return true }
 	storm := shared.NewStormDetector(1000, time.Now)
 	cfg := Config{WebhookSecret: "s", CooldownSeconds: 60}
-	h := HandleWebhook(cfg, cm, enqueue, &shared.AlertMetrics{}, storm)
+	h := HandleWebhook(cfg, cm, enqueue, &shared.AlertMetrics{}, storm, shared.NewNopHistoryStore())
 
 	// Three distinct fingerprints — all should pass cooldown and be recorded
 	for i := 1; i <= 3; i++ {
@@ -845,6 +845,32 @@ func TestHandleWebhook_StormRecordIncrementsAfterCooldownCheck(t *testing.T) {
 	h(httptest.NewRecorder(), req)
 	if got := storm.Count(); got != 3 {
 		t.Fatalf("after cooldown-dedup, storm.Count()=%d, want still 3", got)
+	}
+}
+
+type fakeHistory struct{ fires int }
+
+func (f *fakeHistory) RecordFire(context.Context, string, shared.Severity)             { f.fires++ }
+func (f *fakeHistory) RecordAnalysis(context.Context, string, shared.Severity, string) {}
+func (f *fakeHistory) Lookup(context.Context, string) shared.HistoryView               { return shared.HistoryView{} }
+func (f *fakeHistory) Close() error                                                    { return nil }
+
+func TestHandlerRecordsFireBeforeCooldown(t *testing.T) {
+	hist := &fakeHistory{}
+	cfg := Config{WebhookSecret: "s", CooldownSeconds: 300}
+	cd := shared.NewCooldownManager()
+	enqueue := func(shared.AlertPayload) bool { return true }
+	h := HandleWebhook(cfg, cd, enqueue, shared.NewAlertMetrics(nil), nil, hist)
+
+	body := `{"alerts":[{"fingerprint":"fp-aaa","status":"firing","labels":{"alertname":"X","severity":"warning"}}]}`
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer s")
+		w := httptest.NewRecorder()
+		h(w, req)
+	}
+	if hist.fires != 2 {
+		t.Errorf("RecordFire called %d times, want 2", hist.fires)
 	}
 }
 
