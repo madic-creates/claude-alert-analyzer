@@ -30,6 +30,9 @@ type SSHDialer struct {
 	signer          ssh.Signer
 	hostKeyCallback ssh.HostKeyCallback
 	user            string
+	// sshPort overrides the destination port used by Dial. Empty means "22".
+	// Set only in tests; production code always uses the default.
+	sshPort string
 }
 
 // NewSSHDialer parses the SSH key and known_hosts file once at startup.
@@ -49,7 +52,7 @@ func NewSSHDialer(cfg Config) (*SSHDialer, error) {
 	return &SSHDialer{signer: signer, hostKeyCallback: hostKeyCallback, user: cfg.SSHUser}, nil
 }
 
-// Dial opens an SSH connection to ip:22 while presenting hostname to the
+// Dial opens an SSH connection to ip (port 22 by default) while presenting hostname to the
 // known_hosts callback. This ensures the TCP connection goes to the
 // CheckMK-verified IP address (preventing DNS hijacking) while still
 // allowing known_hosts entries that are keyed by hostname to match.
@@ -70,7 +73,11 @@ func (d *SSHDialer) Dial(ctx context.Context, hostname, ip string) (*ssh.Client,
 	// DNS resolution can redirect us to a different host. DialContext is
 	// used instead of DialTimeout so that a cancelled context terminates
 	// the dial immediately rather than waiting for the full timeout.
-	ipAddr := net.JoinHostPort(ip, "22")
+	port := d.sshPort
+	if port == "" {
+		port = "22"
+	}
+	ipAddr := net.JoinHostPort(ip, port)
 	nd := &net.Dialer{Timeout: dialTimeout}
 	conn, err := nd.DialContext(ctx, "tcp", ipAddr)
 	if err != nil {

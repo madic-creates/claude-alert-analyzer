@@ -550,3 +550,56 @@ func TestRunSSHCommand_ShellMetacharsEscaped(t *testing.T) {
 		})
 	}
 }
+
+// TestSSHDialer_HandshakeContextCancellation verifies that cancelling the
+// parent context while the SSH handshake is stalled covers two paths in Dial:
+//  1. The watcher goroutine's `case <-dialCtx.Done()` arm fires and closes
+//     the underlying TCP connection, unblocking ssh.NewClientConn.
+//  2. The `dialCtx.Err() != nil` branch returns the context error rather than
+//     the raw handshake error, so callers see a meaningful deadline/cancel
+//     message instead of an opaque "connection reset" or "EOF".
+func TestSSHDialer_HandshakeContextCancellation(t *testing.T) {
+	_, clientKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	signer, err := ssh.NewSignerFromKey(clientKey)
+	if err != nil {
+		t.Fatalf("make signer: %v", err)
+	}
+
+	// A TCP listener that accepts connections but never sends an SSH banner,
+	// causing ssh.NewClientConn to stall until the watcher goroutine closes
+	// the connection when dialCtx is cancelled.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		time.Sleep(5 * time.Second) // hold open until the watcher closes it
+	}()
+
+	d := &SSHDialer{
+		signer:          signer,
+		hostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		user:            "test",
+		sshPort:         fmt.Sprintf("%d", ln.Addr().(*net.TCPAddr).Port),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err = d.Dial(ctx, "test-host", "127.0.0.1")
+	if err == nil {
+		t.Fatal("expected error when SSH handshake is cancelled by context expiry")
+	}
+	if !strings.Contains(err.Error(), "context") {
+		t.Errorf("expected context error in message, got: %v", err)
+	}
+}
