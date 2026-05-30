@@ -784,6 +784,13 @@ func TestRunAgenticDiagnostics_UnknownTool(t *testing.T) {
 	if _, err := RunAgenticDiagnostics(context.Background(), runner, kc, pq, metrics, shared.SeverityWarning, "test-alert", "ctx", 10, "test-model"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+
+	rec := httptest.NewRecorder()
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	body := rec.Body.String()
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="rejected_validation",product="k8s",tool="not_a_tool"} 1`) {
+		t.Errorf("unknown tool should record rejected_validation metric; body:\n%s", body)
+	}
 }
 
 func TestRunAgenticDiagnostics_RecordsMetrics(t *testing.T) {

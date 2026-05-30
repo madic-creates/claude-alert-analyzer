@@ -504,6 +504,7 @@ func RunAgenticDiagnostics(
 		case "promql_query":
 			return handlePromQLTool(ctx, prom, metrics, alertname, input, start)
 		default:
+			recordToolCall(alertname, metrics, name, outcomeRejectedValid, time.Since(start), nil)
 			return "", fmt.Errorf("unknown tool: %s", name)
 		}
 	}
