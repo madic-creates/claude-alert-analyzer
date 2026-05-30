@@ -601,6 +601,50 @@ func TestProcessAlert_FailureBodySanitizesTitle(t *testing.T) {
 	}
 }
 
+// TestProcessAlert_FailureBodyRedactsErrorMessage verifies that secrets in the
+// analysis error message are redacted before appearing in the failure
+// notification body. RedactSecrets must run before SanitizeAlertField so that
+// redaction patterns can match the raw error text.
+func TestProcessAlert_FailureBodyRedactsErrorMessage(t *testing.T) {
+	pub := &mockPublisher{}
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
+	mock := &mockToolRunnerAnalyzer{
+		wantErr: fmt.Errorf("dial failed: token=supersecretvalue123"),
+	}
+
+	deps := PipelineDeps{
+		Analyzer:      mock,
+		ToolRunner:    mock,
+		KubectlRunner: &fakeKubectlRunner{},
+		Prom:          &fakePromQLQuerier{},
+		Publishers:    []shared.Publisher{pub},
+		Cooldown:      shared.NewCooldownManager(),
+		Metrics:       metrics,
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 0},
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "fp-redact-err",
+		Title:       "HighCPU",
+		Severity:    "warning",
+		Fields:      map[string]string{},
+	}
+	ProcessAlert(context.Background(), deps, alert)
+
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
+	}
+	if strings.Contains(pub.calls[0].body, "supersecretvalue123") {
+		t.Errorf("secret leaked into failure body: %q", pub.calls[0].body)
+	}
+	if !strings.Contains(pub.calls[0].body, "[REDACTED]") {
+		t.Errorf("expected [REDACTED] in failure body, got: %q", pub.calls[0].body)
+	}
+}
+
 // TestProcessAlert_PromptSanitizesNamespace verifies that embedded control
 // characters in the label:namespace field are stripped from the user prompt
 // passed to the analyzer. alertname and namespace are sanitized at extraction
