@@ -1556,6 +1556,36 @@ func TestHandleKubectlTool_ValidationErrorSanitized(t *testing.T) {
 	}
 }
 
+// TestHandleKubectlTool_ExitedTrailerIsOnOneLine verifies that when kc.Exec
+// returns an error whose Error() string contains a newline, the [exited: ...]
+// trailer in the tool result remains on a single line. SanitizeAlertField
+// strips the embedded newline so Claude cannot see a crafted error inject a
+// fake section header into the tool-result context. Parallel to the SSH
+// transport-error test in checkmk/agent_test.go added in Cycle 80.
+func TestHandleKubectlTool_ExitedTrailerIsOnOneLine(t *testing.T) {
+	kc := &fakeKubectlRunner{
+		response: "some output",
+		err:      fmt.Errorf("error line one\n## INJECTED HEADER"),
+	}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
+	result, err := handleKubectlTool(context.Background(), kc, metrics, "test-alert",
+		json.RawMessage(`{"command":["get","pods"]}`), time.Now())
+	if err != nil {
+		t.Fatalf("exec error must not propagate as Go error: %v", err)
+	}
+	lastNL := strings.LastIndex(result, "\n")
+	lastLine := result
+	if lastNL >= 0 {
+		lastLine = result[lastNL+1:]
+	}
+	if !strings.HasPrefix(lastLine, "[exited: ") {
+		t.Errorf("expected last line to start with [exited: ], got result: %q", result)
+	}
+	if strings.ContainsRune(lastLine, '\n') {
+		t.Errorf("last line must not contain newlines, got: %q", lastLine)
+	}
+}
+
 // TestHandlePromQLTool_ValidationErrorSanitized verifies that a validation
 // error from parsePromQLInput is returned as a sanitized string with no
 // embedded newlines. Defense-in-depth consistent with the kubectl and panic
