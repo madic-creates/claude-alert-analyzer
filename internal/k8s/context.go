@@ -224,12 +224,15 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	case strings.Contains(lower, "cpu"):
 		alertnameSectionName = "\n## Top CPU Consumers"
 		alertnameQueryStr = `topk(5, sum(rate(container_cpu_usage_seconds_total[5m])) by (namespace, pod))`
-	case strings.Contains(lower, "disk") || strings.Contains(lower, "volume") || strings.Contains(lower, "storage"):
+	case strings.Contains(lower, "disk") || strings.Contains(lower, "volume") || strings.Contains(lower, "storage") || strings.Contains(lower, "pvc"):
 		alertnameSectionName = "\n## PVC Usage"
 		alertnameQueryStr = `(kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes) > 0.8`
 	case strings.Contains(lower, "node"):
 		alertnameSectionName = "\n## Node Conditions"
 		alertnameQueryStr = `kube_node_status_condition{condition="Ready"}`
+	case strings.Contains(lower, "replica") || strings.Contains(lower, "deploy") || strings.Contains(lower, "statefulset"):
+		alertnameSectionName = "\n## Unavailable Replicas"
+		alertnameQueryStr = `kube_deployment_status_replicas_unavailable > 0`
 	}
 
 	// Launch the global firing-alerts query concurrently so it overlaps with

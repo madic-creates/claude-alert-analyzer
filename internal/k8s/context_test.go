@@ -1171,6 +1171,34 @@ func TestGetMetrics_NodeAlertname(t *testing.T) {
 	}
 }
 
+func TestGetMetrics_PVCAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"PVCAlmostFull", "PersistentVolumeClaimFull", "KubePVCFull"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "PVC Usage") {
+			t.Errorf("alert %q: expected PVC Usage section, got %q", name, result)
+		}
+	}
+}
+
+func TestGetMetrics_ReplicaAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"KubeDeploymentReplicasMismatch", "KubeStatefulSetReplicasMismatch", "DeploymentNotAvailable"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "Unavailable Replicas") {
+			t.Errorf("alert %q: expected Unavailable Replicas section, got %q", name, result)
+		}
+	}
+}
+
 func TestGetMetrics_WithResultData(t *testing.T) {
 	srv := makePromServer(t, []PromResult{
 		{
