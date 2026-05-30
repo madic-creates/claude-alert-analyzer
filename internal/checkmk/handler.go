@@ -28,6 +28,7 @@ func HandleWebhook(
 	enqueue func(shared.AlertPayload) bool,
 	metrics *shared.AlertMetrics,
 	storm *shared.StormDetector,
+	history shared.HistoryStore,
 ) http.HandlerFunc {
 	cooldownTTL := time.Duration(cfg.CooldownSeconds) * time.Second
 	// Hash the expected token so the per-request comparison always operates on
@@ -97,6 +98,10 @@ func HandleWebhook(
 
 		fp := fingerprint(notif.Hostname, notif.ServiceDescription, notif.NotificationType, notif.ServiceState)
 		groupKey := groupKeyFromNotif(notif)
+
+		// Record the fire before the cooldown gate (counts suppressed + queue-full
+		// fires). Best-effort, non-blocking.
+		history.RecordFire(r.Context(), fp, shared.SeverityFromCheckMK(notif.ServiceState, notif.HostState))
 
 		switch outcome := cooldown.CheckAndSetWithGroup(fp, cooldownTTL, groupKey, cfg.GroupCooldownTTL); outcome {
 		case shared.CooldownAccepted:
