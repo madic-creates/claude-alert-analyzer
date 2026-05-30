@@ -946,10 +946,11 @@ func RunAgenticDiagnostics(
 		sanitized := shared.Truncate(shared.RedactSecrets(shared.SanitizeOutput(r.output)), 4096)
 		if r.err != nil {
 			slog.Warn("agentic SSH command failed", "hostname", hostname, "command", logCmd, "error", r.err)
+			errStr := shared.SanitizeAlertField(fmt.Sprintf("%v", r.err))
 			if sanitized != "" {
-				return fmt.Sprintf("$ %s\n```\n%s\n```\n[exited: %v]", logCmd, sanitized, r.err), nil
+				return fmt.Sprintf("$ %s\n```\n%s\n```\n[exited: %s]", logCmd, sanitized, errStr), nil
 			}
-			return fmt.Sprintf("$ %s\n[exited: %v]", logCmd, r.err), nil
+			return fmt.Sprintf("$ %s\n[exited: %s]", logCmd, errStr), nil
 		}
 		if r.exitCode != 0 {
 			if sanitized != "" {
@@ -994,8 +995,6 @@ func RunAgenticDiagnostics(
 		switch {
 		case errors.Is(callErr, errUnknownTool):
 			outcome = outcomeRejectedValid
-		case callErr != nil:
-			outcome = outcomeExecError
 		case strings.HasPrefix(lastLine, "Invalid command: "):
 			outcome = outcomeRejectedValid
 		case strings.HasPrefix(lastLine, "Command denied"):
