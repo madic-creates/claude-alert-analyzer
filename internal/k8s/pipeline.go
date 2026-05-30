@@ -51,6 +51,12 @@ type PipelineDeps struct {
 	// nil ↔ no aggregation (alert silently dropped on ErrCircuitOpen).
 	BreakerNotify *shared.NotifyAggregator
 	GatherContext func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext
+	// History records fires/analyses and supplies recurrence context. In
+	// production a non-nil store is wired in main; access here is nil-safe so
+	// existing tests that omit it keep working.
+	History shared.HistoryStore
+	// HistoryInjectPrior gates the Phase-B prior-analyses sub-block.
+	HistoryInjectPrior bool
 }
 
 // ProcessAlert gathers context, analyzes via Claude, and publishes results.
@@ -129,6 +135,12 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 
 	// === Pre-API phase ===
 	actx := deps.GatherContext(ctx, alert)
+	actx = shared.InjectHistory(ctx, deps.History, alert.Fingerprint, deps.HistoryInjectPrior, actx)
+	if deps.History != nil {
+		if v := deps.History.Lookup(ctx, alert.Fingerprint); v.Count > 1 {
+			deps.Metrics.ObserveRecurrence(v.Count)
+		}
+	}
 	userPrompt := fmt.Sprintf("## Alert: %s\n- Status: %s\n- Severity: %s\n- Namespace: %s\n- StartsAt: %s\n\n%s",
 		alertname,
 		shared.SanitizeAlertField(alert.Fields["status"]),
