@@ -44,12 +44,15 @@ spec:
               memory: 32Mi
             limits:
               cpu: 200m
-              memory: 128Mi
+              memory: 256Mi
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          volumeMounts:
+            - name: history
+              mountPath: /var/lib/analyzer
           livenessProbe:
             httpGet:
               path: /health
@@ -62,3 +65,7 @@ spec:
               port: http
             initialDelaySeconds: 2
             periodSeconds: 10
+      volumes:
+        - name: history
+          persistentVolumeClaim:
+            claimName: claude-alert-kubernetes-analyzer-history
