@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1171,6 +1172,71 @@ func TestGetMetrics_NodeAlertname(t *testing.T) {
 	}
 }
 
+func TestGetMetrics_PVCAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"PVCAlmostFull", "PersistentVolumeClaimFull", "KubePVCFull"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "PVC Usage") {
+			t.Errorf("alert %q: expected PVC Usage section, got %q", name, result)
+		}
+	}
+}
+
+func TestGetMetrics_ReplicaAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"KubeDeploymentReplicasMismatch", "KubeStatefulSetReplicasMismatch", "DeploymentNotAvailable"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "Unavailable Replicas") {
+			t.Errorf("alert %q: expected Unavailable Replicas section, got %q", name, result)
+		}
+	}
+}
+
+// TestGetMetrics_ReplicaQueryCoversStatefulSets verifies that the alertname-specific
+// PromQL query for replica/deploy/statefulset alerts includes the StatefulSet
+// unavailability metric. A query limited to kube_deployment_status_replicas_unavailable
+// silently returns no data for StatefulSet alerts, so Claude receives an empty
+// Unavailable Replicas section and cannot diagnose the real issue.
+func TestGetMetrics_ReplicaQueryCoversStatefulSets(t *testing.T) {
+	var mu sync.Mutex
+	var capturedQueries []string
+	resp := PromQueryResponse{Status: "success"}
+	resp.Data.ResultType = "vector"
+	body, _ := json.Marshal(resp)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if q := r.URL.Query().Get("query"); q != "" {
+			mu.Lock()
+			capturedQueries = append(capturedQueries, q)
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(body)
+	}))
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	alert := makeAlertWithLabels(map[string]string{"alertname": "KubeStatefulSetReplicasMismatch"})
+	prom.GetMetrics(context.Background(), alert)
+
+	mu.Lock()
+	queries := capturedQueries
+	mu.Unlock()
+	for _, q := range queries {
+		if strings.Contains(q, "kube_statefulset_status_replicas_unavailable") {
+			return
+		}
+	}
+	t.Errorf("expected at least one query to include kube_statefulset_status_replicas_unavailable, got %v", queries)
+}
+
 func TestGetMetrics_WithResultData(t *testing.T) {
 	srv := makePromServer(t, []PromResult{
 		{
@@ -1895,6 +1961,29 @@ func TestQuery_NonOKStatusCode_RedactsAndTruncates(t *testing.T) {
 	}
 	if len(result) > 512 {
 		t.Errorf("result should be bounded; got %d bytes", len(result))
+	}
+}
+
+// TestQuery_NonOKStatusCode_SanitizesBody verifies that newlines in a non-200
+// Prometheus error body are stripped before being embedded in the error string.
+// A compromised or misconfigured Prometheus could return a body containing
+// "\n## INJECTED HEADER", which would create a fake Markdown section in the
+// Claude prompt if not sanitized.
+func TestQuery_NonOKStatusCode_SanitizesBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprint(w, "upstream error\n## INJECTED HEADER")
+	}))
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	_, err := prom.query(context.Background(), "up")
+
+	if err == nil {
+		t.Fatal("expected error for non-200 response, got nil")
+	}
+	if strings.Contains(err.Error(), "\n") {
+		t.Errorf("error message must not contain newlines, got: %q", err.Error())
 	}
 }
 
