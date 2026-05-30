@@ -309,7 +309,7 @@ func getEvents(ctx context.Context, clientset kubernetes.Interface, namespace st
 		Limit:         maxEvents * 5,
 	})
 	if err != nil {
-		return fmt.Sprintf("(failed: %v)", err)
+		return fmt.Sprintf("(failed: %s)", shared.SanitizeAlertField(err.Error()))
 	}
 	items := eventList.Items
 	// eventTime returns the best available timestamp for an event. Kubernetes
@@ -373,7 +373,7 @@ func getPodStatus(ctx context.Context, clientset kubernetes.Interface, namespace
 		Limit: maxPods,
 	})
 	if err != nil {
-		return fmt.Sprintf("(failed: %v)", err)
+		return fmt.Sprintf("(failed: %s)", shared.SanitizeAlertField(err.Error()))
 	}
 	// Post-fetch backstop: cap at maxPods in case the API returned more
 	// than requested (e.g. the fake client in tests ignores Limit).
@@ -424,7 +424,7 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace s
 	})
 	if err != nil {
 		slog.Warn("failed to list failing pods", "namespace", namespace, "error", err)
-		return fmt.Sprintf("(failed to list failing pods: %v)", err)
+		return fmt.Sprintf("(failed to list failing pods: %s)", shared.SanitizeAlertField(err.Error()))
 	}
 
 	// Filter: keep only pods that are actually failing.

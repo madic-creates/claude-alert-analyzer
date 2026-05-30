@@ -2262,6 +2262,63 @@ func TestQuery_OversizedResponseReusesConnection(t *testing.T) {
 	}
 }
 
+// TestGetEvents_APIErrorSanitized verifies that a Kubernetes API error returned
+// by Events().List() is passed through SanitizeAlertField before being embedded
+// in the Claude prompt. An attacker-controlled admission-webhook rejection or a
+// crafted API-server error with embedded newlines would otherwise create fake
+// Markdown sections, mirroring the panic-path fix in Cycle 75.
+func TestGetEvents_APIErrorSanitized(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	cs.PrependReactor("list", "events", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("api error\n## Injected Section")
+	})
+
+	result := getEvents(context.Background(), cs, "default")
+
+	if strings.ContainsRune(result, '\n') {
+		t.Errorf("newline from API error leaked into getEvents result: %q", result)
+	}
+	if !strings.Contains(result, "api error") {
+		t.Errorf("expected safe part of error in result, got: %q", result)
+	}
+}
+
+// TestGetPodStatus_APIErrorSanitized mirrors TestGetEvents_APIErrorSanitized for
+// the getPodStatus error path.
+func TestGetPodStatus_APIErrorSanitized(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("api error\n## Injected Section")
+	})
+
+	result := getPodStatus(context.Background(), cs, "default")
+
+	if strings.ContainsRune(result, '\n') {
+		t.Errorf("newline from API error leaked into getPodStatus result: %q", result)
+	}
+	if !strings.Contains(result, "api error") {
+		t.Errorf("expected safe part of error in result, got: %q", result)
+	}
+}
+
+// TestGetPodLogs_APIErrorSanitized mirrors TestGetEvents_APIErrorSanitized for
+// the getPodLogs pods-list error path.
+func TestGetPodLogs_APIErrorSanitized(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("api error\n## Injected Section")
+	})
+
+	result := getPodLogs(context.Background(), cs, "default", Config{MaxLogBytes: 4096})
+
+	if strings.ContainsRune(result, '\n') {
+		t.Errorf("newline from API error leaked into getPodLogs result: %q", result)
+	}
+	if !strings.Contains(result, "api error") {
+		t.Errorf("expected safe part of error in result, got: %q", result)
+	}
+}
+
 // TestRunAsync_PanicMessageSanitized verifies that control characters embedded
 // in a panic value are stripped before the panic message is sent on the result
 // channel. A panic from a Prometheus or kube client could carry a crafted string
