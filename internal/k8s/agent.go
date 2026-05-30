@@ -563,7 +563,7 @@ func handleKubectlTool(ctx context.Context, kc KubectlRunner, metrics *shared.Al
 		recordToolCall(alertname, metrics, "kubectl_exec", outcome, time.Since(start), nil)
 		// Validation errors return the message as the tool result (not a Go
 		// error) so Claude can self-correct.
-		return err.Error(), nil
+		return shared.SanitizeAlertField(err.Error()), nil
 	}
 
 	out, err := kc.Exec(ctx, argv, agentToolTimeout)
@@ -593,7 +593,7 @@ func handlePromQLTool(ctx context.Context, prom PromQLQuerier, metrics *shared.A
 	q, err := parsePromQLInput(input)
 	if err != nil {
 		recordToolCall(alertname, metrics, "promql_query", outcomeRejectedValid, time.Since(start), nil)
-		return err.Error(), nil
+		return shared.SanitizeAlertField(err.Error()), nil
 	}
 	queryCtx, cancel := context.WithTimeout(ctx, agentToolTimeout)
 	defer cancel()

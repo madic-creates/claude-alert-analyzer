@@ -1534,3 +1534,41 @@ func TestNewKubectlSubprocess_DefaultPath(t *testing.T) {
 		t.Errorf("runner.Path = %q, want %q (default)", runner.Path, defaultKubectlPath)
 	}
 }
+
+// TestHandleKubectlTool_ValidationErrorSanitized verifies that a validation
+// error from parseKubectlInput is returned as a sanitized string with no
+// embedded newlines. validateKubectlVerb embeds the denied verb directly into
+// the error message; SanitizeAlertField guards against a crafted verb injecting
+// a fake section header into the Claude tool-result context.
+func TestHandleKubectlTool_ValidationErrorSanitized(t *testing.T) {
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
+	kc := &fakeKubectlRunner{}
+	result, err := handleKubectlTool(context.Background(), kc, metrics, "test-alert",
+		json.RawMessage(`{"command":["delete","pod","x"]}`), time.Now())
+	if err != nil {
+		t.Fatalf("validation error must not propagate as Go error: %v", err)
+	}
+	if strings.ContainsRune(result, '\n') {
+		t.Errorf("newline in validation error result: %q", result)
+	}
+	if !strings.Contains(result, "command denied") {
+		t.Errorf("expected denial string in result, got: %q", result)
+	}
+}
+
+// TestHandlePromQLTool_ValidationErrorSanitized verifies that a validation
+// error from parsePromQLInput is returned as a sanitized string with no
+// embedded newlines. Defense-in-depth consistent with the kubectl and panic
+// recovery sanitization applied in earlier cycles.
+func TestHandlePromQLTool_ValidationErrorSanitized(t *testing.T) {
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
+	pq := &fakePromQLQuerier{}
+	result, err := handlePromQLTool(context.Background(), pq, metrics, "test-alert",
+		json.RawMessage(`{}`), time.Now())
+	if err != nil {
+		t.Fatalf("validation error must not propagate as Go error: %v", err)
+	}
+	if strings.ContainsRune(result, '\n') {
+		t.Errorf("newline in validation error result: %q", result)
+	}
+}

@@ -927,7 +927,7 @@ func RunAgenticDiagnostics(
 			// mark the result is_error=true and records an exec_error metric,
 			// conflating validation rejections with actual execution failures
 			// (SSH errors, missing binary).
-			return "Invalid command: " + err.Error(), nil
+			return "Invalid command: " + shared.SanitizeAlertField(err.Error()), nil
 		}
 
 		if isDenied(denied, argv) {

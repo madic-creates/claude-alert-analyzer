@@ -3842,3 +3842,33 @@ func TestRunAgenticDiagnostics_TrailerLookalikeInOutputNotMisclassified(t *testi
 		}
 	}
 }
+
+// TestRunAgenticDiagnostics_ValidationErrorSanitized verifies that a
+// parseCommandInput error is returned as "Invalid command: <detail>" with no
+// embedded newlines. SanitizeAlertField wraps err.Error() before it reaches
+// the Claude tool-result context, consistent with the prompt-injection defense
+// applied to all tool-result paths in k8s/agent.go.
+func TestRunAgenticDiagnostics_ValidationErrorSanitized(t *testing.T) {
+	runner := &driverToolLoopRunner{
+		driver: func(handleTool func(string, json.RawMessage) (string, error)) (string, error) {
+			result, err := handleTool("execute_command", json.RawMessage(`{"command":[]}`))
+			if err != nil {
+				t.Errorf("validation error must not propagate as Go error: %v", err)
+			}
+			if strings.ContainsRune(result, '\n') {
+				t.Errorf("newline in validation error result: %q", result)
+			}
+			if !strings.HasPrefix(result, "Invalid command: ") {
+				t.Errorf("expected result to start with %q, got: %q", "Invalid command: ", result)
+			}
+			return "analysis", nil
+		},
+	}
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, nilDialer{}, nil, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 10, "test-model",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
