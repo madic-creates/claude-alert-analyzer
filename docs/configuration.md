@@ -73,3 +73,26 @@ All disabled by default. See [cost-and-storm-protection.md](cost-and-storm-prote
 | `CIRCUIT_BREAKER_OPEN_SECONDS` | `60` | Open-state duration |
 | `CIRCUIT_BREAKER_MAX_PROBE_SECONDS` | `60` | Half-open probe watchdog timeout |
 | `CIRCUIT_BREAKER_NOTIFY_INTERVAL` | `300s` | Breaker-aggregator emit interval |
+
+## Alert history (optional)
+
+Disabled by default. When enabled, every alert fire is recorded in a local
+SQLite store and, on a re-fire, an "Alert Recurrence" section ("this fingerprint
+has fired N times in the last 6h") is prepended to the Claude prompt. Best-effort:
+store errors are logged + counted as metrics, never block analysis. See
+[the design spec](superpowers/specs/2026-05-30-alert-history-cross-alert-context-design.md).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HISTORY_ENABLED` | `false` | Master switch. `false` = no store, no disk I/O |
+| `HISTORY_DB_PATH` | `/var/lib/analyzer/history.db` | SQLite file path. Requires a writable volume (PVC) mounted at the parent directory |
+| `HISTORY_TTL` | `6h` | Lookback window for the recurrence count **and** the prune horizon. Go `time.ParseDuration` syntax (e.g. `6h`, `24h`, `168h` for "this week") |
+| `HISTORY_MAX_ENTRIES` | `5` | Max prior analyses surfaced in the prompt (1–100). Used by Phase B prior-summary injection |
+| `HISTORY_INJECT_PRIOR` | `true` | Inject prior-analysis summaries (Phase B). `false` = recurrence metadata only |
+
+**Single replica only:** the store uses SQLite with a single writer and a
+ReadWriteOnce PVC. Scaling beyond one replica requires an external store (not
+supported). The bundled deployment manifests
+(`deploy/k8s-analyzer/`, `deploy/checkmk-analyzer/`) already provision the PVC
+and mount at `/var/lib/analyzer`. History metrics (`alert_analyzer_history_*`)
+are documented in [observability.md](observability.md).
