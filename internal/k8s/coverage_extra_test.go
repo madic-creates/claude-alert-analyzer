@@ -299,7 +299,7 @@ func TestK8sHandleWebhook_BodyReadError(t *testing.T) {
 		CooldownSeconds: 5,
 	}
 	cd := shared.NewCooldownManager()
-	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil, nil)
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil, nil, shared.NewNopHistoryStore())
 
 	req := httptest.NewRequest("POST", "/webhook", &k8sErrorReader{})
 	req.Header.Set("Authorization", "Bearer test-secret")

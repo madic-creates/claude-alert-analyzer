@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 )
 
 // EnvOrDefault returns the value of the environment variable key,
@@ -58,4 +59,19 @@ func RequireEnv(key string) (string, error) {
 		return "", fmt.Errorf("%s is required but not set", key)
 	}
 	return v, nil
+}
+
+// ParseDurationEnv reads a Go duration env var (e.g. "6h", "90m"). Unset or
+// empty returns fallback. An unparseable value returns an error so
+// misconfiguration fails fast at startup.
+func ParseDurationEnv(key string, fallback time.Duration) (time.Duration, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s=%q: not a valid duration (e.g. 6h, 90m, 30s)", key, raw)
+	}
+	return d, nil
 }

@@ -1,10 +1,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: claude-alert-kubernetes-analyzer
+  name: claude-alert-checkmk-analyzer
   namespace: monitoring
   labels:
-    app.kubernetes.io/name: claude-alert-kubernetes-analyzer
+    app.kubernetes.io/name: claude-alert-checkmk-analyzer
 spec:
   replicas: 1
   revisionHistoryLimit: 3
@@ -12,14 +12,13 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app.kubernetes.io/name: claude-alert-kubernetes-analyzer
+      app.kubernetes.io/name: claude-alert-checkmk-analyzer
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: claude-alert-kubernetes-analyzer
+        app.kubernetes.io/name: claude-alert-checkmk-analyzer
     spec:
-      serviceAccountName: claude-alert-kubernetes-analyzer
-      automountServiceAccountToken: true
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -29,7 +28,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: analyzer
-          image: ghcr.io/madic-creates/claude-alert-kubernetes-analyzer:latest
+          image: ghcr.io/madic-creates/claude-alert-checkmk-analyzer:latest
           ports:
             - containerPort: 8080
               name: http
@@ -37,7 +36,7 @@ spec:
               name: metrics
           envFrom:
             - secretRef:
-                name: claude-alert-kubernetes-analyzer-env
+                name: claude-alert-checkmk-analyzer-env
           resources:
             requests:
               cpu: 10m
@@ -53,6 +52,9 @@ spec:
           volumeMounts:
             - name: history
               mountPath: /var/lib/analyzer
+            - name: ssh
+              mountPath: /ssh
+              readOnly: true
           livenessProbe:
             httpGet:
               path: /health
@@ -68,4 +70,8 @@ spec:
       volumes:
         - name: history
           persistentVolumeClaim:
-            claimName: claude-alert-kubernetes-analyzer-history
+            claimName: claude-alert-checkmk-analyzer-history
+        - name: ssh
+          secret:
+            secretName: claude-alert-checkmk-analyzer-ssh
+            defaultMode: 0400

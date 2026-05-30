@@ -79,6 +79,14 @@ Storm-robustness optional: `GROUP_COOLDOWN_SECONDS` (default 0 = disabled),
 `CIRCUIT_BREAKER_MAX_PROBE_SECONDS` (default 60),
 `CIRCUIT_BREAKER_NOTIFY_INTERVAL` (default 300s).
 
+Alert-history optional (default disabled): `HISTORY_ENABLED` (default `false`),
+`HISTORY_DB_PATH` (default `/var/lib/analyzer/history.db`), `HISTORY_TTL`
+(default `6h`, recurrence window + prune horizon), `HISTORY_MAX_ENTRIES`
+(default `5`), `HISTORY_INJECT_PRIOR` (default `true`, Phase-B prior-summary
+injection). Requires a writable volume at `HISTORY_DB_PATH` (PVC). Single
+replica only (SQLite single-writer). See
+`docs/superpowers/specs/2026-05-30-alert-history-cross-alert-context-design.md`.
+
 k8s-analyzer runs in-cluster only (`rest.InClusterConfig()`).
 
 ## Cost & Storm Protection

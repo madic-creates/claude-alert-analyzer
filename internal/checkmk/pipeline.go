@@ -55,6 +55,9 @@ type PipelineDeps struct {
 	SSHConfig     Config
 	GatherContext func(ctx context.Context, alert shared.AlertPayload, hostInfo *HostInfo) shared.AnalysisContext
 	ValidateHost  func(ctx context.Context, hostname, hostAddress string) (*HostInfo, error)
+
+	History            shared.HistoryStore
+	HistoryInjectPrior bool
 }
 
 // ProcessAlert gathers context, optionally runs agentic SSH diagnostics, and publishes results.
@@ -140,6 +143,12 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	}
 
 	actx := deps.GatherContext(ctx, alert, hostInfo)
+	actx = shared.InjectHistory(ctx, deps.History, alert.Fingerprint, deps.HistoryInjectPrior, actx)
+	if deps.History != nil {
+		if v := deps.History.Lookup(ctx, alert.Fingerprint); v.Count > 1 {
+			deps.Metrics.ObserveRecurrence(v.Count)
+		}
+	}
 	alertContext := actx.FormatForPrompt()
 
 	// hostInfo must be non-nil to access VerifiedIP for SSH dialing.

@@ -141,6 +141,20 @@ func main() {
 	slog.Info("metrics initialized",
 		"prefix", "alert_analyzer_*",
 		"product", shared.ProductK8s.String())
+
+	histCfg, err := shared.LoadHistoryConfig()
+	if err != nil {
+		slog.Error("history config", "error", err)
+		os.Exit(1)
+	}
+	history, err := shared.NewHistoryStore(histCfg, shared.ProductK8s, metrics)
+	if err != nil {
+		slog.Error("history store init failed", "error", err)
+		os.Exit(1)
+	}
+	defer history.Close()
+	slog.Info("alert history", "enabled", histCfg.Enabled, "dbPath", histCfg.DBPath,
+		"ttl", histCfg.TTL, "maxEntries", histCfg.MaxEntries, "injectPrior", histCfg.InjectPrior)
 	transport := shared.NewLimitedTransport(http.DefaultTransport, prom.ClaudeAPIDuration)
 	claudeClient := shared.NewClaudeClient(cfg.BaseConfig(), transport).WithPrometheusMetrics(metrics)
 	promClient := k8s.NewPrometheusClient(cfg.PrometheusURL)
@@ -170,11 +184,13 @@ func main() {
 		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
 			return k8s.GatherContext(ctx, promClient, clientset, k8s.AlertPayloadToAlert(alert), cfg)
 		},
+		History:            history,
+		HistoryInjectPrior: histCfg.InjectPrior,
 	}
 
 	if deps.Analyzer == nil || deps.ToolRunner == nil || deps.Policy == nil ||
 		deps.Cooldown == nil || deps.Metrics == nil || deps.GatherContext == nil ||
-		deps.KubectlRunner == nil || deps.Prom == nil {
+		deps.KubectlRunner == nil || deps.Prom == nil || deps.History == nil {
 		slog.Error("k8s pipeline deps incomplete — refusing to start")
 		os.Exit(1)
 	}
@@ -203,7 +219,7 @@ func main() {
 		"breakerMaxProbeDuration", spCfg.BreakerMaxProbe,
 		"breakerNotifyInterval", spCfg.BreakerNotifyInterval)
 
-	handler := k8s.HandleWebhook(cfg, cooldownMgr, srv.Enqueue, metrics, policy.Storm)
+	handler := k8s.HandleWebhook(cfg, cooldownMgr, srv.Enqueue, metrics, policy.Storm, history)
 
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

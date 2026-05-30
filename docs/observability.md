@@ -95,6 +95,17 @@ releases.
 | `alert_analyzer_claude_circuit_breaker_state` | gauge | — | Circuit-breaker state: `0`=closed, `1`=open, `2`=half-open |
 | `alert_analyzer_notify_aggregator_drops_total` | counter | `aggregator` | Alerts dropped by `NotifyAggregator` (`storm` or `breaker`) |
 
+### Alert history
+
+| Metric | Type | Per-call labels | Description |
+|---|---|---|---|
+| `alert_analyzer_history_events_total` | counter | `kind` (`fire`\|`analysis`) | History rows written. |
+| `alert_analyzer_history_drops_total` | counter | — | Writes dropped (write channel full). |
+| `alert_analyzer_history_store_errors_total` | counter | `op` (`record`\|`lookup`\|`prune`) | History store errors. |
+| `alert_analyzer_history_recurrence` | histogram | — | Fire count at recurrence-injection time. |
+
+Only emitted when `HISTORY_ENABLED=true`.
+
 ### External I/O
 
 | Metric | Type | Per-call labels | Description |

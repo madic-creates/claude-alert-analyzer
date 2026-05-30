@@ -146,6 +146,19 @@ func main() {
 	slog.Info("metrics initialized",
 		"prefix", "alert_analyzer_*",
 		"product", shared.ProductCheckMK.String())
+	histCfg, err := shared.LoadHistoryConfig()
+	if err != nil {
+		slog.Error("history config", "error", err)
+		os.Exit(1)
+	}
+	history, err := shared.NewHistoryStore(histCfg, shared.ProductCheckMK, metrics)
+	if err != nil {
+		slog.Error("history store init failed", "error", err)
+		os.Exit(1)
+	}
+	defer history.Close()
+	slog.Info("alert history", "enabled", histCfg.Enabled, "dbPath", histCfg.DBPath,
+		"ttl", histCfg.TTL, "maxEntries", histCfg.MaxEntries, "injectPrior", histCfg.InjectPrior)
 	transport := shared.NewLimitedTransport(http.DefaultTransport, prom.ClaudeAPIDuration)
 	claudeClient := shared.NewClaudeClient(cfg.BaseConfig(), transport).WithPrometheusMetrics(metrics)
 	apiClient := checkmk.NewAPIClient(cfg)
@@ -189,11 +202,13 @@ func main() {
 		ValidateHost: func(ctx context.Context, hostname, hostAddress string) (*checkmk.HostInfo, error) {
 			return apiClient.ValidateAndDescribeHost(ctx, hostname, hostAddress)
 		},
+		History:            history,
+		HistoryInjectPrior: histCfg.InjectPrior,
 	}
 
 	if deps.Analyzer == nil || deps.ToolRunner == nil || deps.Policy == nil ||
 		deps.Cooldown == nil || deps.Metrics == nil || deps.GatherContext == nil ||
-		deps.ValidateHost == nil || (deps.SSHEnabled && deps.SSHDialer == nil) {
+		deps.ValidateHost == nil || deps.History == nil || (deps.SSHEnabled && deps.SSHDialer == nil) {
 		slog.Error("checkmk pipeline deps incomplete — refusing to start")
 		os.Exit(1)
 	}
@@ -224,7 +239,7 @@ func main() {
 		"breakerMaxProbeDuration", spCfg.BreakerMaxProbe,
 		"breakerNotifyInterval", spCfg.BreakerNotifyInterval)
 
-	handler := checkmk.HandleWebhook(cfg, cooldownMgr, srv.Enqueue, metrics, policy.Storm)
+	handler := checkmk.HandleWebhook(cfg, cooldownMgr, srv.Enqueue, metrics, policy.Storm, history)
 
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

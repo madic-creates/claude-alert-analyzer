@@ -3,6 +3,7 @@ package shared
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 func TestEnvOrDefault_Set(t *testing.T) {
@@ -163,5 +164,20 @@ func TestRequireEnv_Unset(t *testing.T) {
 	_, err := RequireEnv("TEST_REQ_MISSING")
 	if err == nil {
 		t.Fatal("expected error for unset env var")
+	}
+}
+
+func TestParseDurationEnv(t *testing.T) {
+	t.Setenv("HIST_TTL", "")
+	if d, err := ParseDurationEnv("HIST_TTL", 6*time.Hour); err != nil || d != 6*time.Hour {
+		t.Fatalf("empty: got %v, %v; want 6h, nil", d, err)
+	}
+	t.Setenv("HIST_TTL", "90m")
+	if d, err := ParseDurationEnv("HIST_TTL", 6*time.Hour); err != nil || d != 90*time.Minute {
+		t.Fatalf("90m: got %v, %v; want 90m, nil", d, err)
+	}
+	t.Setenv("HIST_TTL", "nonsense")
+	if _, err := ParseDurationEnv("HIST_TTL", 6*time.Hour); err == nil {
+		t.Fatal("nonsense: want error, got nil")
 	}
 }
