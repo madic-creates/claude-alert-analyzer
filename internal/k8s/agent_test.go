@@ -1556,6 +1556,36 @@ func TestHandleKubectlTool_ValidationErrorSanitized(t *testing.T) {
 	}
 }
 
+// TestHandleKubectlTool_ExitedTrailerIsOnOneLine verifies that when kc.Exec
+// returns an error whose Error() string contains a newline, the [exited: ...]
+// trailer in the tool result remains on a single line. SanitizeAlertField
+// strips the embedded newline so Claude cannot see a crafted error inject a
+// fake section header into the tool-result context. Parallel to the SSH
+// transport-error test in checkmk/agent_test.go added in Cycle 80.
+func TestHandleKubectlTool_ExitedTrailerIsOnOneLine(t *testing.T) {
+	kc := &fakeKubectlRunner{
+		response: "some output",
+		err:      fmt.Errorf("error line one\n## INJECTED HEADER"),
+	}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
+	result, err := handleKubectlTool(context.Background(), kc, metrics, "test-alert",
+		json.RawMessage(`{"command":["get","pods"]}`), time.Now())
+	if err != nil {
+		t.Fatalf("exec error must not propagate as Go error: %v", err)
+	}
+	lastNL := strings.LastIndex(result, "\n")
+	lastLine := result
+	if lastNL >= 0 {
+		lastLine = result[lastNL+1:]
+	}
+	if !strings.HasPrefix(lastLine, "[exited: ") {
+		t.Errorf("expected last line to start with [exited: ], got result: %q", result)
+	}
+	if strings.ContainsRune(lastLine, '\n') {
+		t.Errorf("last line must not contain newlines, got: %q", lastLine)
+	}
+}
+
 // TestHandlePromQLTool_ValidationErrorSanitized verifies that a validation
 // error from parsePromQLInput is returned as a sanitized string with no
 // embedded newlines. Defense-in-depth consistent with the kubectl and panic
@@ -1570,5 +1600,31 @@ func TestHandlePromQLTool_ValidationErrorSanitized(t *testing.T) {
 	}
 	if strings.ContainsRune(result, '\n') {
 		t.Errorf("newline in validation error result: %q", result)
+	}
+}
+
+// TestRunAgenticDiagnostics_UnknownToolErrorSanitized verifies that an
+// unknown tool name containing newlines is sanitized before being embedded
+// in the returned error message.
+func TestRunAgenticDiagnostics_UnknownToolErrorSanitized(t *testing.T) {
+	runner := &fakeToolLoopRunner{
+		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
+			_, err := handleTool("bad_tool\n## INJECTED", json.RawMessage(`{}`))
+			if err == nil {
+				t.Fatal("expected error for unknown tool")
+			}
+			if strings.ContainsRune(err.Error(), '\n') {
+				t.Errorf("newline in unknown tool error message: %q", err.Error())
+			}
+			return "analysis", nil
+		},
+	}
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductK8s)}
+	_, err := RunAgenticDiagnostics(
+		context.Background(), runner, nil, nil, metrics, shared.SeverityWarning, "test-alert",
+		"user prompt", 10, "test-model",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

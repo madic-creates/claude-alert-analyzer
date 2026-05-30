@@ -3790,6 +3790,60 @@ func TestRunAgenticDiagnostics_SSHTransportErrorMetricClassification(t *testing.
 	}
 }
 
+// TestRunAgenticDiagnostics_SSHTransportErrorTrailerIsSingleLine verifies that
+// the "[exited: <err>]" trailer appended by handleTool for transport-level SSH
+// errors is always a single line — no embedded newlines. This is required for
+// wrappedHandleTool's lastLine detection to correctly classify the outcome as
+// "ssh_error". SanitizeAlertField is applied to r.err before embedding so any
+// SSH disconnect-reason description containing \n cannot defeat lastLine.
+func TestRunAgenticDiagnostics_SSHTransportErrorTrailerIsSingleLine(t *testing.T) {
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		sendExitStatus(ch, 0)
+	})
+	client.Close() // forces NewSession to fail → r.err set to transport error
+
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)}
+	runner := &driverToolLoopRunner{
+		driver: func(handleTool func(string, json.RawMessage) (string, error)) (string, error) {
+			result, err := handleTool("execute_command", json.RawMessage(`{"command":["uptime"]}`))
+			if err != nil {
+				t.Errorf("wrappedHandleTool returned unexpected error: %v", err)
+			}
+			// The [exited: ...] trailer must be the last line, with no embedded
+			// newlines. If r.err contained \n the old code would produce extra
+			// lines inside the bracket, defeating lastLine detection.
+			lastNL := strings.LastIndex(result, "\n")
+			lastLine := result
+			if lastNL >= 0 {
+				lastLine = result[lastNL+1:]
+			}
+			if !strings.HasPrefix(lastLine, "[exited: ") {
+				t.Errorf("expected last line to start with [exited: ], got result: %q", result)
+			}
+			if strings.ContainsRune(lastLine, '\n') {
+				t.Errorf("last line must not contain newlines, got: %q", lastLine)
+			}
+			return "analysis", nil
+		},
+	}
+
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, &fixedDialer{client: client}, metrics, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 10, "test-model",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{}).ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if !strings.Contains(body, `alert_analyzer_agent_tool_calls_total{outcome="ssh_error",product="checkmk",tool="execute_command"} 1`) {
+		t.Errorf("expected ssh_error metric for transport error; body:\n%s", body)
+	}
+}
+
 // TestRunAgenticDiagnostics_TrailerLookalikeInOutputNotMisclassified pins
 // that wrappedHandleTool inspects only the last line of the tool result when
 // classifying outcomes, not the full string. journalctl, systemctl status,
@@ -3840,6 +3894,31 @@ func TestRunAgenticDiagnostics_TrailerLookalikeInOutputNotMisclassified(t *testi
 		if strings.Contains(body, needle) {
 			t.Errorf("exit-0 command misclassified as %q; body:\n%s", wrong, body)
 		}
+	}
+}
+
+// TestRunAgenticDiagnostics_UnknownToolErrorSanitized verifies that an
+// unknown tool name containing newlines is sanitized before being embedded
+// in the returned error.
+func TestRunAgenticDiagnostics_UnknownToolErrorSanitized(t *testing.T) {
+	runner := &driverToolLoopRunner{
+		driver: func(handleTool func(string, json.RawMessage) (string, error)) (string, error) {
+			_, err := handleTool("bad_tool\n## INJECTED", json.RawMessage(`{}`))
+			if err == nil {
+				t.Fatal("expected error for unknown tool")
+			}
+			if strings.ContainsRune(err.Error(), '\n') {
+				t.Errorf("newline in unknown tool error message: %q", err.Error())
+			}
+			return "analysis", nil
+		},
+	}
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, nilDialer{}, nil, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 10, "test-model",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

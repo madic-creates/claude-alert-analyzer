@@ -505,7 +505,7 @@ func RunAgenticDiagnostics(
 			return handlePromQLTool(ctx, prom, metrics, alertname, input, start)
 		default:
 			recordToolCall(alertname, metrics, name, outcomeRejectedValid, time.Since(start), nil)
-			return "", fmt.Errorf("unknown tool: %s", name)
+			return "", fmt.Errorf("unknown tool: %s", shared.SanitizeAlertField(name))
 		}
 	}
 
@@ -580,10 +580,11 @@ func handleKubectlTool(ctx context.Context, kc KubectlRunner, metrics *shared.Al
 			outcome = outcomeExecError
 		}
 		recordToolCall(alertname, metrics, "kubectl_exec", outcome, time.Since(start), argv)
+		errStr := shared.SanitizeAlertField(fmt.Sprintf("%v", err))
 		if out != "" {
-			return fmt.Sprintf("$ %s\n```\n%s\n```\n[exited: %v]", cmdLine, out, err), nil
+			return fmt.Sprintf("$ %s\n```\n%s\n```\n[exited: %s]", cmdLine, out, errStr), nil
 		}
-		return fmt.Sprintf("$ %s\n[exited: %v]", cmdLine, err), nil
+		return fmt.Sprintf("$ %s\n[exited: %s]", cmdLine, errStr), nil
 	}
 	recordToolCall(alertname, metrics, "kubectl_exec", outcomeOK, time.Since(start), argv)
 	return fmt.Sprintf("$ %s\n```\n%s\n```", cmdLine, out), nil
