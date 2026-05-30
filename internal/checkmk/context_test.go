@@ -625,6 +625,46 @@ func TestGetHostServices_NonOKStatusRedactsBody(t *testing.T) {
 	}
 }
 
+// TestGetHostServices_NonOKStatusSanitizesBody verifies that embedded newlines in
+// a non-200 CheckMK API error body are stripped before the snippet is injected
+// into the Claude prompt. A crafted response containing "\n## INJECTED HEADER"
+// would otherwise create a fake Markdown section header in the analysis context.
+func TestGetHostServices_NonOKStatusSanitizesBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprint(w, "upstream error\n## INJECTED HEADER")
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "auto", Secret: "secret"}
+	result := apiClient.GetHostServices(context.Background(), "host1")
+
+	if strings.Contains(result, "\n") {
+		t.Errorf("result must not contain newlines, got: %q", result)
+	}
+}
+
+// TestValidateAndDescribeHost_ErrorBodySanitized verifies that embedded newlines
+// in a non-200 CheckMK API error body are stripped before the snippet appears
+// in the returned error string.
+func TestValidateAndDescribeHost_ErrorBodySanitized(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprint(w, "upstream error\n## INJECTED HEADER")
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "auto", Secret: "secret"}
+	_, err := apiClient.ValidateAndDescribeHost(context.Background(), "host1", "1.2.3.4")
+
+	if err == nil {
+		t.Fatal("expected error for non-200 response, got nil")
+	}
+	if strings.Contains(err.Error(), "\n") {
+		t.Errorf("error message must not contain newlines, got: %q", err.Error())
+	}
+}
+
 // TestGetHostServices_InvalidJSON verifies that a malformed response is reported.
 func TestGetHostServices_InvalidJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

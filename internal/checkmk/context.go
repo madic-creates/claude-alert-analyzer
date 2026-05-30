@@ -173,7 +173,7 @@ func (c *APIClient) ValidateAndDescribeHost(ctx context.Context, hostname, hostA
 		// used in sendRequest (claude.go) for non-200 API responses.
 		return nil, fmt.Errorf("CheckMK API returned %d for host %q: %s",
 			resp.StatusCode, hostname,
-			shared.Truncate(shared.RedactSecrets(strings.TrimSpace(string(body))), 200))
+			shared.SanitizeAlertField(shared.Truncate(shared.RedactSecrets(strings.TrimSpace(string(body))), 200)))
 	}
 
 	var hostResp checkmkHostResponse
@@ -256,7 +256,7 @@ func (c *APIClient) GetHostServices(ctx context.Context, hostname string) string
 		// replaying the request. Mirrors the same pattern in ValidateAndDescribeHost.
 		// The body has already been read above to drain the connection for reuse.
 		return fmt.Sprintf("(CheckMK API returned %d: %s)", resp.StatusCode,
-			shared.Truncate(shared.RedactSecrets(strings.TrimSpace(string(body))), 200))
+			shared.SanitizeAlertField(shared.Truncate(shared.RedactSecrets(strings.TrimSpace(string(body))), 200)))
 	}
 
 	var svcResp checkmkServicesResponse
