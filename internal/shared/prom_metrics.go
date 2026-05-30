@@ -41,6 +41,12 @@ type PrometheusMetrics struct {
 
 	// External I/O
 	NtfyPublishErrors prometheus.Counter
+
+	// Alert history
+	HistoryEvents     *prometheus.CounterVec // labels: kind
+	HistoryDrops      prometheus.Counter
+	HistoryErrors     *prometheus.CounterVec // labels: op
+	HistoryRecurrence prometheus.Histogram
 }
 
 // NewPrometheusMetrics constructs the registry, applies the product ConstLabel,
@@ -175,6 +181,31 @@ func NewPrometheusMetrics(product Product) (*PrometheusMetrics, error) {
 		ConstLabels: constLabels,
 	})
 
+	pm.HistoryEvents = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "alert_analyzer_history_events_total",
+		Help:        "Alert-history rows written, by kind (fire|analysis).",
+		ConstLabels: constLabels,
+	}, []string{"kind"})
+
+	pm.HistoryDrops = prometheus.NewCounter(prometheus.CounterOpts{
+		Name:        "alert_analyzer_history_drops_total",
+		Help:        "History writes dropped because the write channel was full.",
+		ConstLabels: constLabels,
+	})
+
+	pm.HistoryErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "alert_analyzer_history_store_errors_total",
+		Help:        "History store errors, by operation (record|lookup|prune).",
+		ConstLabels: constLabels,
+	}, []string{"op"})
+
+	pm.HistoryRecurrence = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:        "alert_analyzer_history_recurrence",
+		Help:        "Fire count for a fingerprint at the moment recurrence context was injected.",
+		ConstLabels: constLabels,
+		Buckets:     []float64{2, 3, 4, 5, 7, 10, 15, 25, 50},
+	})
+
 	reg.MustRegister(
 		pm.WebhooksTotal, pm.AlertsEnqueued, pm.AlertsDropped, pm.AlertsResolved,
 		pm.AlertsProcessed, pm.AlertsFailed, pm.ProcessingDuration, pm.QueueDepth,
@@ -182,6 +213,7 @@ func NewPrometheusMetrics(product Product) (*PrometheusMetrics, error) {
 		pm.AgentToolCalls, pm.AgentToolDuration, pm.AgentRoundsPerRun, pm.AgentRoundsExhausted,
 		pm.StormModeActive, pm.ClaudeCircuitBreakerState, pm.NotifyAggregatorDrops,
 		pm.NtfyPublishErrors,
+		pm.HistoryEvents, pm.HistoryDrops, pm.HistoryErrors, pm.HistoryRecurrence,
 	)
 
 	// Runtime/process collectors with the product ConstLabel applied via wrapper.
@@ -220,6 +252,13 @@ func NewPrometheusMetrics(product Product) (*PrometheusMetrics, error) {
 			pm.AgentToolCalls.WithLabelValues(tool, outcome)
 		}
 		pm.AgentToolDuration.WithLabelValues(tool)
+	}
+
+	for _, kind := range []string{"fire", "analysis"} {
+		pm.HistoryEvents.WithLabelValues(kind)
+	}
+	for _, op := range []string{"record", "lookup", "prune"} {
+		pm.HistoryErrors.WithLabelValues(op)
 	}
 
 	return pm, nil

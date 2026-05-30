@@ -159,3 +159,33 @@ func (m *AlertMetrics) RecordNtfyPublishError() {
 	}
 	m.Prom.NtfyPublishErrors.Inc()
 }
+
+// Alert history
+
+func (m *AlertMetrics) RecordHistoryEvent(kind string) {
+	if m == nil || m.Prom == nil {
+		return
+	}
+	m.Prom.HistoryEvents.WithLabelValues(kind).Inc()
+}
+
+func (m *AlertMetrics) RecordHistoryDrop() {
+	if m == nil || m.Prom == nil {
+		return
+	}
+	m.Prom.HistoryDrops.Inc()
+}
+
+func (m *AlertMetrics) RecordHistoryError(op string) {
+	if m == nil || m.Prom == nil {
+		return
+	}
+	m.Prom.HistoryErrors.WithLabelValues(op).Inc()
+}
+
+func (m *AlertMetrics) ObserveRecurrence(n int) {
+	if m == nil || m.Prom == nil {
+		return
+	}
+	m.Prom.HistoryRecurrence.Observe(float64(n))
+}
