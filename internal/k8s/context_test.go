@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1197,6 +1198,43 @@ func TestGetMetrics_ReplicaAlertname(t *testing.T) {
 			t.Errorf("alert %q: expected Unavailable Replicas section, got %q", name, result)
 		}
 	}
+}
+
+// TestGetMetrics_ReplicaQueryCoversStatefulSets verifies that the alertname-specific
+// PromQL query for replica/deploy/statefulset alerts includes the StatefulSet
+// unavailability metric. A query limited to kube_deployment_status_replicas_unavailable
+// silently returns no data for StatefulSet alerts, so Claude receives an empty
+// Unavailable Replicas section and cannot diagnose the real issue.
+func TestGetMetrics_ReplicaQueryCoversStatefulSets(t *testing.T) {
+	var mu sync.Mutex
+	var capturedQueries []string
+	resp := PromQueryResponse{Status: "success"}
+	resp.Data.ResultType = "vector"
+	body, _ := json.Marshal(resp)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if q := r.URL.Query().Get("query"); q != "" {
+			mu.Lock()
+			capturedQueries = append(capturedQueries, q)
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(body)
+	}))
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	alert := makeAlertWithLabels(map[string]string{"alertname": "KubeStatefulSetReplicasMismatch"})
+	prom.GetMetrics(context.Background(), alert)
+
+	mu.Lock()
+	queries := capturedQueries
+	mu.Unlock()
+	for _, q := range queries {
+		if strings.Contains(q, "kube_statefulset_status_replicas_unavailable") {
+			return
+		}
+	}
+	t.Errorf("expected at least one query to include kube_statefulset_status_replicas_unavailable, got %v", queries)
 }
 
 func TestGetMetrics_WithResultData(t *testing.T) {

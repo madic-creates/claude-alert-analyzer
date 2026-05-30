@@ -232,7 +232,7 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 		alertnameQueryStr = `kube_node_status_condition{condition="Ready"}`
 	case strings.Contains(lower, "replica") || strings.Contains(lower, "deploy") || strings.Contains(lower, "statefulset"):
 		alertnameSectionName = "\n## Unavailable Replicas"
-		alertnameQueryStr = `kube_deployment_status_replicas_unavailable > 0`
+		alertnameQueryStr = `(kube_deployment_status_replicas_unavailable > 0) or (kube_statefulset_status_replicas_unavailable > 0)`
 	}
 
 	// Launch the global firing-alerts query concurrently so it overlaps with
