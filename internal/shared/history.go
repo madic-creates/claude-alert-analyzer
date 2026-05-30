@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -142,9 +143,10 @@ type sqliteHistoryStore struct {
 	maxEntries int
 	metrics    *AlertMetrics
 
-	ch      chan writeOp
-	stop    chan struct{} // closed by Close to signal the writer
-	stopped chan struct{} // closed by the writer when it has exited
+	ch        chan writeOp
+	stop      chan struct{} // closed by Close to signal the writer
+	stopped   chan struct{} // closed by the writer when it has exited
+	closeOnce sync.Once
 
 	nowFn            func() int64 // overridable in tests
 	pruneInterval    int
@@ -200,11 +202,18 @@ func (s *sqliteHistoryStore) enqueue(op writeOp) {
 }
 
 // flush blocks until all writes enqueued before it have been processed.
-// Test-only helper; safe because it just rides the same channel.
+// Test-only helper. If the store is already stopping, it returns promptly.
 func (s *sqliteHistoryStore) flush() {
 	done := make(chan struct{})
-	s.ch <- writeOp{done: done}
-	<-done
+	select {
+	case s.ch <- writeOp{done: done}:
+	case <-s.stop:
+		return
+	}
+	select {
+	case <-done:
+	case <-s.stop:
+	}
 }
 
 func (s *sqliteHistoryStore) writeLoop() {
@@ -298,7 +307,11 @@ func (s *sqliteHistoryStore) Lookup(ctx context.Context, fingerprint string) His
 }
 
 func (s *sqliteHistoryStore) Close() error {
-	close(s.stop)
-	<-s.stopped
-	return s.db.Close()
+	var err error
+	s.closeOnce.Do(func() {
+		close(s.stop)
+		<-s.stopped
+		err = s.db.Close()
+	})
+	return err
 }

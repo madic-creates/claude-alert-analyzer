@@ -122,3 +122,23 @@ func TestHistoryPrune(t *testing.T) {
 		t.Errorf("old rows = %d, want 0 (pruned)", n)
 	}
 }
+
+func TestHistoryRecordFireNeverBlocks(t *testing.T) {
+	s := newTestStore(t)
+	// Block the writer by holding it on a flush that we never let complete is
+	// hard; instead just enqueue far more than the channel capacity (256) and
+	// assert RecordFire returns promptly for every call (drops are silent).
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < historyWriteChanCap*4; i++ {
+			s.RecordFire(context.Background(), "flood", SeverityWarning)
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+		// ok: all RecordFire calls returned without blocking
+	case <-time.After(5 * time.Second):
+		t.Fatal("RecordFire blocked — best-effort contract violated")
+	}
+}
