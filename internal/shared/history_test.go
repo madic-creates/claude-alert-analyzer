@@ -3,6 +3,7 @@ package shared
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -140,5 +141,61 @@ func TestHistoryRecordFireNeverBlocks(t *testing.T) {
 		// ok: all RecordFire calls returned without blocking
 	case <-time.After(5 * time.Second):
 		t.Fatal("RecordFire blocked — best-effort contract violated")
+	}
+}
+
+func TestHistorySection(t *testing.T) {
+	first := time.Date(2026, 5, 30, 8, 12, 0, 0, time.UTC)
+	last := time.Date(2026, 5, 30, 14, 5, 0, 0, time.UTC)
+	view := HistoryView{Count: 3, FirstSeen: first, LastSeen: last, Window: 6 * time.Hour}
+	sec := historySection(view, false)
+	if sec.Name != "Alert Recurrence" {
+		t.Errorf("Name = %q, want %q", sec.Name, "Alert Recurrence")
+	}
+	if strings.HasPrefix(sec.Content, "## ") {
+		t.Error("Content must not embed its own ## heading (FormatForPrompt adds it)")
+	}
+	if !strings.Contains(sec.Content, "fired 3 times") {
+		t.Errorf("Content missing fire count: %q", sec.Content)
+	}
+	if !strings.Contains(sec.Content, "6h") {
+		t.Errorf("Content missing window: %q", sec.Content)
+	}
+	if strings.Contains(sec.Content, "Prior analyses") {
+		t.Error("Phase A: no prior block expected with empty view.Prior")
+	}
+}
+
+func TestInjectHistoryFirstFireNoSection(t *testing.T) {
+	s := newTestStore(t)
+	s.RecordFire(context.Background(), "fp", SeverityWarning)
+	s.flush()
+	actx := AnalysisContext{Sections: []ContextSection{{Name: "Existing", Content: "x"}}}
+	out := InjectHistory(context.Background(), s, "fp", false, actx)
+	if len(out.Sections) != 1 || out.Sections[0].Name != "Existing" {
+		t.Errorf("Count==1 must not inject a section; got %d sections", len(out.Sections))
+	}
+}
+
+func TestInjectHistoryRecurrencePrepended(t *testing.T) {
+	s := newTestStore(t)
+	s.RecordFire(context.Background(), "fp", SeverityWarning)
+	s.RecordFire(context.Background(), "fp", SeverityWarning)
+	s.flush()
+	actx := AnalysisContext{Sections: []ContextSection{{Name: "Existing", Content: "x"}}}
+	out := InjectHistory(context.Background(), s, "fp", false, actx)
+	if len(out.Sections) != 2 {
+		t.Fatalf("want 2 sections, got %d", len(out.Sections))
+	}
+	if out.Sections[0].Name != "Alert Recurrence" {
+		t.Errorf("recurrence section must be first, got %q", out.Sections[0].Name)
+	}
+}
+
+func TestInjectHistoryNilStore(t *testing.T) {
+	actx := AnalysisContext{Sections: []ContextSection{{Name: "Existing", Content: "x"}}}
+	out := InjectHistory(context.Background(), nil, "fp", false, actx)
+	if len(out.Sections) != 1 {
+		t.Errorf("nil store must not change sections; got %d", len(out.Sections))
 	}
 }

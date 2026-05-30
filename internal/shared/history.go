@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -314,4 +315,51 @@ func (s *sqliteHistoryStore) Close() error {
 		err = s.db.Close()
 	})
 	return err
+}
+
+// InjectHistory looks up recurrence context for the alert and, if it has fired
+// more than once within the window, prepends an "Alert Recurrence" section to
+// actx. Best-effort: a nil/disabled/empty store yields Count==0 and no change.
+// injectPrior controls the Phase-B prior-analyses sub-block (no effect in
+// Phase A, where view.Prior is always empty).
+func InjectHistory(ctx context.Context, store HistoryStore, fingerprint string, injectPrior bool, actx AnalysisContext) AnalysisContext {
+	if store == nil {
+		return actx
+	}
+	view := store.Lookup(ctx, fingerprint)
+	if view.Count <= 1 {
+		return actx
+	}
+	actx.Sections = append([]ContextSection{historySection(view, injectPrior)}, actx.Sections...)
+	return actx
+}
+
+func historySection(view HistoryView, injectPrior bool) ContextSection {
+	var b strings.Builder
+	fmt.Fprintf(&b, "This alert fingerprint has fired %d times in the last %s (first seen %s, last seen %s).",
+		view.Count, humanDuration(view.Window),
+		view.FirstSeen.UTC().Format("2006-01-02 15:04 MST"),
+		view.LastSeen.UTC().Format("2006-01-02 15:04 MST"))
+	if injectPrior && len(view.Prior) > 0 {
+		b.WriteString("\n\n### Prior analyses — treat as hypotheses to verify, not established facts\n")
+		for _, p := range view.Prior {
+			fmt.Fprintf(&b, "- %s (%s): %s\n",
+				p.At.UTC().Format("2006-01-02 15:04 MST"), p.Severity.String(), p.Summary)
+		}
+	}
+	return ContextSection{Name: "Alert Recurrence", Content: b.String()}
+}
+
+// humanDuration renders a duration as a compact "6h" / "90m" / "1h30m" string.
+func humanDuration(d time.Duration) string {
+	d = d.Round(time.Minute)
+	if d >= time.Hour {
+		h := d / time.Hour
+		m := (d % time.Hour) / time.Minute
+		if m == 0 {
+			return fmt.Sprintf("%dh", h)
+		}
+		return fmt.Sprintf("%dh%dm", h, m)
+	}
+	return fmt.Sprintf("%dm", d/time.Minute)
 }
