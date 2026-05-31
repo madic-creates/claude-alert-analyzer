@@ -271,3 +271,49 @@ func TestMain_FailsWhenSSHEnabledInvalid(t *testing.T) {
 		t.Errorf("expected 'SSH_ENABLED' in output, got: %s", out)
 	}
 }
+
+// TestMain_FailsWhenHistoryEnabledInvalid verifies that the binary exits and
+// logs an error mentioning HISTORY_ENABLED when the env var is not a valid
+// boolean. LoadHistoryConfig is called in main() after loadConfig() so the
+// minimum auth env (minEnvWithAuth) must be provided to reach this path.
+func TestMain_FailsWhenHistoryEnabledInvalid(t *testing.T) {
+	env := minEnvWithAuth()
+	env["HISTORY_ENABLED"] = "notabool"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid HISTORY_ENABLED; output=%s", out)
+	}
+	if !strings.Contains(out, "HISTORY_ENABLED") {
+		t.Errorf("expected 'HISTORY_ENABLED' in output, got: %s", out)
+	}
+}
+
+// TestMain_FailsWhenHistoryMaxEntriesInvalid verifies that the binary exits and
+// logs an error mentioning HISTORY_MAX_ENTRIES when the value is outside the
+// valid range [1, 100]. Requires minEnvWithAuth to reach LoadHistoryConfig.
+func TestMain_FailsWhenHistoryMaxEntriesInvalid(t *testing.T) {
+	env := minEnvWithAuth()
+	env["HISTORY_MAX_ENTRIES"] = "0" // below min 1
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid HISTORY_MAX_ENTRIES; output=%s", out)
+	}
+	if !strings.Contains(out, "HISTORY_MAX_ENTRIES") {
+		t.Errorf("expected 'HISTORY_MAX_ENTRIES' in output, got: %s", out)
+	}
+}
+
+// TestMain_FailsWhenHistoryInjectPriorInvalid verifies that the binary exits
+// and logs an error mentioning HISTORY_INJECT_PRIOR when the env var is not a
+// valid boolean. Requires minEnvWithAuth to reach LoadHistoryConfig.
+func TestMain_FailsWhenHistoryInjectPriorInvalid(t *testing.T) {
+	env := minEnvWithAuth()
+	env["HISTORY_INJECT_PRIOR"] = "notabool"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid HISTORY_INJECT_PRIOR; output=%s", out)
+	}
+	if !strings.Contains(out, "HISTORY_INJECT_PRIOR") {
+		t.Errorf("expected 'HISTORY_INJECT_PRIOR' in output, got: %s", out)
+	}
+}
