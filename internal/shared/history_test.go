@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestLoadHistoryConfigDefaults(t *testing.T) {
@@ -449,5 +451,88 @@ func TestParseSummary(t *testing.T) {
 				t.Errorf("body = %q, want %q", gotBody, tc.wantBody)
 			}
 		})
+	}
+}
+
+// TestNewNopHistoryStoreDirectly calls NewNopHistoryStore (0% coverage because
+// callers are in other packages) and exercises all four interface methods.
+func TestNewNopHistoryStoreDirectly(t *testing.T) {
+	store := NewNopHistoryStore()
+	store.RecordFire(context.Background(), "fp", SeverityWarning)
+	store.RecordAnalysis(context.Background(), "fp", SeverityWarning, "summary")
+	if v := store.Lookup(context.Background(), "fp"); v.Count != 0 {
+		t.Errorf("nop Lookup Count = %d, want 0", v.Count)
+	}
+	if err := store.Close(); err != nil {
+		t.Errorf("nop Close: %v", err)
+	}
+}
+
+// TestNewHistoryStoreEnabled verifies that NewHistoryStore with Enabled=true
+// delegates to newSQLiteHistoryStore and returns a working store. The
+// existing TestNopHistoryStore only exercises the Enabled=false branch of
+// NewHistoryStore; without this test a mutation that swapped the two return
+// paths would go undetected.
+func TestNewHistoryStoreEnabled(t *testing.T) {
+	cfg := HistoryConfig{
+		Enabled:    true,
+		DBPath:     filepath.Join(t.TempDir(), "history.db"),
+		TTL:        6 * time.Hour,
+		MaxEntries: 5,
+	}
+	store, err := NewHistoryStore(cfg, ProductK8s, NewAlertMetrics(nil))
+	if err != nil {
+		t.Fatalf("NewHistoryStore(Enabled=true): %v", err)
+	}
+	if store == nil {
+		t.Fatal("NewHistoryStore(Enabled=true) returned nil store")
+	}
+	store.RecordFire(context.Background(), "fp", SeverityInfo)
+	if err := store.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+}
+
+// TestNewHistoryStoreBadDir verifies that newSQLiteHistoryStore returns a
+// "create db dir" error when the parent directory cannot be created. Covers
+// the os.MkdirAll failure branch in newSQLiteHistoryStore (73.3% → higher).
+func TestNewHistoryStoreBadDir(t *testing.T) {
+	// /dev/null is a character device, not a directory; trying to create a
+	// subdirectory inside it must fail on any POSIX system.
+	cfg := HistoryConfig{
+		Enabled:    true,
+		DBPath:     "/dev/null/sub/history.db",
+		TTL:        6 * time.Hour,
+		MaxEntries: 5,
+	}
+	_, err := newSQLiteHistoryStore(cfg, ProductK8s, NewAlertMetrics(nil))
+	if err == nil {
+		t.Fatal("expected error for bad db dir, got nil")
+	}
+	if !strings.Contains(err.Error(), "create db dir") {
+		t.Errorf("error = %q, want it to mention 'create db dir'", err)
+	}
+}
+
+// TestLookupAfterCloseRecordsErrorMetric verifies that Lookup on a closed
+// store records alert_analyzer_history_errors_total{op="lookup"} rather than
+// silently returning an empty view. Covers the QueryRowContext error branch in
+// Lookup (67.9% → higher).
+func TestLookupAfterCloseRecordsErrorMetric(t *testing.T) {
+	prom := NewPrometheusMetricsForTest(ProductK8s)
+	s := newTestStore(t)
+	s.metrics = NewAlertMetrics(prom)
+
+	// Close the store so the underlying DB is no longer open.
+	// closeOnce makes the t.Cleanup call in newTestStore a no-op, so the DB
+	// is not double-closed.
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	s.Lookup(context.Background(), "fp")
+
+	if got := testutil.ToFloat64(prom.HistoryErrors.WithLabelValues("lookup")); got < 1 {
+		t.Errorf("HistoryErrors[lookup] = %v, want >= 1", got)
 	}
 }
