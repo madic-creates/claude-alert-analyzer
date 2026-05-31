@@ -423,6 +423,14 @@ func TestParseSummary(t *testing.T) {
 			wantBody:    strings.Repeat("x", 250),
 		},
 		{
+			// 'ä' is 2 UTF-8 bytes. Byte-slicing at 200 would cut in the middle of
+			// a rune; we must get exactly 200 valid runes back.
+			name:        "no SUMMARY fallback truncates at 200 runes multibyte",
+			input:       strings.Repeat("ä", 201),
+			wantSummary: strings.Repeat("ä", 200),
+			wantBody:    strings.Repeat("ä", 201),
+		},
+		{
 			name:        "only headings returns empty summary",
 			input:       "## Root cause\n### Details",
 			wantSummary: "",

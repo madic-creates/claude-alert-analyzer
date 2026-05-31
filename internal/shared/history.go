@@ -416,8 +416,8 @@ func ParseSummary(text string) (summary, body string) {
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, prefix) {
 			continue
 		}
-		if len(trimmed) > 200 {
-			trimmed = trimmed[:200]
+		if runes := []rune(trimmed); len(runes) > 200 {
+			trimmed = string(runes[:200])
 		}
 		return trimmed, text
 	}
