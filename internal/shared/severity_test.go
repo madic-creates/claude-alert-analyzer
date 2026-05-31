@@ -70,3 +70,27 @@ func TestSeverityString(t *testing.T) {
 		})
 	}
 }
+
+// TestParseSeverity verifies that parseSeverity is the exact inverse of
+// Severity.String() for every defined Severity value and that an unrecognised
+// string falls back to SeverityUnknown.
+func TestParseSeverity(t *testing.T) {
+	cases := []struct {
+		in   string
+		want Severity
+	}{
+		{"critical", SeverityCritical},
+		{"warning", SeverityWarning},
+		{"info", SeverityInfo},
+		{"unknown", SeverityUnknown},
+		{"", SeverityUnknown},
+		{"CRITICAL", SeverityUnknown}, // case-sensitive: unrecognised → Unknown
+	}
+	for _, c := range cases {
+		t.Run(c.in, func(t *testing.T) {
+			if got := parseSeverity(c.in); got != c.want {
+				t.Errorf("parseSeverity(%q) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+}
