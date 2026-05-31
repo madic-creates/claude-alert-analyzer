@@ -82,7 +82,7 @@ Storm-robustness optional: `GROUP_COOLDOWN_SECONDS` (default 0 = disabled),
 Alert-history optional (default disabled): `HISTORY_ENABLED` (default `false`),
 `HISTORY_DB_PATH` (default `/var/lib/analyzer/history.db`), `HISTORY_TTL`
 (default `6h`, recurrence window + prune horizon), `HISTORY_MAX_ENTRIES`
-(default `5`), `HISTORY_INJECT_PRIOR` (default `true`, Phase-B prior-summary
+(default `5`), `HISTORY_INJECT_PRIOR` (default `true`, prior-summary
 injection). Requires a writable volume at `HISTORY_DB_PATH` (PVC). Single
 replica only (SQLite single-writer). See
 `docs/superpowers/specs/2026-05-30-alert-history-cross-alert-context-design.md`.
