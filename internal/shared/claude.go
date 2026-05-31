@@ -89,10 +89,12 @@ func (c *ClaudeClient) Analyze(ctx context.Context, severity Severity,
 		model = c.Model
 	}
 
+	apiStart := time.Now()
 	msg, err := c.sdk.Messages.New(ctx, anthropic.MessageNewParams{
 		Model: anthropic.Model(model), MaxTokens: 2048, System: systemBlocks(systemPrompt),
 		Messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(userPrompt))},
 	})
+	c.metrics.ObserveClaudeAPIDuration(time.Since(apiStart))
 	if err != nil {
 		return "", err
 	}
@@ -175,10 +177,12 @@ func (c *ClaudeClient) RunToolLoop(ctx context.Context, severity Severity,
 	for round := range maxRounds {
 		slog.Info("tool loop round", "round", round+1, "maxRounds", maxRounds)
 
+		apiStart := time.Now()
 		msg, err := c.sdk.Messages.New(ctx, anthropic.MessageNewParams{
 			Model: anthropic.Model(model), MaxTokens: 4096, System: systemBlocks(systemPrompt),
 			Tools: toolsWithCachedTail(tools), Messages: messages,
 		})
+		c.metrics.ObserveClaudeAPIDuration(time.Since(apiStart))
 		if err != nil {
 			return "", round + 1, false, fmt.Errorf("round %d: %w", round+1, err)
 		}
