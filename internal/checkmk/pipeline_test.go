@@ -1623,6 +1623,100 @@ func TestProcessAlert_RecordsAnalysisAfterSuccess(t *testing.T) {
 	}
 }
 
+// TestProcessAlert_RecordsAndStripsSummary verifies that when the analysis ends
+// with a SUMMARY: line, the stored history summary is the SUMMARY text (not the
+// whole analysis) and the published body has the SUMMARY: line stripped while
+// retaining the analysis content.
+func TestProcessAlert_RecordsAndStripsSummary(t *testing.T) {
+	const summaryText = "disk filled by log rotation failure"
+	const analysis = "## Root cause\nThe disk filled because logrotate failed.\nSUMMARY: " + summaryText
+	pub := &mockPublisher{}
+	history := &fakeHistoryStore{}
+	deps := PipelineDeps{
+		Analyzer:   &mockAnalyzer{result: analysis},
+		Publishers: []shared.Publisher{pub},
+		Cooldown:   shared.NewCooldownManager(),
+		Metrics:    shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)),
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 0},
+		SSHEnabled: false,
+		GatherContext: func(_ context.Context, _ shared.AlertPayload, _ *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		ValidateHost: func(_ context.Context, _, _ string) (*HostInfo, error) {
+			return &HostInfo{}, nil
+		},
+		History: history,
+	}
+
+	ProcessAlert(context.Background(), deps, shared.AlertPayload{
+		Fingerprint:   "fp-strip",
+		Title:         "host1 - Disk Usage",
+		Severity:      "warning",
+		SeverityLevel: shared.SeverityWarning,
+		Fields:        map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+	})
+
+	if history.analyses != 1 {
+		t.Fatalf("RecordAnalysis called %d times, want 1", history.analyses)
+	}
+	if history.lastSum != summaryText {
+		t.Errorf("stored summary = %q, want %q", history.lastSum, summaryText)
+	}
+	bodies := pub.published()
+	if len(bodies) != 1 {
+		t.Fatalf("published %d bodies, want 1", len(bodies))
+	}
+	if strings.Contains(bodies[0], "SUMMARY:") {
+		t.Errorf("published body still contains SUMMARY: line: %q", bodies[0])
+	}
+	if !strings.Contains(bodies[0], "The disk filled because logrotate failed.") {
+		t.Errorf("published body missing analysis content: %q", bodies[0])
+	}
+}
+
+// TestProcessAlert_EmptySummaryNotRecorded verifies that when ParseSummary
+// yields an empty summary (e.g. a headings-only analysis with no usable line),
+// no prior-analysis row is recorded and the body is published unchanged.
+func TestProcessAlert_EmptySummaryNotRecorded(t *testing.T) {
+	const analysis = "## Root cause\n## Only headings here"
+	pub := &mockPublisher{}
+	history := &fakeHistoryStore{}
+	deps := PipelineDeps{
+		Analyzer:   &mockAnalyzer{result: analysis},
+		Publishers: []shared.Publisher{pub},
+		Cooldown:   shared.NewCooldownManager(),
+		Metrics:    shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)),
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 0},
+		SSHEnabled: false,
+		GatherContext: func(_ context.Context, _ shared.AlertPayload, _ *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		ValidateHost: func(_ context.Context, _, _ string) (*HostInfo, error) {
+			return &HostInfo{}, nil
+		},
+		History: history,
+	}
+
+	ProcessAlert(context.Background(), deps, shared.AlertPayload{
+		Fingerprint:   "fp-empty-sum",
+		Title:         "host1 - Disk Usage",
+		Severity:      "warning",
+		SeverityLevel: shared.SeverityWarning,
+		Fields:        map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+	})
+
+	if history.analyses != 0 {
+		t.Errorf("RecordAnalysis called %d times, want 0 (empty summary)", history.analyses)
+	}
+	bodies := pub.published()
+	if len(bodies) != 1 {
+		t.Fatalf("published %d bodies, want 1", len(bodies))
+	}
+	if bodies[0] != analysis {
+		t.Errorf("published body = %q, want unchanged %q", bodies[0], analysis)
+	}
+}
+
 // TestProcessAlert_AnalyzerPanicOpensBreaker verifies that when the static
 // analyzer panics, the deferred panic-recovery in ProcessAlert correctly sets
 // analysisErr and calls permit.Done(analysisErr), causing the circuit breaker
