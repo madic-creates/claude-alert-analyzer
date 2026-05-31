@@ -68,6 +68,21 @@ func newTestStore(t *testing.T) *sqliteHistoryStore {
 	return s
 }
 
+// flush blocks until all writes enqueued before it have been processed.
+// If the store is already stopping, it returns promptly.
+func (s *sqliteHistoryStore) flush() {
+	done := make(chan struct{})
+	select {
+	case s.ch <- writeOp{done: done}:
+	case <-s.stop:
+		return
+	}
+	select {
+	case <-done:
+	case <-s.stop:
+	}
+}
+
 func TestHistoryFireRoundTrip(t *testing.T) {
 	s := newTestStore(t)
 	for i := 0; i < 3; i++ {

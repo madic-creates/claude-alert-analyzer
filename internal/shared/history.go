@@ -201,21 +201,6 @@ func (s *sqliteHistoryStore) enqueue(op writeOp) {
 	}
 }
 
-// flush blocks until all writes enqueued before it have been processed.
-// Test-only helper. If the store is already stopping, it returns promptly.
-func (s *sqliteHistoryStore) flush() {
-	done := make(chan struct{})
-	select {
-	case s.ch <- writeOp{done: done}:
-	case <-s.stop:
-		return
-	}
-	select {
-	case <-done:
-	case <-s.stop:
-	}
-}
-
 func (s *sqliteHistoryStore) writeLoop() {
 	defer close(s.stopped)
 	for {
@@ -267,9 +252,6 @@ func (s *sqliteHistoryStore) handle(op writeOp) {
 	if s.writesSincePrune >= s.pruneInterval {
 		s.prune()
 		s.writesSincePrune = 0
-	}
-	if op.done != nil {
-		close(op.done)
 	}
 }
 
