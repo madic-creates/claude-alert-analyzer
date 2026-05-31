@@ -28,6 +28,10 @@ func TestAlertMetrics_NilSafe(t *testing.T) {
 	m.SetStormMode(true)
 	m.SetBreakerState(1)
 	m.RecordNtfyPublishError()
+	m.RecordHistoryEvent("fire")
+	m.RecordHistoryDrop()
+	m.RecordHistoryError("record")
+	m.ObserveRecurrence(3)
 	if c := m.AggregatorDropsCounter("storm"); c != nil {
 		t.Errorf("AggregatorDropsCounter on nil receiver should return nil, got %v", c)
 	}
@@ -35,6 +39,10 @@ func TestAlertMetrics_NilSafe(t *testing.T) {
 	m2 := NewAlertMetrics(nil)
 	m2.RecordEnqueued()
 	m2.RecordDropped(DropReasonQueueFull)
+	m2.RecordHistoryEvent("analysis")
+	m2.RecordHistoryDrop()
+	m2.RecordHistoryError("lookup")
+	m2.ObserveRecurrence(2)
 	if c := m2.AggregatorDropsCounter("breaker"); c != nil {
 		t.Errorf("AggregatorDropsCounter with nil Prom should return nil, got %v", c)
 	}
@@ -148,5 +156,33 @@ func TestAlertMetrics_Delegation(t *testing.T) {
 	dropc.Inc()
 	if got := testutil.ToFloat64(prom.NotifyAggregatorDrops.WithLabelValues("storm")); got != 1 {
 		t.Errorf("NotifyAggregatorDrops[storm] = %v, want 1", got)
+	}
+
+	// Alert history counters and histogram.
+	m.RecordHistoryEvent("fire")
+	if got := testutil.ToFloat64(prom.HistoryEvents.WithLabelValues("fire")); got != 1 {
+		t.Errorf("HistoryEvents[fire] = %v, want 1", got)
+	}
+
+	m.RecordHistoryDrop()
+	if got := testutil.ToFloat64(prom.HistoryDrops); got != 1 {
+		t.Errorf("HistoryDrops = %v, want 1", got)
+	}
+
+	m.RecordHistoryError("record")
+	if got := testutil.ToFloat64(prom.HistoryErrors.WithLabelValues("record")); got != 1 {
+		t.Errorf("HistoryErrors[record] = %v, want 1", got)
+	}
+
+	m.ObserveRecurrence(5)
+	var recMetric dto.Metric
+	if err := prom.HistoryRecurrence.Write(&recMetric); err != nil {
+		t.Fatalf("HistoryRecurrence.Write: %v", err)
+	}
+	if recMetric.Histogram.GetSampleCount() != 1 {
+		t.Errorf("HistoryRecurrence sample count = %d, want 1", recMetric.Histogram.GetSampleCount())
+	}
+	if recMetric.Histogram.GetSampleSum() != 5 {
+		t.Errorf("HistoryRecurrence sample sum = %v, want 5", recMetric.Histogram.GetSampleSum())
 	}
 }
