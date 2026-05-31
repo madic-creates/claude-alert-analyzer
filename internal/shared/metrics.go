@@ -80,13 +80,6 @@ func (m *AlertMetrics) SetQueueDepth(depth float64) {
 
 // Claude API
 
-func (m *AlertMetrics) ObserveClaudeAPIDuration(d time.Duration) {
-	if m == nil || m.Prom == nil {
-		return
-	}
-	m.Prom.ClaudeAPIDuration.Observe(d.Seconds())
-}
-
 func (m *AlertMetrics) RecordClaudeAPIError() {
 	if m == nil || m.Prom == nil {
 		return
