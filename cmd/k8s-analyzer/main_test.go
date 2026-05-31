@@ -203,6 +203,38 @@ func TestMain_FailsWhenPromTimeoutInvalid(t *testing.T) {
 	}
 }
 
+// TestMain_FailsWhenCooldownSecondsInvalid verifies that the binary exits and
+// logs an error mentioning COOLDOWN_SECONDS when the value is outside the valid
+// range [0, 86400]. COOLDOWN_SECONDS is the very first env var parsed in
+// loadConfig(), so no other env vars are required to reach this error.
+func TestMain_FailsWhenCooldownSecondsInvalid(t *testing.T) {
+	exit, out := runMainWithEnv(t, map[string]string{
+		"COOLDOWN_SECONDS": "99999", // exceeds max 86400
+	})
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid COOLDOWN_SECONDS; output=%s", out)
+	}
+	if !strings.Contains(out, "COOLDOWN_SECONDS") {
+		t.Errorf("expected 'COOLDOWN_SECONDS' in output, got: %s", out)
+	}
+}
+
+// TestMain_FailsWhenMaxLogBytesInvalid verifies that the binary exits and logs
+// an error mentioning MAX_LOG_BYTES when the value is outside the valid range
+// [256, 1048576]. MAX_LOG_BYTES is parsed before WEBHOOK_SECRET in loadConfig(),
+// so no other env vars are required to reach this error.
+func TestMain_FailsWhenMaxLogBytesInvalid(t *testing.T) {
+	exit, out := runMainWithEnv(t, map[string]string{
+		"MAX_LOG_BYTES": "100", // below min 256
+	})
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid MAX_LOG_BYTES; output=%s", out)
+	}
+	if !strings.Contains(out, "MAX_LOG_BYTES") {
+		t.Errorf("expected 'MAX_LOG_BYTES' in output, got: %s", out)
+	}
+}
+
 // TestMain_FailsWhenSkipResolvedInvalid verifies that the binary exits and logs
 // an error mentioning SKIP_RESOLVED when the env var is not a valid boolean.
 // SKIP_RESOLVED is validated in loadConfig() before the auth check, so only

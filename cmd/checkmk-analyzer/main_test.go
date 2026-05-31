@@ -70,6 +70,22 @@ func TestMain_FailsWhenNeitherAuthVarSet(t *testing.T) {
 	}
 }
 
+// TestMain_FailsWhenCooldownSecondsInvalid verifies that the binary exits and
+// logs an error mentioning COOLDOWN_SECONDS when the value is outside the valid
+// range [0, 86400]. COOLDOWN_SECONDS is the very first env var parsed in
+// loadConfig(), so no other env vars are required to reach this error.
+func TestMain_FailsWhenCooldownSecondsInvalid(t *testing.T) {
+	exit, out := runMainWithEnv(t, map[string]string{
+		"COOLDOWN_SECONDS": "99999", // exceeds max 86400
+	})
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid COOLDOWN_SECONDS; output=%s", out)
+	}
+	if !strings.Contains(out, "COOLDOWN_SECONDS") {
+		t.Errorf("expected 'COOLDOWN_SECONDS' in output, got: %s", out)
+	}
+}
+
 // TestMain_FailsWhenWebhookSecretMissing verifies that the binary exits with
 // code 1 and logs an error mentioning WEBHOOK_SECRET when the env var is not
 // set. WEBHOOK_SECRET is the bearer-token gate for all incoming CheckMK
