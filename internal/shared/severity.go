@@ -42,6 +42,21 @@ func SeverityFromAlertmanager(labels map[string]string) Severity {
 	}
 }
 
+// parseSeverity converts the stored lowercase string back to a Severity.
+// Used when reading rows written by Severity.String().
+func parseSeverity(s string) Severity {
+	switch s {
+	case "critical":
+		return SeverityCritical
+	case "warning":
+		return SeverityWarning
+	case "info":
+		return SeverityInfo
+	default:
+		return SeverityUnknown
+	}
+}
+
 // SeverityFromCheckMK maps CheckMK service/host state strings to a Severity.
 // serviceState takes precedence; hostState is the fallback for host-level
 // notifications where serviceState is empty.

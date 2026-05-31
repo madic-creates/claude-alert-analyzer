@@ -2,6 +2,7 @@ package shared
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -197,6 +198,102 @@ func TestInjectHistoryNilStore(t *testing.T) {
 	out, _ := InjectHistory(context.Background(), nil, "fp", false, actx)
 	if len(out.Sections) != 1 {
 		t.Errorf("nil store must not change sections; got %d", len(out.Sections))
+	}
+}
+
+func TestLookupPriorsRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	s.RecordFire(context.Background(), "fp", SeverityWarning)
+	s.RecordAnalysis(context.Background(), "fp", SeverityWarning, "cpu spike due to batch job")
+	s.flush()
+
+	v := s.Lookup(context.Background(), "fp")
+	if len(v.Prior) != 1 {
+		t.Fatalf("Prior len = %d, want 1", len(v.Prior))
+	}
+	p := v.Prior[0]
+	if p.Summary != "cpu spike due to batch job" {
+		t.Errorf("Summary = %q, want %q", p.Summary, "cpu spike due to batch job")
+	}
+	if p.Severity != SeverityWarning {
+		t.Errorf("Severity = %v, want warning", p.Severity)
+	}
+	if p.At.IsZero() {
+		t.Error("At must be set")
+	}
+}
+
+func TestLookupPriorsMaxEntriesCap(t *testing.T) {
+	s := newTestStore(t)
+	s.maxEntries = 3
+	for i := range 5 {
+		s.RecordAnalysis(context.Background(), "fp", SeverityWarning, fmt.Sprintf("summary-%d", i))
+	}
+	s.flush()
+
+	v := s.Lookup(context.Background(), "fp")
+	if len(v.Prior) != 3 {
+		t.Errorf("Prior len = %d, want 3 (maxEntries cap)", len(v.Prior))
+	}
+}
+
+func TestLookupPriorsNewestFirst(t *testing.T) {
+	s := newTestStore(t)
+	base := int64(1_000_000)
+	s.nowFn = func() int64 { return base }
+	s.RecordAnalysis(context.Background(), "fp", SeverityWarning, "older")
+	s.flush()
+	s.nowFn = func() int64 { return base + 60 }
+	s.RecordAnalysis(context.Background(), "fp", SeverityCritical, "newer")
+	s.flush()
+
+	v := s.Lookup(context.Background(), "fp")
+	if len(v.Prior) != 2 {
+		t.Fatalf("Prior len = %d, want 2", len(v.Prior))
+	}
+	if v.Prior[0].Summary != "newer" {
+		t.Errorf("Prior[0].Summary = %q, want %q (newest first)", v.Prior[0].Summary, "newer")
+	}
+}
+
+func TestLookupPriorsExcludeExpired(t *testing.T) {
+	s := newTestStore(t)
+	base := int64(1_000_000)
+	s.nowFn = func() int64 { return base }
+	s.RecordAnalysis(context.Background(), "fp", SeverityWarning, "old analysis")
+	s.flush()
+	// advance time past TTL (6h)
+	s.nowFn = func() int64 { return base + int64((7 * time.Hour).Seconds()) }
+	s.RecordFire(context.Background(), "fp", SeverityWarning) // triggers pruning on next prune interval
+
+	v := s.Lookup(context.Background(), "fp")
+	if len(v.Prior) != 0 {
+		t.Errorf("Prior len = %d, want 0 (analysis outside TTL)", len(v.Prior))
+	}
+}
+
+func TestHistorySectionWithPrior(t *testing.T) {
+	first := time.Date(2026, 5, 30, 8, 0, 0, 0, time.UTC)
+	last := time.Date(2026, 5, 30, 14, 0, 0, 0, time.UTC)
+	prior := time.Date(2026, 5, 30, 10, 0, 0, 0, time.UTC)
+	view := HistoryView{
+		Count: 3, FirstSeen: first, LastSeen: last, Window: 6 * time.Hour,
+		Prior: []PriorFinding{{At: prior, Summary: "root cause was OOM", Severity: SeverityCritical}},
+	}
+	sec := historySection(view, true)
+	if !strings.Contains(sec.Content, "Prior analyses") {
+		t.Error("injectPrior=true with non-empty Prior must include prior block")
+	}
+	if !strings.Contains(sec.Content, "root cause was OOM") {
+		t.Errorf("prior summary not in content: %q", sec.Content)
+	}
+	if !strings.Contains(sec.Content, "critical") {
+		t.Errorf("prior severity not in content: %q", sec.Content)
+	}
+	// injectPrior=false must suppress even when Prior is non-empty.
+	secNoInject := historySection(view, false)
+	if strings.Contains(secNoInject.Content, "Prior analyses") {
+		t.Error("injectPrior=false must suppress prior block")
 	}
 }
 

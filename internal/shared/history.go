@@ -303,7 +303,36 @@ func (s *sqliteHistoryStore) Lookup(ctx context.Context, fingerprint string) His
 	if maxTs.Valid {
 		view.LastSeen = time.Unix(maxTs.Int64, 0)
 	}
-	// Phase B will additionally query kind='analysis' rows into view.Prior here.
+
+	// Phase B: populate Prior from kind='analysis' rows, newest first.
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT ts, summary, severity FROM alert_events WHERE fingerprint=? AND kind='analysis' AND ts >= ? ORDER BY ts DESC LIMIT ?`,
+		fingerprint, cutoff, s.maxEntries)
+	if err != nil {
+		s.metrics.RecordHistoryError("lookup")
+		slog.Warn("history: prior lookup failed", "error", err)
+		return view
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			ts            int64
+			summary       sql.NullString
+			severityLabel string
+		)
+		if err := rows.Scan(&ts, &summary, &severityLabel); err != nil {
+			slog.Warn("history: scan prior row failed", "error", err)
+			continue
+		}
+		if !summary.Valid || summary.String == "" {
+			continue
+		}
+		view.Prior = append(view.Prior, PriorFinding{
+			At:       time.Unix(ts, 0),
+			Summary:  summary.String,
+			Severity: parseSeverity(severityLabel),
+		})
+	}
 	return view
 }
 
