@@ -152,7 +152,11 @@ func main() {
 		slog.Error("history store init failed", "error", err)
 		os.Exit(1)
 	}
-	defer history.Close()
+	defer func() {
+		if err := history.Close(); err != nil {
+			slog.Error("history: close failed", "error", err)
+		}
+	}()
 	slog.Info("alert history", "enabled", histCfg.Enabled, "dbPath", histCfg.DBPath,
 		"ttl", histCfg.TTL, "maxEntries", histCfg.MaxEntries, "injectPrior", histCfg.InjectPrior)
 	transport := shared.NewLimitedTransport(http.DefaultTransport, prom.ClaudeAPIDuration)

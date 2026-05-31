@@ -199,3 +199,89 @@ func TestInjectHistoryNilStore(t *testing.T) {
 		t.Errorf("nil store must not change sections; got %d", len(out.Sections))
 	}
 }
+
+func TestHumanDuration(t *testing.T) {
+	cases := []struct {
+		d    time.Duration
+		want string
+	}{
+		{6 * time.Hour, "6h"},
+		{time.Hour, "1h"},
+		{90 * time.Minute, "1h30m"},
+		{2*time.Hour + 15*time.Minute, "2h15m"},
+		{30 * time.Minute, "30m"},
+		{1 * time.Minute, "1m"},
+		{45 * time.Second, "1m"}, // rounds up to 1m
+		{29 * time.Second, "0m"}, // rounds down to 0
+	}
+	for _, tc := range cases {
+		got := humanDuration(tc.d)
+		if got != tc.want {
+			t.Errorf("humanDuration(%v) = %q, want %q", tc.d, got, tc.want)
+		}
+	}
+}
+
+func TestLoadHistoryConfigErrors(t *testing.T) {
+	base := map[string]string{
+		"HISTORY_ENABLED":      "",
+		"HISTORY_DB_PATH":      "",
+		"HISTORY_TTL":          "",
+		"HISTORY_MAX_ENTRIES":  "",
+		"HISTORY_INJECT_PRIOR": "",
+	}
+	setAll := func(t *testing.T) {
+		t.Helper()
+		for k, v := range base {
+			t.Setenv(k, v)
+		}
+	}
+
+	t.Run("invalid HISTORY_ENABLED", func(t *testing.T) {
+		setAll(t)
+		t.Setenv("HISTORY_ENABLED", "yes")
+		if _, err := LoadHistoryConfig(); err == nil {
+			t.Error("expected error for invalid HISTORY_ENABLED=yes")
+		}
+	})
+
+	t.Run("invalid HISTORY_TTL format", func(t *testing.T) {
+		setAll(t)
+		t.Setenv("HISTORY_TTL", "not-a-duration")
+		if _, err := LoadHistoryConfig(); err == nil {
+			t.Error("expected error for unparseable HISTORY_TTL")
+		}
+	})
+
+	t.Run("non-positive HISTORY_TTL", func(t *testing.T) {
+		setAll(t)
+		t.Setenv("HISTORY_TTL", "-1h")
+		if _, err := LoadHistoryConfig(); err == nil {
+			t.Error("expected error for negative HISTORY_TTL")
+		}
+	})
+
+	t.Run("HISTORY_MAX_ENTRIES below min", func(t *testing.T) {
+		setAll(t)
+		t.Setenv("HISTORY_MAX_ENTRIES", "0")
+		if _, err := LoadHistoryConfig(); err == nil {
+			t.Error("expected error for HISTORY_MAX_ENTRIES=0 (below min of 1)")
+		}
+	})
+
+	t.Run("HISTORY_MAX_ENTRIES above max", func(t *testing.T) {
+		setAll(t)
+		t.Setenv("HISTORY_MAX_ENTRIES", "101")
+		if _, err := LoadHistoryConfig(); err == nil {
+			t.Error("expected error for HISTORY_MAX_ENTRIES=101 (above max of 100)")
+		}
+	})
+
+	t.Run("invalid HISTORY_INJECT_PRIOR", func(t *testing.T) {
+		setAll(t)
+		t.Setenv("HISTORY_INJECT_PRIOR", "maybe")
+		if _, err := LoadHistoryConfig(); err == nil {
+			t.Error("expected error for invalid HISTORY_INJECT_PRIOR=maybe")
+		}
+	})
+}

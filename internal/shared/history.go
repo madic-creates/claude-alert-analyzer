@@ -35,10 +35,10 @@ type HistoryStore interface {
 
 // HistoryView is the recurrence context for a single fingerprint.
 type HistoryView struct {
-	Count     int           // kind='fire' rows within the window (incl. the current fire)
-	FirstSeen time.Time     // earliest fire in window
-	LastSeen  time.Time     // latest fire in window
-	Window    time.Duration // the configured lookback window (for rendering)
+	Count     int            // kind='fire' rows within the window (incl. the current fire)
+	FirstSeen time.Time      // earliest fire in window
+	LastSeen  time.Time      // latest fire in window
+	Window    time.Duration  // the configured lookback window (for rendering)
 	Prior     []PriorFinding // populated in Phase B; always empty in Phase A
 }
 
@@ -167,7 +167,7 @@ func newSQLiteHistoryStore(cfg HistoryConfig, product Product, metrics *AlertMet
 	}
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(historySchemaDDL); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("history: create schema: %w", err)
 	}
 	s := &sqliteHistoryStore{
