@@ -332,6 +332,10 @@ func (s *sqliteHistoryStore) Lookup(ctx context.Context, fingerprint string) His
 			Severity: parseSeverity(severityLabel),
 		})
 	}
+	if err := rows.Err(); err != nil {
+		s.metrics.RecordHistoryError("lookup")
+		slog.Warn("history: prior rows iteration failed", "error", err)
+	}
 	return view
 }
 
