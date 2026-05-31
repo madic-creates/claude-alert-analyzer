@@ -239,3 +239,19 @@ func TestMain_FailsWhenCheckmkAPITimeoutInvalid(t *testing.T) {
 		t.Errorf("expected 'CHECKMK_API_TIMEOUT' in output, got: %s", out)
 	}
 }
+
+// TestMain_FailsWhenSSHEnabledInvalid verifies that the binary exits and logs
+// an error mentioning SSH_ENABLED when the env var is not a valid boolean.
+// SSH_ENABLED is validated after the auth check in loadConfig(), so the minimum
+// auth env (minEnvWithAuth) must be provided to reach this validation point.
+func TestMain_FailsWhenSSHEnabledInvalid(t *testing.T) {
+	env := minEnvWithAuth()
+	env["SSH_ENABLED"] = "notabool"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid SSH_ENABLED; output=%s", out)
+	}
+	if !strings.Contains(out, "SSH_ENABLED") {
+		t.Errorf("expected 'SSH_ENABLED' in output, got: %s", out)
+	}
+}

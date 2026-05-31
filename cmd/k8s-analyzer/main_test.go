@@ -202,3 +202,21 @@ func TestMain_FailsWhenPromTimeoutInvalid(t *testing.T) {
 		t.Errorf("expected 'PROM_TIMEOUT' in output, got: %s", out)
 	}
 }
+
+// TestMain_FailsWhenSkipResolvedInvalid verifies that the binary exits and logs
+// an error mentioning SKIP_RESOLVED when the env var is not a valid boolean.
+// SKIP_RESOLVED is validated in loadConfig() before the auth check, so only
+// WEBHOOK_SECRET needs to be provided — the binary never reaches
+// rest.InClusterConfig() when this env var is malformed.
+func TestMain_FailsWhenSkipResolvedInvalid(t *testing.T) {
+	exit, out := runMainWithEnv(t, map[string]string{
+		"WEBHOOK_SECRET": "secret",
+		"SKIP_RESOLVED":  "notabool",
+	})
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid SKIP_RESOLVED; output=%s", out)
+	}
+	if !strings.Contains(out, "SKIP_RESOLVED") {
+		t.Errorf("expected 'SKIP_RESOLVED' in output, got: %s", out)
+	}
+}
