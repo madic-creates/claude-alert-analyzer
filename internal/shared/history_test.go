@@ -2,6 +2,8 @@ package shared
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -552,6 +554,67 @@ func TestLookupAfterCloseRecordsErrorMetric(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+
+	s.Lookup(context.Background(), "fp")
+
+	if got := testutil.ToFloat64(prom.HistoryErrors.WithLabelValues("lookup")); got < 1 {
+		t.Errorf("HistoryErrors[lookup] = %v, want >= 1", got)
+	}
+}
+
+// TestLookupPriorQueryContextErrorReturnsPartialView verifies that when the
+// prior-analysis QueryContext fails, Lookup returns a partial HistoryView
+// (containing the fire counts from the first query) and records the
+// HistoryErrors["lookup"] metric. Covers the QueryContext error branch added
+// in Cycle 93 that was previously unreachable from tests.
+func TestLookupPriorQueryContextErrorReturnsPartialView(t *testing.T) {
+	prom := NewPrometheusMetricsForTest(ProductK8s)
+	s := newTestStore(t)
+	s.metrics = NewAlertMetrics(prom)
+
+	// Two fires so the fire-count query (QueryRowContext) succeeds with count=2,
+	// then fail only the prior-analysis query (QueryContext).
+	s.RecordFire(context.Background(), "fp", SeverityWarning)
+	s.RecordFire(context.Background(), "fp", SeverityWarning)
+	s.flush()
+
+	wantErr := errors.New("injected prior-query error")
+	old := testHookLookupPriorQueryFn
+	testHookLookupPriorQueryFn = func(_ context.Context, _ string, _ ...any) (*sql.Rows, error) {
+		return nil, wantErr
+	}
+	defer func() { testHookLookupPriorQueryFn = old }()
+
+	view := s.Lookup(context.Background(), "fp")
+
+	// The partial view must carry the fire count from the first query.
+	if view.Count != 2 {
+		t.Errorf("Count = %d, want 2 (partial view on prior-query error)", view.Count)
+	}
+	if len(view.Prior) != 0 {
+		t.Errorf("Prior len = %d, want 0 on prior-query error", len(view.Prior))
+	}
+	if got := testutil.ToFloat64(prom.HistoryErrors.WithLabelValues("lookup")); got < 1 {
+		t.Errorf("HistoryErrors[lookup] = %v, want >= 1", got)
+	}
+}
+
+// TestLookupRowsErrRecordsMetric verifies that a rows.Err() error after the
+// prior-analysis rows.Next() loop records HistoryErrors["lookup"] and logs a
+// warning. Covers the rows.Err() guard added in Cycle 104 that was previously
+// unreachable from tests (SQLite reads all rows into memory, so rows.Err()
+// never returns an error in normal operation; the hook simulates the condition
+// that other SQL drivers can trigger).
+func TestLookupRowsErrRecordsMetric(t *testing.T) {
+	prom := NewPrometheusMetricsForTest(ProductK8s)
+	s := newTestStore(t)
+	s.metrics = NewAlertMetrics(prom)
+
+	old := testHookLookupRowsErrFn
+	testHookLookupRowsErrFn = func() error {
+		return errors.New("injected rows.Err()")
+	}
+	defer func() { testHookLookupRowsErrFn = old }()
 
 	s.Lookup(context.Background(), "fp")
 

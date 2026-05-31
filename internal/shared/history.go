@@ -89,6 +89,14 @@ func LoadHistoryConfig() (HistoryConfig, error) {
 	}, nil
 }
 
+// testHookLookupPriorQueryFn, if non-nil, replaces s.db.QueryContext in the
+// Lookup prior-analysis sub-query. Nil in production.
+var testHookLookupPriorQueryFn func(context.Context, string, ...any) (*sql.Rows, error)
+
+// testHookLookupRowsErrFn, if non-nil, is called after the prior-analysis
+// rows.Next() loop instead of rows.Err(). Nil in production.
+var testHookLookupRowsErrFn func() error
+
 // nopHistoryStore is used when HISTORY_ENABLED=false. Never touches disk.
 type nopHistoryStore struct{}
 
@@ -286,7 +294,11 @@ func (s *sqliteHistoryStore) Lookup(ctx context.Context, fingerprint string) His
 	}
 
 	// Populate Prior from kind='analysis' rows, newest first.
-	rows, err := s.db.QueryContext(ctx,
+	priorQuery := s.db.QueryContext
+	if testHookLookupPriorQueryFn != nil {
+		priorQuery = testHookLookupPriorQueryFn
+	}
+	rows, err := priorQuery(ctx,
 		`SELECT ts, summary, severity FROM alert_events WHERE fingerprint=? AND kind='analysis' AND ts >= ? ORDER BY ts DESC LIMIT ?`,
 		fingerprint, cutoff, s.maxEntries)
 	if err != nil {
@@ -314,7 +326,11 @@ func (s *sqliteHistoryStore) Lookup(ctx context.Context, fingerprint string) His
 			Severity: parseSeverity(severityLabel),
 		})
 	}
-	if err := rows.Err(); err != nil {
+	rowsErrFn := (*sql.Rows).Err
+	if testHookLookupRowsErrFn != nil {
+		rowsErrFn = func(_ *sql.Rows) error { return testHookLookupRowsErrFn() }
+	}
+	if err := rowsErrFn(rows); err != nil {
 		s.metrics.RecordHistoryError("lookup")
 		slog.Warn("history: prior rows iteration failed", "error", err)
 	}
