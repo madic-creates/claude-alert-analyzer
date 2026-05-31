@@ -208,6 +208,22 @@ func TestMain_FailsWhenCircuitBreakerNotifyIntervalInvalid(t *testing.T) {
 	}
 }
 
+// TestMain_FailsWhenHistoryTTLInvalid verifies that the binary exits and logs
+// an error mentioning HISTORY_TTL when the env var is not a valid Go duration
+// string. LoadHistoryConfig is called in main() after loadConfig() so the
+// minimum valid startup env (with auth) must be provided.
+func TestMain_FailsWhenHistoryTTLInvalid(t *testing.T) {
+	env := minEnvWithAuth()
+	env["HISTORY_TTL"] = "notaduration"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid HISTORY_TTL; output=%s", out)
+	}
+	if !strings.Contains(out, "HISTORY_TTL") {
+		t.Errorf("expected 'HISTORY_TTL' in output, got: %s", out)
+	}
+}
+
 // TestMain_FailsWhenCheckmkAPITimeoutInvalid verifies that the binary exits
 // and logs an error mentioning CHECKMK_API_TIMEOUT when the env var is not a
 // valid Go duration string. Mirrors TestMain_FailsWhenKubeAPITimeoutInvalid in
