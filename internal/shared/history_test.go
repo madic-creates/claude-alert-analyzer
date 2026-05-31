@@ -536,3 +536,55 @@ func TestLookupAfterCloseRecordsErrorMetric(t *testing.T) {
 		t.Errorf("HistoryErrors[lookup] = %v, want >= 1", got)
 	}
 }
+
+// TestHandleWriteSuccessRecordsEventMetric verifies that handle() increments
+// HistoryEvents["fire"] and HistoryEvents["analysis"] when INSERTs succeed.
+// Calling handle() directly bypasses the write channel so the test is
+// synchronous; the writeLoop goroutine has nothing queued and is idle.
+func TestHandleWriteSuccessRecordsEventMetric(t *testing.T) {
+	prom := NewPrometheusMetricsForTest(ProductK8s)
+	s := newTestStore(t)
+	s.metrics = NewAlertMetrics(prom)
+	now := time.Now().Unix()
+
+	s.handle(writeOp{kind: "fire", fingerprint: "fp", ts: now, severity: "warning"})
+	s.handle(writeOp{kind: "analysis", fingerprint: "fp", ts: now, severity: "warning", summary: "root cause"})
+
+	if got := testutil.ToFloat64(prom.HistoryEvents.WithLabelValues("fire")); got != 1 {
+		t.Errorf("HistoryEvents[fire] = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(prom.HistoryEvents.WithLabelValues("analysis")); got != 1 {
+		t.Errorf("HistoryEvents[analysis] = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(prom.HistoryErrors.WithLabelValues("record")); got != 0 {
+		t.Errorf("HistoryErrors[record] = %v, want 0 on success", got)
+	}
+}
+
+// TestHandleWriteFailureRecordsErrorMetric verifies that handle() increments
+// HistoryErrors["record"] when the INSERT fails (closed DB) and does NOT
+// increment HistoryEvents. Covers the error branch in handle() (lines 260-262)
+// which was previously unreachable from any test.
+func TestHandleWriteFailureRecordsErrorMetric(t *testing.T) {
+	prom := NewPrometheusMetricsForTest(ProductK8s)
+	s := newTestStore(t)
+	s.metrics = NewAlertMetrics(prom)
+
+	// Close only the underlying DB connection — the writeLoop is still running
+	// but has nothing queued, so there is no concurrent access to s.db here.
+	// t.Cleanup (via newTestStore) will call s.Close() which drains the channel
+	// and signals the writeLoop to exit; that path is safe because no ops are
+	// pending.
+	if err := s.db.Close(); err != nil {
+		t.Fatalf("db.Close: %v", err)
+	}
+
+	s.handle(writeOp{kind: "fire", fingerprint: "fp", ts: time.Now().Unix(), severity: "warning"})
+
+	if got := testutil.ToFloat64(prom.HistoryErrors.WithLabelValues("record")); got < 1 {
+		t.Errorf("HistoryErrors[record] = %v, want >= 1", got)
+	}
+	if got := testutil.ToFloat64(prom.HistoryEvents.WithLabelValues("fire")); got != 0 {
+		t.Errorf("HistoryEvents[fire] = %v, want 0 on write failure", got)
+	}
+}
