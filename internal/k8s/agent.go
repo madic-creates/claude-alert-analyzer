@@ -292,7 +292,10 @@ Output your final analysis in markdown (headings, bold, lists, code blocks — n
 4. Correlations between alerts/services if applicable
 
 Reference actual values from command outputs and metric results. Keep response under 500 words.
-Start directly with the analysis — no preamble, meta-commentary, or introductory sentences.`
+Start directly with the analysis — no preamble, meta-commentary, or introductory sentences.
+
+End your response with a single line in exactly this form:
+SUMMARY: <one concise sentence naming the single most likely root cause>`
 
 func agentSystemPromptForRounds(maxRounds int) string {
 	return fmt.Sprintf(agentSystemPromptTemplate, maxRounds)
@@ -316,7 +319,10 @@ Output your analysis in markdown (headings, bold, lists, code blocks — no tabl
 4. Correlations between alerts/services if applicable
 
 Reference actual values from the provided context. Keep response under 500 words.
-Start directly with the analysis — no preamble, meta-commentary, or introductory sentences.`
+Start directly with the analysis — no preamble, meta-commentary, or introductory sentences.
+
+End your response with a single line in exactly this form:
+SUMMARY: <one concise sentence naming the single most likely root cause>`
 
 // KubectlRunner is the seam between the agent loop and the actual kubectl
 // subprocess. The default implementation (kubectlSubprocess) shells out;

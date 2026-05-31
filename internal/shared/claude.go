@@ -239,7 +239,7 @@ func (c *ClaudeClient) RunToolLoop(ctx context.Context, severity Severity,
 	// Max rounds reached — append summary text to the last (user) message
 	// to preserve role alternation, then issue the tool-less summary call.
 	slog.Info("tool loop max rounds reached, requesting summary", "maxRounds", maxRounds)
-	const summaryPrompt = "You have reached the maximum number of diagnostic rounds. Do NOT call any more tools. Provide your final analysis now based on all information gathered so far. Start directly with the analysis — no preamble or meta-commentary."
+	const summaryPrompt = "You have reached the maximum number of diagnostic rounds. Do NOT call any more tools. Provide your final analysis now based on all information gathered so far. Start directly with the analysis — no preamble or meta-commentary. End your response with a single line in exactly this form: SUMMARY: <one concise sentence naming the single most likely root cause>"
 	appendTextToLastUserMessage(messages, summaryPrompt)
 	analysis, err := c.runForcedSummary(ctx, model, systemPrompt, tools, messages,
 		&totalInput, &totalOutput, &totalCacheCreation, &totalCacheRead)

@@ -40,7 +40,10 @@ Output your final analysis in markdown (headings, bold, lists, code blocks — n
 4. Correlations between services if applicable
 
 Reference actual values from command outputs. Keep response under 500 words.
-Start directly with the analysis — no preamble, meta-commentary, or introductory sentences like "I have enough data" or "Let me analyze this".`
+Start directly with the analysis — no preamble, meta-commentary, or introductory sentences like "I have enough data" or "Let me analyze this".
+
+End your response with a single line in exactly this form:
+SUMMARY: <one concise sentence naming the single most likely root cause>`
 
 // agentSystemPromptForRounds returns the agent system prompt with the actual
 // maxRounds value substituted so Claude's self-reported budget always matches
@@ -68,7 +71,10 @@ Output your analysis in markdown (headings, bold, lists, code blocks — no tabl
 4. Correlations between services if applicable
 
 Reference actual values from the provided context. Keep response under 500 words.
-Start directly with the analysis — no preamble, meta-commentary, or introductory sentences.`
+Start directly with the analysis — no preamble, meta-commentary, or introductory sentences.
+
+End your response with a single line in exactly this form:
+SUMMARY: <one concise sentence naming the single most likely root cause>`
 
 var sshTool = anthropic.ToolUnionParam{
 	OfTool: &anthropic.ToolParam{
