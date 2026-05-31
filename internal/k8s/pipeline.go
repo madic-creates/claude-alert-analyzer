@@ -242,5 +242,8 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	}
 
 	deps.Metrics.RecordProcessed(alert.SeverityLevel)
+	if deps.History != nil {
+		deps.History.RecordAnalysis(ctx, alert.Fingerprint, alert.SeverityLevel, analysis)
+	}
 	slog.Info("analysis complete", "alertname", alertname)
 }

@@ -1520,13 +1520,20 @@ func TestVerstaerkerBug_OpenBreakerKeepsCooldown_NoSecondAnalysis(t *testing.T) 
 // returns a pre-configured HistoryView on every Lookup, letting tests verify
 // the InjectHistory integration path without a real SQLite database.
 type fakeHistoryStore struct {
-	view shared.HistoryView
+	view     shared.HistoryView
+	analyses int
+	lastSev  shared.Severity
+	lastSum  string
 }
 
-func (f *fakeHistoryStore) RecordFire(_ context.Context, _ string, _ shared.Severity)               {}
-func (f *fakeHistoryStore) RecordAnalysis(_ context.Context, _ string, _ shared.Severity, _ string) {}
-func (f *fakeHistoryStore) Lookup(_ context.Context, _ string) shared.HistoryView                   { return f.view }
-func (f *fakeHistoryStore) Close() error                                                            { return nil }
+func (f *fakeHistoryStore) RecordFire(_ context.Context, _ string, _ shared.Severity) {}
+func (f *fakeHistoryStore) RecordAnalysis(_ context.Context, _ string, sev shared.Severity, sum string) {
+	f.analyses++
+	f.lastSev = sev
+	f.lastSum = sum
+}
+func (f *fakeHistoryStore) Lookup(_ context.Context, _ string) shared.HistoryView { return f.view }
+func (f *fakeHistoryStore) Close() error                                          { return nil }
 
 // TestProcessAlert_InjectsRecurrenceHistoryIntoPrompt verifies that when the
 // HistoryStore reports count > 1 for an alert fingerprint, InjectHistory
@@ -1572,6 +1579,47 @@ func TestProcessAlert_InjectsRecurrenceHistoryIntoPrompt(t *testing.T) {
 	}
 	if !strings.Contains(analyzer.capturedUserPrompt, "6h") {
 		t.Errorf("window not in prompt; got:\n%s", analyzer.capturedUserPrompt)
+	}
+}
+
+// TestProcessAlert_RecordsAnalysisAfterSuccess verifies that ProcessAlert calls
+// RecordAnalysis on the history store after a successful analysis and publish.
+func TestProcessAlert_RecordsAnalysisAfterSuccess(t *testing.T) {
+	const wantSummary = "analysis result"
+	analyzer := &mockAnalyzer{result: wantSummary}
+	history := &fakeHistoryStore{}
+	deps := PipelineDeps{
+		Analyzer:   analyzer,
+		Publishers: []shared.Publisher{&mockPublisher{}},
+		Cooldown:   shared.NewCooldownManager(),
+		Metrics:    shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)),
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 0},
+		SSHEnabled: false,
+		GatherContext: func(_ context.Context, _ shared.AlertPayload, _ *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		ValidateHost: func(_ context.Context, _, _ string) (*HostInfo, error) {
+			return &HostInfo{}, nil
+		},
+		History: history,
+	}
+
+	ProcessAlert(context.Background(), deps, shared.AlertPayload{
+		Fingerprint:   "fp-record",
+		Title:         "host1 - High CPU",
+		Severity:      "warning",
+		SeverityLevel: shared.SeverityWarning,
+		Fields:        map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+	})
+
+	if history.analyses != 1 {
+		t.Errorf("RecordAnalysis called %d times, want 1", history.analyses)
+	}
+	if history.lastSev != shared.SeverityWarning {
+		t.Errorf("RecordAnalysis severity = %v, want warning", history.lastSev)
+	}
+	if history.lastSum != wantSummary {
+		t.Errorf("RecordAnalysis summary = %q, want %q", history.lastSum, wantSummary)
 	}
 }
 
