@@ -1538,7 +1538,7 @@ func (f *fakeHistoryStore) Close() error                                        
 // TestProcessAlert_InjectsRecurrenceHistoryIntoPrompt verifies that when the
 // HistoryStore reports count > 1 for an alert fingerprint, InjectHistory
 // prepends the "Alert Recurrence" section to the user prompt sent to Claude.
-// This is the pipeline-level integration test for the history Phase-A feature:
+// This is the pipeline-level integration test for the history recurrence feature:
 // the unit tests in history_test.go cover InjectHistory in isolation, but this
 // test confirms the wiring inside ProcessAlert passes the section through to
 // the actual Claude invocation.

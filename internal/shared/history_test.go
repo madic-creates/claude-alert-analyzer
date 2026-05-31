@@ -163,7 +163,7 @@ func TestHistorySection(t *testing.T) {
 		t.Errorf("Content missing window: %q", sec.Content)
 	}
 	if strings.Contains(sec.Content, "Prior analyses") {
-		t.Error("Phase A: no prior block expected with empty view.Prior")
+		t.Error("no prior block expected with empty view.Prior")
 	}
 }
 

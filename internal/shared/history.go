@@ -24,7 +24,6 @@ type HistoryStore interface {
 	RecordFire(ctx context.Context, fingerprint string, sev Severity)
 	// RecordAnalysis records a completed analysis summary for a fingerprint.
 	// Called from the worker after a successful analysis. Non-blocking.
-	// (Wired in Phase B; present now so the interface is stable.)
 	RecordAnalysis(ctx context.Context, fingerprint string, sev Severity, summary string)
 	// Lookup returns recurrence info for a fingerprint over the configured
 	// window. Synchronous read; returns a zero HistoryView on error.
@@ -39,10 +38,10 @@ type HistoryView struct {
 	FirstSeen time.Time      // earliest fire in window
 	LastSeen  time.Time      // latest fire in window
 	Window    time.Duration  // the configured lookback window (for rendering)
-	Prior     []PriorFinding // populated in Phase B; always empty in Phase A
+	Prior     []PriorFinding // recent analysis summaries, newest first; empty if none recorded
 }
 
-// PriorFinding is a stored analysis summary (Phase B).
+// PriorFinding is a stored analysis summary.
 type PriorFinding struct {
 	At       time.Time
 	Summary  string
@@ -304,7 +303,7 @@ func (s *sqliteHistoryStore) Lookup(ctx context.Context, fingerprint string) His
 		view.LastSeen = time.Unix(maxTs.Int64, 0)
 	}
 
-	// Phase B: populate Prior from kind='analysis' rows, newest first.
+	// Populate Prior from kind='analysis' rows, newest first.
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT ts, summary, severity FROM alert_events WHERE fingerprint=? AND kind='analysis' AND ts >= ? ORDER BY ts DESC LIMIT ?`,
 		fingerprint, cutoff, s.maxEntries)
@@ -351,8 +350,8 @@ func (s *sqliteHistoryStore) Close() error {
 // actx. Returns the (possibly modified) context and the HistoryView from the
 // single Lookup so callers can use the view (e.g. to record a metric) without
 // a second round-trip. Best-effort: a nil/disabled/empty store yields a zero
-// HistoryView and no context change. injectPrior controls the Phase-B
-// prior-analyses sub-block (no effect in Phase A, where view.Prior is always empty).
+// HistoryView and no context change. injectPrior controls the prior-analyses
+// sub-block (it has no effect when view.Prior is empty).
 func InjectHistory(ctx context.Context, store HistoryStore, fingerprint string, injectPrior bool, actx AnalysisContext) (AnalysisContext, HistoryView) {
 	if store == nil {
 		return actx, HistoryView{}

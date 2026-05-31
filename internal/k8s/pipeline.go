@@ -55,7 +55,7 @@ type PipelineDeps struct {
 	// production a non-nil store is wired in main; access here is nil-safe so
 	// existing tests that omit it keep working.
 	History shared.HistoryStore
-	// HistoryInjectPrior gates the Phase-B prior-analyses sub-block.
+	// HistoryInjectPrior gates the prior-analyses sub-block.
 	HistoryInjectPrior bool
 }
 
