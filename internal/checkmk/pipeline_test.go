@@ -1516,6 +1516,65 @@ func TestVerstaerkerBug_OpenBreakerKeepsCooldown_NoSecondAnalysis(t *testing.T) 
 	}
 }
 
+// fakeHistoryStore implements shared.HistoryStore for pipeline tests. It
+// returns a pre-configured HistoryView on every Lookup, letting tests verify
+// the InjectHistory integration path without a real SQLite database.
+type fakeHistoryStore struct {
+	view shared.HistoryView
+}
+
+func (f *fakeHistoryStore) RecordFire(_ context.Context, _ string, _ shared.Severity)               {}
+func (f *fakeHistoryStore) RecordAnalysis(_ context.Context, _ string, _ shared.Severity, _ string) {}
+func (f *fakeHistoryStore) Lookup(_ context.Context, _ string) shared.HistoryView                   { return f.view }
+func (f *fakeHistoryStore) Close() error                                                            { return nil }
+
+// TestProcessAlert_InjectsRecurrenceHistoryIntoPrompt verifies that when the
+// HistoryStore reports count > 1 for an alert fingerprint, InjectHistory
+// prepends the "Alert Recurrence" section to the user prompt sent to Claude.
+// This is the pipeline-level integration test for the history Phase-A feature:
+// the unit tests in history_test.go cover InjectHistory in isolation, but this
+// test confirms the wiring inside ProcessAlert passes the section through to
+// the actual Claude invocation.
+func TestProcessAlert_InjectsRecurrenceHistoryIntoPrompt(t *testing.T) {
+	analyzer := &mockAnalyzer{result: "analysis"}
+	history := &fakeHistoryStore{
+		view: shared.HistoryView{Count: 3, Window: 6 * time.Hour},
+	}
+	deps := PipelineDeps{
+		Analyzer:   analyzer,
+		Publishers: []shared.Publisher{&mockPublisher{}},
+		Cooldown:   shared.NewCooldownManager(),
+		Metrics:    shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)),
+		Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 0},
+		SSHEnabled: false,
+		GatherContext: func(_ context.Context, _ shared.AlertPayload, _ *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		ValidateHost: func(_ context.Context, _, _ string) (*HostInfo, error) {
+			return &HostInfo{}, nil
+		},
+		History:            history,
+		HistoryInjectPrior: false,
+	}
+
+	ProcessAlert(context.Background(), deps, shared.AlertPayload{
+		Fingerprint: "fp-recurring",
+		Title:       "host1 - High CPU",
+		Severity:    "warning",
+		Fields:      map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+	})
+
+	if !strings.Contains(analyzer.capturedUserPrompt, "Alert Recurrence") {
+		t.Errorf("recurrence section not injected into prompt; got:\n%s", analyzer.capturedUserPrompt)
+	}
+	if !strings.Contains(analyzer.capturedUserPrompt, "fired 3 times") {
+		t.Errorf("fire count not in prompt; got:\n%s", analyzer.capturedUserPrompt)
+	}
+	if !strings.Contains(analyzer.capturedUserPrompt, "6h") {
+		t.Errorf("window not in prompt; got:\n%s", analyzer.capturedUserPrompt)
+	}
+}
+
 // TestProcessAlert_AnalyzerPanicOpensBreaker verifies that when the static
 // analyzer panics, the deferred panic-recovery in ProcessAlert correctly sets
 // analysisErr and calls permit.Done(analysisErr), causing the circuit breaker
