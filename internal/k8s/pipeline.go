@@ -135,11 +135,10 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 
 	// === Pre-API phase ===
 	actx := deps.GatherContext(ctx, alert)
-	actx = shared.InjectHistory(ctx, deps.History, alert.Fingerprint, deps.HistoryInjectPrior, actx)
-	if deps.History != nil {
-		if v := deps.History.Lookup(ctx, alert.Fingerprint); v.Count > 1 {
-			deps.Metrics.ObserveRecurrence(v.Count)
-		}
+	var historyView shared.HistoryView
+	actx, historyView = shared.InjectHistory(ctx, deps.History, alert.Fingerprint, deps.HistoryInjectPrior, actx)
+	if historyView.Count > 1 {
+		deps.Metrics.ObserveRecurrence(historyView.Count)
 	}
 	userPrompt := fmt.Sprintf("## Alert: %s\n- Status: %s\n- Severity: %s\n- Namespace: %s\n- StartsAt: %s\n\n%s",
 		alertname,

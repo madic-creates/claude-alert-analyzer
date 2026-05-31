@@ -319,19 +319,21 @@ func (s *sqliteHistoryStore) Close() error {
 
 // InjectHistory looks up recurrence context for the alert and, if it has fired
 // more than once within the window, prepends an "Alert Recurrence" section to
-// actx. Best-effort: a nil/disabled/empty store yields Count==0 and no change.
-// injectPrior controls the Phase-B prior-analyses sub-block (no effect in
-// Phase A, where view.Prior is always empty).
-func InjectHistory(ctx context.Context, store HistoryStore, fingerprint string, injectPrior bool, actx AnalysisContext) AnalysisContext {
+// actx. Returns the (possibly modified) context and the HistoryView from the
+// single Lookup so callers can use the view (e.g. to record a metric) without
+// a second round-trip. Best-effort: a nil/disabled/empty store yields a zero
+// HistoryView and no context change. injectPrior controls the Phase-B
+// prior-analyses sub-block (no effect in Phase A, where view.Prior is always empty).
+func InjectHistory(ctx context.Context, store HistoryStore, fingerprint string, injectPrior bool, actx AnalysisContext) (AnalysisContext, HistoryView) {
 	if store == nil {
-		return actx
+		return actx, HistoryView{}
 	}
 	view := store.Lookup(ctx, fingerprint)
 	if view.Count <= 1 {
-		return actx
+		return actx, view
 	}
 	actx.Sections = append([]ContextSection{historySection(view, injectPrior)}, actx.Sections...)
-	return actx
+	return actx, view
 }
 
 func historySection(view HistoryView, injectPrior bool) ContextSection {

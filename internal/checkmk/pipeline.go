@@ -143,11 +143,10 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	}
 
 	actx := deps.GatherContext(ctx, alert, hostInfo)
-	actx = shared.InjectHistory(ctx, deps.History, alert.Fingerprint, deps.HistoryInjectPrior, actx)
-	if deps.History != nil {
-		if v := deps.History.Lookup(ctx, alert.Fingerprint); v.Count > 1 {
-			deps.Metrics.ObserveRecurrence(v.Count)
-		}
+	var historyView shared.HistoryView
+	actx, historyView = shared.InjectHistory(ctx, deps.History, alert.Fingerprint, deps.HistoryInjectPrior, actx)
+	if historyView.Count > 1 {
+		deps.Metrics.ObserveRecurrence(historyView.Count)
 	}
 	alertContext := actx.FormatForPrompt()
 

@@ -171,7 +171,7 @@ func TestInjectHistoryFirstFireNoSection(t *testing.T) {
 	s.RecordFire(context.Background(), "fp", SeverityWarning)
 	s.flush()
 	actx := AnalysisContext{Sections: []ContextSection{{Name: "Existing", Content: "x"}}}
-	out := InjectHistory(context.Background(), s, "fp", false, actx)
+	out, _ := InjectHistory(context.Background(), s, "fp", false, actx)
 	if len(out.Sections) != 1 || out.Sections[0].Name != "Existing" {
 		t.Errorf("Count==1 must not inject a section; got %d sections", len(out.Sections))
 	}
@@ -183,7 +183,7 @@ func TestInjectHistoryRecurrencePrepended(t *testing.T) {
 	s.RecordFire(context.Background(), "fp", SeverityWarning)
 	s.flush()
 	actx := AnalysisContext{Sections: []ContextSection{{Name: "Existing", Content: "x"}}}
-	out := InjectHistory(context.Background(), s, "fp", false, actx)
+	out, _ := InjectHistory(context.Background(), s, "fp", false, actx)
 	if len(out.Sections) != 2 {
 		t.Fatalf("want 2 sections, got %d", len(out.Sections))
 	}
@@ -194,7 +194,7 @@ func TestInjectHistoryRecurrencePrepended(t *testing.T) {
 
 func TestInjectHistoryNilStore(t *testing.T) {
 	actx := AnalysisContext{Sections: []ContextSection{{Name: "Existing", Content: "x"}}}
-	out := InjectHistory(context.Background(), nil, "fp", false, actx)
+	out, _ := InjectHistory(context.Background(), nil, "fp", false, actx)
 	if len(out.Sections) != 1 {
 		t.Errorf("nil store must not change sections; got %d", len(out.Sections))
 	}
