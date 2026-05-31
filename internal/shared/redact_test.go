@@ -712,6 +712,95 @@ func TestRedactSecrets_JSONCompoundKeyValue(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_JSONCamelCaseKeyValue verifies that camelCase JSON key names
+// commonly used in JavaScript/TypeScript APIs and OAuth2 client libraries are
+// redacted. The JSON key-value pattern uses _? (optional underscore) so that
+// accessToken, apiKey, clientSecret, etc. are matched in addition to their
+// snake_case counterparts. The (?i) flag means PascalCase variants work too.
+func TestRedactSecrets_JSONCamelCaseKeyValue(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+		key   string // key name that must be preserved in output
+	}{
+		{
+			name:  "accessToken OAuth response",
+			input: `{"accessToken": "ya29.A0ARrdaM-FAKETOKEN"}`,
+			leak:  "ya29.A0ARrdaM-FAKETOKEN",
+			key:   "accessToken",
+		},
+		{
+			name:  "refreshToken in token response",
+			input: `{"refreshToken": "1//0g-FAKEREFRESHTOKEN", "expiresIn": 3600}`,
+			leak:  "1//0g-FAKEREFRESHTOKEN",
+			key:   "refreshToken",
+		},
+		{
+			name:  "apiKey in error log",
+			input: `{"error": "invalid_key", "apiKey": "sk-proj-FAKEAPIKEY"}`,
+			leak:  "sk-proj-FAKEAPIKEY",
+			key:   "apiKey",
+		},
+		{
+			name:  "clientSecret in OAuth client config",
+			input: `{"clientId": "my-app", "clientSecret": "FAKECLIENTSECRET123"}`,
+			leak:  "FAKECLIENTSECRET123",
+			key:   "clientSecret",
+		},
+		{
+			name:  "privateKey in service account JSON",
+			input: `{"privateKey": "-----BEGIN RSA PRIVATE KEY-----\nFAKEDATA\n-----END RSA PRIVATE KEY-----"}`,
+			leak:  "FAKEDATA",
+			key:   "privateKey",
+		},
+		{
+			name:  "authToken in service response",
+			input: `{"authToken": "tok_FAKEAUTHTOKEN"}`,
+			leak:  "tok_FAKEAUTHTOKEN",
+			key:   "authToken",
+		},
+		{
+			name:  "secretKey in AWS SDK error",
+			input: `{"secretKey": "wJalrXUtnFEMI/K7MDENG/FAKE"}`,
+			leak:  "wJalrXUtnFEMI/K7MDENG/FAKE",
+			key:   "secretKey",
+		},
+		{
+			name:  "accessKey in cloud provider error",
+			input: `{"accessKey": "AKIAIOSFODNN7EXAMPLE"}`,
+			leak:  "AKIAIOSFODNN7EXAMPLE",
+			key:   "accessKey",
+		},
+		{
+			name:  "apiSecret compact JSON",
+			input: `{"apiSecret":"FAKEAPISECRET1234567890"}`,
+			leak:  "FAKEAPISECRET1234567890",
+			key:   "apiSecret",
+		},
+		{
+			name:  "PascalCase AccessToken",
+			input: `{"AccessToken": "PascalFakeToken123"}`,
+			leak:  "PascalFakeToken123",
+			key:   "AccessToken",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("camelCase JSON key %q: secret leaked:\n  input:  %s\n  output: %s", tc.key, tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("camelCase JSON key %q: expected [REDACTED] marker in output, got: %s", tc.key, result)
+			}
+			if !strings.Contains(result, `"`+tc.key+`"`) {
+				t.Errorf("camelCase JSON key %q: key name not preserved in output: %s", tc.key, result)
+			}
+		})
+	}
+}
+
 // TestRedactSecrets_JSONCompoundKeyNoFalsePositive verifies that common
 // non-sensitive JSON keys whose names contain sensitive substrings (e.g.
 // "cache_key_count", "token_expiry") are NOT redacted.

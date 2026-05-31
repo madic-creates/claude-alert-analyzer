@@ -49,8 +49,12 @@ var sensitivePatterns = []sensitivePattern{
 	// extension the generic keyword=value pattern below cannot catch them because
 	// the closing double-quote after the key name is not whitespace and therefore
 	// does not satisfy the \s*[=:] separator check.
+	// The underscore in each compound name is optional (_?) so that camelCase
+	// variants (accessToken, apiKey, clientSecret, etc.) are also redacted.
+	// Combined with the (?i) flag this covers snake_case, SCREAMING_SNAKE_CASE,
+	// camelCase, and PascalCase variants of every compound key name.
 	{
-		re:          regexp.MustCompile(`(?i)"(access_token|refresh_token|id_token|api_key|secret_key|private_key|signing_key|auth_token|access_key|client_secret|api_secret|password|passwd|secret|token|key|authorization|bearer)"(\s*:\s*)"[^"]*"`),
+		re:          regexp.MustCompile(`(?i)"(access_?token|refresh_?token|id_?token|api_?key|secret_?key|private_?key|signing_?key|auth_?token|access_?key|client_?secret|api_?secret|password|passwd|secret|token|key|authorization|bearer)"(\s*:\s*)"[^"]*"`),
 		replacement: `"${1}"${2}"[REDACTED]"`,
 	},
 	// Keyword=value pairs: require the keyword not to be immediately preceded by
