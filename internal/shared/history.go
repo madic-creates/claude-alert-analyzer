@@ -352,6 +352,46 @@ func historySection(view HistoryView, injectPrior bool) ContextSection {
 	return ContextSection{Name: "Alert Recurrence", Content: b.String()}
 }
 
+// ParseSummary extracts a one-line summary from a Claude analysis response for
+// storage in the history DB. It returns the extracted summary and a body
+// suitable for ntfy publication (SUMMARY: line removed).
+//
+// Search order: find the LAST line matching "SUMMARY: …" (case-sensitive).
+// If found: summary = the text after "SUMMARY: ", body = text with that line
+// stripped. If absent: fall back to the first non-empty, non-Markdown-heading
+// line, truncated to 200 chars; body = original text unchanged. If no usable
+// line exists summary is "" and the caller should skip RecordAnalysis (better
+// no history entry than a misleading heading stored as a hypothesis).
+func ParseSummary(text string) (summary, body string) {
+	const prefix = "SUMMARY:"
+	lines := strings.Split(text, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(trimmed, prefix) {
+			rest := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+			if rest == "" {
+				continue
+			}
+			kept := make([]string, 0, len(lines)-1)
+			kept = append(kept, lines[:i]...)
+			kept = append(kept, lines[i+1:]...)
+			return rest, strings.TrimRight(strings.Join(kept, "\n"), "\n")
+		}
+	}
+	// Fallback: first non-empty, non-heading, non-SUMMARY line.
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, prefix) {
+			continue
+		}
+		if len(trimmed) > 200 {
+			trimmed = trimmed[:200]
+		}
+		return trimmed, text
+	}
+	return "", text
+}
+
 // humanDuration renders a duration as a compact "6h" / "90m" / "1h30m" string.
 func humanDuration(d time.Duration) string {
 	d = d.Round(time.Minute)

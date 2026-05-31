@@ -218,6 +218,8 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	// === Post-API phase ===
 	phase = phasePostAPI
 
+	summary, body := shared.ParseSummary(analysis)
+
 	title := fmt.Sprintf("Analysis: %s", alertname)
 	if namespace != "" {
 		title = fmt.Sprintf("Analysis: %s (%s)", alertname, namespace)
@@ -232,7 +234,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 
 	if stormMode && deps.StormNotify != nil {
 		deps.StormNotify.Add(alertname)
-	} else if pubErr := shared.PublishAll(ctx, deps.Publishers, title, priority, analysis); pubErr != nil {
+	} else if pubErr := shared.PublishAll(ctx, deps.Publishers, title, priority, body); pubErr != nil {
 		slog.Error("failed to publish analysis", "alertname", alertname, "error", pubErr)
 		deps.Metrics.RecordNtfyPublishError()
 		// Phase is already phasePostAPI — defer keeps cooldowns. RecordFailed
@@ -242,8 +244,8 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	}
 
 	deps.Metrics.RecordProcessed(alert.SeverityLevel)
-	if deps.History != nil {
-		deps.History.RecordAnalysis(ctx, alert.Fingerprint, alert.SeverityLevel, analysis)
+	if deps.History != nil && summary != "" {
+		deps.History.RecordAnalysis(ctx, alert.Fingerprint, alert.SeverityLevel, shared.RedactSecrets(summary))
 	}
 	slog.Info("analysis complete", "alertname", alertname)
 }

@@ -285,3 +285,72 @@ func TestLoadHistoryConfigErrors(t *testing.T) {
 		}
 	})
 }
+
+func TestParseSummary(t *testing.T) {
+	cases := []struct {
+		name        string
+		input       string
+		wantSummary string
+		wantBody    string
+	}{
+		{
+			name:        "SUMMARY line on last line",
+			input:       "Some analysis text.\n\nSUMMARY: root cause is X",
+			wantSummary: "root cause is X",
+			wantBody:    "Some analysis text.",
+		},
+		{
+			name:        "SUMMARY line in middle last wins",
+			input:       "SUMMARY: first\nmore text\nSUMMARY: last wins",
+			wantSummary: "last wins",
+			wantBody:    "SUMMARY: first\nmore text",
+		},
+		{
+			name:        "SUMMARY with extra spaces",
+			input:       "text\nSUMMARY:   spaced out   ",
+			wantSummary: "spaced out",
+			wantBody:    "text",
+		},
+		{
+			name:        "no SUMMARY fallback to first non-heading line",
+			input:       "## Heading\n\nThis is the first real line.",
+			wantSummary: "This is the first real line.",
+			wantBody:    "## Heading\n\nThis is the first real line.",
+		},
+		{
+			name:        "no SUMMARY fallback truncates at 200",
+			input:       strings.Repeat("x", 250),
+			wantSummary: strings.Repeat("x", 200),
+			wantBody:    strings.Repeat("x", 250),
+		},
+		{
+			name:        "only headings returns empty summary",
+			input:       "## Root cause\n### Details",
+			wantSummary: "",
+			wantBody:    "## Root cause\n### Details",
+		},
+		{
+			name:        "empty input returns empty summary",
+			input:       "",
+			wantSummary: "",
+			wantBody:    "",
+		},
+		{
+			name:        "SUMMARY with empty value is skipped falls back to first line",
+			input:       "## heading\nSUMMARY:\nSUMMARY:   \nfallback line",
+			wantSummary: "fallback line",
+			wantBody:    "## heading\nSUMMARY:\nSUMMARY:   \nfallback line",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotSum, gotBody := ParseSummary(tc.input)
+			if gotSum != tc.wantSummary {
+				t.Errorf("summary = %q, want %q", gotSum, tc.wantSummary)
+			}
+			if gotBody != tc.wantBody {
+				t.Errorf("body = %q, want %q", gotBody, tc.wantBody)
+			}
+		})
+	}
+}
