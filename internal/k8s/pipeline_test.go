@@ -1246,3 +1246,62 @@ func TestVerstaerkerBug_OpenBreakerKeepsCooldown_NoSecondAnalysis(t *testing.T) 
 		t.Fatalf("retry: Claude must STILL not have been called; analyzer=%d tool=%d", an.calls, tr.calls)
 	}
 }
+
+// fakeHistoryStore implements shared.HistoryStore for pipeline tests. It
+// returns a pre-configured HistoryView on every Lookup, letting tests verify
+// the InjectHistory integration path without a real SQLite database.
+type fakeHistoryStore struct {
+	view shared.HistoryView
+}
+
+func (f *fakeHistoryStore) RecordFire(_ context.Context, _ string, _ shared.Severity)               {}
+func (f *fakeHistoryStore) RecordAnalysis(_ context.Context, _ string, _ shared.Severity, _ string) {}
+func (f *fakeHistoryStore) Lookup(_ context.Context, _ string) shared.HistoryView                   { return f.view }
+func (f *fakeHistoryStore) Close() error                                                            { return nil }
+
+// TestProcessAlert_InjectsRecurrenceHistoryIntoPrompt verifies that when the
+// HistoryStore reports count > 1 for an alert fingerprint, InjectHistory
+// prepends the "Alert Recurrence" section to the user prompt sent to Claude.
+// This is the pipeline-level integration test for the history Phase-A feature:
+// the unit tests in history_test.go cover InjectHistory in isolation, but this
+// test confirms the wiring inside ProcessAlert passes the section through to
+// the actual Claude invocation.
+func TestProcessAlert_InjectsRecurrenceHistoryIntoPrompt(t *testing.T) {
+	runner := &fakeToolLoopRunner{
+		driver: func(_ func(string, json.RawMessage) (string, error)) (string, error) {
+			return "analysis", nil
+		},
+	}
+	history := &fakeHistoryStore{
+		view: shared.HistoryView{Count: 3, Window: 6 * time.Hour},
+	}
+	deps := PipelineDeps{
+		ToolRunner:         runner,
+		KubectlRunner:      &fakeKubectlRunner{},
+		Prom:               &fakePromQLQuerier{},
+		Publishers:         []shared.Publisher{&mockPublisher{}},
+		Cooldown:           shared.NewCooldownManager(),
+		Metrics:            shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s)),
+		Policy:             &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 1},
+		GatherContext:      func(context.Context, shared.AlertPayload) shared.AnalysisContext { return shared.AnalysisContext{} },
+		History:            history,
+		HistoryInjectPrior: false,
+	}
+
+	ProcessAlert(context.Background(), deps, shared.AlertPayload{
+		Fingerprint: "fp-recurring",
+		Title:       "HighCPU",
+		Severity:    "warning",
+		Fields:      map[string]string{},
+	})
+
+	if !strings.Contains(runner.captured, "Alert Recurrence") {
+		t.Errorf("recurrence section not injected into prompt; got:\n%s", runner.captured)
+	}
+	if !strings.Contains(runner.captured, "fired 3 times") {
+		t.Errorf("fire count not in prompt; got:\n%s", runner.captured)
+	}
+	if !strings.Contains(runner.captured, "6h") {
+		t.Errorf("window not in prompt; got:\n%s", runner.captured)
+	}
+}
