@@ -537,6 +537,50 @@ func TestLookupAfterCloseRecordsErrorMetric(t *testing.T) {
 	}
 }
 
+// TestPruneFailureRecordsErrorMetric verifies that prune() increments
+// HistoryErrors["prune"] when the DELETE fails (closed DB). Covers the error
+// branch in prune() (lines 279-280) that was previously unreachable from tests.
+// pruneInterval=1 ensures prune() is triggered on the first write attempt.
+func TestPruneFailureRecordsErrorMetric(t *testing.T) {
+	prom := NewPrometheusMetricsForTest(ProductK8s)
+	s := newTestStore(t)
+	s.metrics = NewAlertMetrics(prom)
+	s.pruneInterval = 1 // trigger prune after every write
+
+	// Close only the underlying DB; the writeLoop is idle (no pending ops).
+	// t.Cleanup will call s.Close() which is idempotent via closeOnce.
+	if err := s.db.Close(); err != nil {
+		t.Fatalf("db.Close: %v", err)
+	}
+
+	// INSERT fails (closed DB), writesSincePrune increments to 1 >= pruneInterval,
+	// prune() is called, DELETE also fails → RecordHistoryError("prune").
+	s.handle(writeOp{kind: "fire", fingerprint: "fp", ts: time.Now().Unix(), severity: "warning"})
+
+	if got := testutil.ToFloat64(prom.HistoryErrors.WithLabelValues("prune")); got < 1 {
+		t.Errorf("HistoryErrors[prune] = %v, want >= 1", got)
+	}
+}
+
+// TestLookupSkipsAnalysisWithEmptySummary verifies that analysis rows recorded
+// with an empty summary string are excluded from HistoryView.Prior. The Lookup
+// path has an explicit guard (!summary.Valid || summary.String == "") that
+// silently drops empty analyses; this test makes that guard observable.
+func TestLookupSkipsAnalysisWithEmptySummary(t *testing.T) {
+	s := newTestStore(t)
+	s.RecordAnalysis(context.Background(), "fp", SeverityWarning, "") // empty — must be skipped
+	s.RecordAnalysis(context.Background(), "fp", SeverityWarning, "real summary")
+	s.flush()
+
+	v := s.Lookup(context.Background(), "fp")
+	if len(v.Prior) != 1 {
+		t.Errorf("Prior len = %d, want 1 (empty summary must be skipped)", len(v.Prior))
+	}
+	if v.Prior[0].Summary != "real summary" {
+		t.Errorf("Prior[0].Summary = %q, want %q", v.Prior[0].Summary, "real summary")
+	}
+}
+
 // TestHandleWriteSuccessRecordsEventMetric verifies that handle() increments
 // HistoryEvents["fire"] and HistoryEvents["analysis"] when INSERTs succeed.
 // Calling handle() directly bypasses the write channel so the test is
