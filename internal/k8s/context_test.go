@@ -1214,6 +1214,20 @@ func TestGetMetrics_HPAAlertname(t *testing.T) {
 	}
 }
 
+func TestGetMetrics_JobAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"KubeJobFailed", "KubeCronJobFailed", "JobCompletionTimeout"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "Failed Jobs") {
+			t.Errorf("alert %q: expected Failed Jobs section, got %q", name, result)
+		}
+	}
+}
+
 // TestGetMetrics_ReplicaQueryCoversStatefulSets verifies that the alertname-specific
 // PromQL query for replica/deploy/statefulset alerts includes the StatefulSet
 // unavailability metric. A query limited to kube_deployment_status_replicas_unavailable
