@@ -426,6 +426,26 @@ func getPodStatus(ctx context.Context, clientset kubernetes.Interface, namespace
 					shared.SanitizeAlertField(cs.Name)+":"+shared.SanitizeAlertField(reason))
 			}
 		}
+		// Init container failures are invisible in ContainerStatuses — they only
+		// appear in InitContainerStatuses. A pod stuck in init phase (e.g.
+		// Init:ErrImagePull, Init:OOMKilled) shows phase=Pending and empty
+		// ContainerStatuses, so without this loop the pod line has no reason at all.
+		for _, ics := range p.Status.InitContainerStatuses {
+			if ics.Ready {
+				continue
+			}
+			reason := ""
+			switch {
+			case ics.State.Waiting != nil && ics.State.Waiting.Reason != "":
+				reason = ics.State.Waiting.Reason
+			case ics.State.Terminated != nil && ics.State.Terminated.Reason != "":
+				reason = ics.State.Terminated.Reason
+			}
+			if reason != "" {
+				notReadyReasons = append(notReadyReasons,
+					"init-"+shared.SanitizeAlertField(ics.Name)+":"+shared.SanitizeAlertField(reason))
+			}
+		}
 		line := fmt.Sprintf("%s %s %d/%d restarts=%d",
 			shared.SanitizeAlertField(p.Name), shared.SanitizeAlertField(phase), ready, total, restarts)
 		if len(notReadyReasons) > 0 {

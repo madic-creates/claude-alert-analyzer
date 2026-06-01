@@ -2550,6 +2550,45 @@ func TestGetPodStatus_TerminatedReason(t *testing.T) {
 	}
 }
 
+// TestGetPodStatus_InitContainerReason verifies that failing init containers
+// surface their reason with an "init-" prefix. A pod stuck in init phase shows
+// phase=Pending and empty ContainerStatuses; without the InitContainerStatuses
+// loop the pod line has no reason and Claude cannot distinguish a failing init
+// container from a legitimately pending pod.
+func TestGetPodStatus_InitContainerReason(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	pod := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "init-fail-pod", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			InitContainers: []corev1.Container{{Name: "setup"}},
+			Containers:     []corev1.Container{{Name: "app"}},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			// Regular containers not yet started — ContainerStatuses is empty.
+			InitContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name:  "setup",
+					Ready: false,
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "ErrImagePull"},
+					},
+				},
+			},
+		},
+	}
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.PodList{Items: []corev1.Pod{pod}}, nil
+	})
+
+	result := getPodStatus(context.Background(), cs, "default")
+
+	if !strings.Contains(result, "init-setup:ErrImagePull") {
+		t.Errorf("expected init container reason in pod status output, got: %q", result)
+	}
+}
+
 // TestRunAsync_PanicMessageSanitized verifies that control characters embedded
 // in a panic value are stripped before the panic message is sent on the result
 // channel. A panic from a Prometheus or kube client could carry a crafted string
