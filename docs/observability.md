@@ -47,6 +47,7 @@ metric surface is uniformly addressable.
 | `alert_analyzer_alerts_failed_total` | counter | — | Alerts where analysis or publishing failed |
 | `alert_analyzer_processing_duration_seconds` | histogram | — | End-to-end per-alert processing time |
 | `alert_analyzer_context_gather_duration_seconds` | histogram | — | Time spent in the static context-gather phase (Prometheus + Kubernetes or CheckMK + SSH API calls) before the Claude API is invoked |
+| `alert_analyzer_queue_wait_duration_seconds` | histogram | — | Time an alert spends in the work queue before processing begins |
 | `alert_analyzer_queue_depth` | gauge | — | Current alerts waiting in the work queue |
 
 `outcome` is one of `accepted` (HTTP 2xx), `auth_failed` (401),

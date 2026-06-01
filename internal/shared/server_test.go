@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	dto "github.com/prometheus/client_model/go"
 )
 
 func TestServer_Enqueue(t *testing.T) {
@@ -291,6 +293,58 @@ func (h *warnSubstringCaptureHandler) Handle(_ context.Context, r slog.Record) e
 
 func (h *warnSubstringCaptureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 func (h *warnSubstringCaptureHandler) WithGroup(_ string) slog.Handler      { return h }
+
+func TestServer_Run_ObservesQueueWaitDuration(t *testing.T) {
+	prom := NewPrometheusMetricsForTest(ProductK8s)
+	metrics := NewAlertMetrics(prom)
+	var processed atomic.Int64
+
+	srv := NewServer(ServerConfig{
+		Port:         "0",
+		MetricsPort:  "0",
+		WorkerCount:  1,
+		QueueSize:    5,
+		DrainTimeout: 3 * time.Second,
+	}, metrics, func(ctx context.Context, alert AlertPayload) {
+		processed.Add(1)
+	})
+
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		srv.Run(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	srv.Enqueue(AlertPayload{Fingerprint: "wait-duration-test"})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if processed.Load() == 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatalf("send SIGTERM: %v", err)
+	}
+	select {
+	case <-runDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return within 10 seconds")
+	}
+
+	var m dto.Metric
+	if err := prom.QueueWaitDuration.Write(&m); err != nil {
+		t.Fatalf("QueueWaitDuration.Write: %v", err)
+	}
+	if m.Histogram.GetSampleCount() != 1 {
+		t.Errorf("QueueWaitDuration sample count = %d, want 1", m.Histogram.GetSampleCount())
+	}
+}
 
 func TestServer_Run_GracefulShutdown(t *testing.T) {
 	var processed atomic.Int64

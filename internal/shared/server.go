@@ -29,12 +29,19 @@ type ServerConfig struct {
 	ShutdownTimeout time.Duration
 }
 
+// queuedAlert pairs an alert with the time it was placed on the queue so the
+// worker can observe how long the alert waited before processing began.
+type queuedAlert struct {
+	alert      AlertPayload
+	enqueuedAt time.Time
+}
+
 // Server manages a webhook-driven worker pool with graceful shutdown.
 type Server struct {
 	cfg     ServerConfig
 	metrics *AlertMetrics
 	process func(ctx context.Context, alert AlertPayload)
-	queue   chan AlertPayload
+	queue   chan queuedAlert
 	mu      sync.Mutex // protects stopped and queue close
 	stopped bool
 }
@@ -45,7 +52,7 @@ func NewServer(cfg ServerConfig, metrics *AlertMetrics, process func(ctx context
 		cfg:     cfg,
 		metrics: metrics,
 		process: process,
-		queue:   make(chan AlertPayload, cfg.QueueSize),
+		queue:   make(chan queuedAlert, cfg.QueueSize),
 	}
 }
 
@@ -61,7 +68,7 @@ func (s *Server) Enqueue(alert AlertPayload) bool {
 		return false
 	}
 	select {
-	case s.queue <- alert:
+	case s.queue <- queuedAlert{alert: alert, enqueuedAt: time.Now()}:
 		s.metrics.SetQueueDepth(float64(len(s.queue)))
 		return true
 	default:
@@ -128,9 +135,10 @@ func (s *Server) Run(webhookHandler http.HandlerFunc) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for alert := range s.queue {
+			for qa := range s.queue {
 				s.metrics.SetQueueDepth(float64(len(s.queue)))
-				s.safeProcess(workerCtx, alert)
+				s.metrics.ObserveQueueWaitDuration(time.Since(qa.enqueuedAt))
+				s.safeProcess(workerCtx, qa.alert)
 			}
 		}()
 	}

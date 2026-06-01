@@ -22,6 +22,7 @@ type PrometheusMetrics struct {
 	AlertsFailed          prometheus.Counter
 	ProcessingDuration    prometheus.Histogram
 	ContextGatherDuration prometheus.Histogram
+	QueueWaitDuration     prometheus.Histogram
 	QueueDepth            prometheus.Gauge
 
 	// Claude API
@@ -110,6 +111,13 @@ func NewPrometheusMetrics(product Product) (*PrometheusMetrics, error) {
 		Help:        "Time spent in GatherContext (static prefetch) before the Claude API call.",
 		ConstLabels: constLabels,
 		Buckets:     []float64{0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30},
+	})
+
+	pm.QueueWaitDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:        "alert_analyzer_queue_wait_duration_seconds",
+		Help:        "Time an alert spends in the work queue before processing begins.",
+		ConstLabels: constLabels,
+		Buckets:     []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30},
 	})
 
 	pm.QueueDepth = prometheus.NewGauge(prometheus.GaugeOpts{
@@ -216,7 +224,7 @@ func NewPrometheusMetrics(product Product) (*PrometheusMetrics, error) {
 
 	reg.MustRegister(
 		pm.WebhooksTotal, pm.AlertsEnqueued, pm.AlertsDropped, pm.AlertsResolved,
-		pm.AlertsProcessed, pm.AlertsFailed, pm.ProcessingDuration, pm.ContextGatherDuration, pm.QueueDepth,
+		pm.AlertsProcessed, pm.AlertsFailed, pm.ProcessingDuration, pm.ContextGatherDuration, pm.QueueWaitDuration, pm.QueueDepth,
 		pm.ClaudeAPIDuration, pm.ClaudeAPIErrors, pm.ClaudeTokens,
 		pm.AgentToolCalls, pm.AgentToolDuration, pm.AgentRoundsPerRun, pm.AgentRoundsExhausted,
 		pm.StormModeActive, pm.ClaudeCircuitBreakerState, pm.NotifyAggregatorDrops,
