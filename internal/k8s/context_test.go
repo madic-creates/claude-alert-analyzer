@@ -1242,6 +1242,20 @@ func TestGetMetrics_DaemonSetAlertname(t *testing.T) {
 	}
 }
 
+func TestGetMetrics_QuotaAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"KubeQuotaAlmostFull", "KubeQuotaExceeded", "KubeQuotaFullyUsed"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "Resource Quota Usage") {
+			t.Errorf("alert %q: expected Resource Quota Usage section, got %q", name, result)
+		}
+	}
+}
+
 // TestGetMetrics_ReplicaQueryCoversStatefulSets verifies that the alertname-specific
 // PromQL query for replica/deploy/statefulset alerts includes the StatefulSet
 // unavailability metric. A query limited to kube_deployment_status_replicas_unavailable
