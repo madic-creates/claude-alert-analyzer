@@ -266,6 +266,9 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	case strings.Contains(lower, "waiting") || strings.Contains(lower, "pending"):
 		alertnameSectionName = "\n## Waiting Containers"
 		alertnameQueryStr = `kube_pod_container_status_waiting_reason{reason!="CrashLoopBackOff"}`
+	case strings.Contains(lower, "etcd") || strings.Contains(lower, "scheduler") || strings.Contains(lower, "controllermanager"):
+		alertnameSectionName = "\n## Control Plane Component Health"
+		alertnameQueryStr = `up{job=~"kube-scheduler|kube-controller-manager|kube-apiserver|etcd"} == 0`
 	case strings.Contains(lower, "pod"):
 		alertnameSectionName = "\n## Non-Running Pods"
 		alertnameQueryStr = `kube_pod_status_phase{phase!~"Running|Succeeded"} == 1`

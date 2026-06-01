@@ -1426,6 +1426,20 @@ func TestGetMetrics_WaitingAlertname(t *testing.T) {
 	}
 }
 
+func TestGetMetrics_ControlPlaneAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"EtcdDown", "KubeSchedulerDown", "KubeControllerManagerDown", "EtcdInsufficientMembers"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "Control Plane Component Health") {
+			t.Errorf("alert %q: expected Control Plane Component Health section, got %q", name, result)
+		}
+	}
+}
+
 // TestGetMetrics_PodAlertname verifies that alert names containing "pod" but not
 // matching any earlier branch (e.g. KubePodNotReady) emit the Non-Running Pods
 // section. KubePodCrashLooping is deliberately excluded from the table: it
