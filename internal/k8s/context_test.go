@@ -1329,6 +1329,34 @@ func TestGetMetrics_QuotaAlertname(t *testing.T) {
 	}
 }
 
+func TestGetMetrics_PDBAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"KubePodDisruptionBudgetNotSatisfied", "KubePodDisruptionBudgetAtLimit", "PodDisruptionBudgetAtLimit"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "PodDisruptionBudget Status") {
+			t.Errorf("alert %q: expected PodDisruptionBudget Status section, got %q", name, result)
+		}
+	}
+}
+
+func TestGetMetrics_EndpointAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"KubeEndpointSliceEmpty", "EndpointNotReady", "KubeServiceNoEndpoints"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "Endpoint Status") {
+			t.Errorf("alert %q: expected Endpoint Status section, got %q", name, result)
+		}
+	}
+}
+
 func TestGetMetrics_WaitingAlertname(t *testing.T) {
 	srv := makePromServer(t, []PromResult{})
 	defer srv.Close()

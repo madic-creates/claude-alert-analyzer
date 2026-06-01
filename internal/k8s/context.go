@@ -245,6 +245,12 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	case strings.Contains(lower, "quota"):
 		alertnameSectionName = "\n## Resource Quota Usage"
 		alertnameQueryStr = `kube_resourcequota{type="used"} / ignoring(type) group_left() kube_resourcequota{type="hard"} > 0.8`
+	case strings.Contains(lower, "pdb") || strings.Contains(lower, "disruption"):
+		alertnameSectionName = "\n## PodDisruptionBudget Status"
+		alertnameQueryStr = `kube_poddisruptionbudget_status_pod_disruptions_allowed < 1`
+	case strings.Contains(lower, "endpoint"):
+		alertnameSectionName = "\n## Endpoint Status"
+		alertnameQueryStr = `kube_endpoint_address_not_ready > 0`
 	case strings.Contains(lower, "waiting") || strings.Contains(lower, "pending"):
 		alertnameSectionName = "\n## Waiting Containers"
 		alertnameQueryStr = `kube_pod_container_status_waiting_reason{reason!="CrashLoopBackOff"}`
