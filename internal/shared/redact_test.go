@@ -462,6 +462,58 @@ func TestRedactSecrets_TLSSchemeVariants(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_SMTPAndLDAPURLs verifies that credential-bearing SMTP and
+// LDAP URLs are fully redacted — both the username and the password — rather
+// than receiving partial redaction via the email fallback pattern (which only
+// catches password@host, leaving the username exposed).
+func TestRedactSecrets_SMTPAndLDAPURLs(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    string
+		leakUser string
+		leakPass string
+	}{
+		{
+			name:     "smtp with username and password",
+			input:    "EMAIL_URL=smtp://mailuser:secretpassword@smtp.example.com:587",
+			leakUser: "mailuser",
+			leakPass: "secretpassword",
+		},
+		{
+			name:     "smtps with API key credential",
+			input:    "SMTP_URL=smtps://apikey:SG.abcdefghijklmnop@smtp.sendgrid.net:465",
+			leakUser: "apikey",
+			leakPass: "SG.abcdefghijklmnop",
+		},
+		{
+			name:     "ldap with bind DN username",
+			input:    "LDAP_URL=ldap://cn=admin,dc=example,dc=com:bindpassword@ldap.example.com:389",
+			leakUser: "cn=admin",
+			leakPass: "bindpassword",
+		},
+		{
+			name:     "ldaps with simple bind user",
+			input:    "connecting ldaps://binduser:topsecret@ldap.internal:636 failed",
+			leakUser: "binduser",
+			leakPass: "topsecret",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leakUser) {
+				t.Errorf("username leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if strings.Contains(result, tc.leakPass) {
+				t.Errorf("password leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output: %s", result)
+			}
+		})
+	}
+}
+
 func TestRedactSecrets_EmailAddress(t *testing.T) {
 	cases := []struct {
 		name  string

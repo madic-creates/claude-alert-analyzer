@@ -141,16 +141,24 @@ var sensitivePatterns = []sensitivePattern{
 		re:          regexp.MustCompile(`(?i)(basic|bearer)\s+[A-Za-z0-9+/=._-]{20,}`),
 		replacement: "[REDACTED]",
 	},
-	// DB connection strings must come before the generic email pattern, because
-	// the user:pass@host portion of a URL would otherwise be partially consumed
-	// by the email regex (matching pass@host), leaving the username unredacted.
-	// The username group uses * (zero-or-more) instead of + (one-or-more) so
+	// Credential-bearing connection URLs must come before the generic email
+	// pattern, because the user:pass@host portion would otherwise be partially
+	// consumed by the email regex (matching pass@host), leaving the username
+	// unredacted. The username group uses * (zero-or-more) instead of + so
 	// that password-only URLs (e.g. redis://:secret@host) are also redacted.
-	// Redis commonly uses an empty username with a password-only auth string,
-	// and when the host is an IP address the email-fallback pattern cannot save
-	// the secret because it requires a letter-only TLD.
+	// Redis commonly uses an empty username; when the host is an IP address the
+	// email-fallback cannot help because it requires a letter-only TLD.
+	//
+	// SMTP/SMTPS appear in application logs when email delivery fails (Django,
+	// Rails, Spring Boot). The existing email-fallback catches the password
+	// (matching password@host) but leaves the SMTP username unredacted; this
+	// pattern replaces the entire credential-bearing URL as a unit.
+	// LDAP/LDAPS bind DNs (cn=admin,dc=example,dc=com:password@host) follow the
+	// same scheme://user:pass@host structure and are similarly covered by
+	// replacing the full URL rather than relying on the email pattern to save the
+	// password component.
 	{
-		re:          regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?)://[^:\s/]*:[^@\s]+@\S+`),
+		re:          regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?|smtps?|ldaps?)://[^:\s/]*:[^@\s]+@\S+`),
 		replacement: "[REDACTED]",
 	},
 	// AWS access key IDs: AKIA prefix for long-term IAM user keys and ASIA
