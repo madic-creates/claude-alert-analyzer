@@ -269,6 +269,12 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	case strings.Contains(lower, "etcd") || strings.Contains(lower, "scheduler") || strings.Contains(lower, "controllermanager"):
 		alertnameSectionName = "\n## Control Plane Component Health"
 		alertnameQueryStr = `up{job=~"kube-scheduler|kube-controller-manager|kube-apiserver|etcd"} == 0`
+	case strings.Contains(lower, "certif") || strings.Contains(lower, "expir") || strings.Contains(lower, "x509"):
+		alertnameSectionName = "\n## Certificate Expiry"
+		alertnameQueryStr = `certmanager_certificate_expiration_timestamp_seconds - time() < (30 * 24 * 3600)`
+	case strings.Contains(lower, "ingress"):
+		alertnameSectionName = "\n## Ingress Error Rate"
+		alertnameQueryStr = `sum by (ingress, namespace, service) (rate(nginx_ingress_controller_requests{status=~"[45].."}[5m])) > 0`
 	case strings.Contains(lower, "pod"):
 		alertnameSectionName = "\n## Non-Running Pods"
 		alertnameQueryStr = `kube_pod_status_phase{phase!~"Running|Succeeded"} == 1`

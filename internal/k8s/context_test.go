@@ -1440,6 +1440,34 @@ func TestGetMetrics_ControlPlaneAlertname(t *testing.T) {
 	}
 }
 
+func TestGetMetrics_CertificateAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"CertificateExpiring", "CertmanagerCertificateExpired", "KubeClientCertificateExpiration", "x509ExpiryAlert"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "Certificate Expiry") {
+			t.Errorf("alert %q: expected Certificate Expiry section, got %q", name, result)
+		}
+	}
+}
+
+func TestGetMetrics_IngressAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"NginxIngressControllerDown", "IngressHighErrorRate", "KubeIngressNotMatching"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "Ingress Error Rate") {
+			t.Errorf("alert %q: expected Ingress Error Rate section, got %q", name, result)
+		}
+	}
+}
+
 // TestGetMetrics_PodAlertname verifies that alert names containing "pod" but not
 // matching any earlier branch (e.g. KubePodNotReady) emit the Non-Running Pods
 // section. KubePodCrashLooping is deliberately excluded from the table: it
