@@ -275,6 +275,12 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	case strings.Contains(lower, "ingress"):
 		alertnameSectionName = "\n## Ingress Error Rate"
 		alertnameQueryStr = `sum by (ingress, namespace, service) (rate(nginx_ingress_controller_requests{status=~"[45].."}[5m])) > 0`
+	case strings.Contains(lower, "kubeapi"):
+		alertnameSectionName = "\n## API Server Health"
+		alertnameQueryStr = `up{job="kube-apiserver"} == 0`
+	case strings.Contains(lower, "proxy"):
+		alertnameSectionName = "\n## kube-proxy Health"
+		alertnameQueryStr = `up{job="kube-proxy"} == 0`
 	case strings.Contains(lower, "pod"):
 		alertnameSectionName = "\n## Non-Running Pods"
 		alertnameQueryStr = `kube_pod_status_phase{phase!~"Running|Succeeded"} == 1`

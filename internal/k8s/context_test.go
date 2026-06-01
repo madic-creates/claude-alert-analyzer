@@ -1468,6 +1468,34 @@ func TestGetMetrics_IngressAlertname(t *testing.T) {
 	}
 }
 
+func TestGetMetrics_KubeAPIAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"KubeAPIServerDown", "KubeAPIServerErrors", "KubeAPIErrorBudgetBurn"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "API Server Health") {
+			t.Errorf("alert %q: expected API Server Health section, got %q", name, result)
+		}
+	}
+}
+
+func TestGetMetrics_ProxyAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"KubeProxyDown", "KubeProxyHealthFailed"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "kube-proxy Health") {
+			t.Errorf("alert %q: expected kube-proxy Health section, got %q", name, result)
+		}
+	}
+}
+
 // TestGetMetrics_PodAlertname verifies that alert names containing "pod" but not
 // matching any earlier branch (e.g. KubePodNotReady) emit the Non-Running Pods
 // section. KubePodCrashLooping is deliberately excluded from the table: it
