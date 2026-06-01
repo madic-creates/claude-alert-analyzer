@@ -71,6 +71,13 @@ func (m *AlertMetrics) ObserveProcessingDuration(d time.Duration) {
 	m.Prom.ProcessingDuration.Observe(d.Seconds())
 }
 
+func (m *AlertMetrics) ObserveContextGatherDuration(d time.Duration) {
+	if m == nil || m.Prom == nil {
+		return
+	}
+	m.Prom.ContextGatherDuration.Observe(d.Seconds())
+}
+
 func (m *AlertMetrics) SetQueueDepth(depth float64) {
 	if m == nil || m.Prom == nil {
 		return

@@ -134,7 +134,9 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	slog.Info("processing alert", "alertname", alertname, "namespace", namespace)
 
 	// === Pre-API phase ===
+	gatherStart := time.Now()
 	actx := deps.GatherContext(ctx, alert)
+	deps.Metrics.ObserveContextGatherDuration(time.Since(gatherStart))
 	var historyView shared.HistoryView
 	actx, historyView = shared.InjectHistory(ctx, deps.History, alert.Fingerprint, deps.HistoryInjectPrior, actx)
 	if historyView.Count > 1 {

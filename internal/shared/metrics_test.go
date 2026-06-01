@@ -20,6 +20,7 @@ func TestAlertMetrics_NilSafe(t *testing.T) {
 	m.RecordProcessed(SeverityWarning)
 	m.RecordFailed()
 	m.ObserveProcessingDuration(100 * time.Millisecond)
+	m.ObserveContextGatherDuration(50 * time.Millisecond)
 	m.SetQueueDepth(7)
 	m.RecordClaudeAPIError()
 	m.RecordClaudeUsage(SeverityWarning, "model-x", 1, 2, 3, 4)
@@ -146,6 +147,16 @@ func TestAlertMetrics_Delegation(t *testing.T) {
 	}
 	if durMetric.Histogram.GetSampleCount() != 1 {
 		t.Errorf("ProcessingDuration sample count = %d, want 1", durMetric.Histogram.GetSampleCount())
+	}
+
+	// ContextGatherDuration histogram is observed via delegation.
+	m.ObserveContextGatherDuration(200 * time.Millisecond)
+	var gatherMetric dto.Metric
+	if err := prom.ContextGatherDuration.Write(&gatherMetric); err != nil {
+		t.Fatalf("ContextGatherDuration.Write: %v", err)
+	}
+	if gatherMetric.Histogram.GetSampleCount() != 1 {
+		t.Errorf("ContextGatherDuration sample count = %d, want 1", gatherMetric.Histogram.GetSampleCount())
 	}
 
 	// AggregatorDropsCounter returns the right labeled counter.

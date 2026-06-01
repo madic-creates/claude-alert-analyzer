@@ -14,14 +14,15 @@ type PrometheusMetrics struct {
 	registry *prometheus.Registry
 
 	// Pipeline
-	WebhooksTotal      *prometheus.CounterVec // labels: outcome
-	AlertsEnqueued     prometheus.Counter
-	AlertsDropped      *prometheus.CounterVec // labels: reason
-	AlertsResolved     prometheus.Counter
-	AlertsProcessed    *prometheus.CounterVec // labels: severity
-	AlertsFailed       prometheus.Counter
-	ProcessingDuration prometheus.Histogram
-	QueueDepth         prometheus.Gauge
+	WebhooksTotal         *prometheus.CounterVec // labels: outcome
+	AlertsEnqueued        prometheus.Counter
+	AlertsDropped         *prometheus.CounterVec // labels: reason
+	AlertsResolved        prometheus.Counter
+	AlertsProcessed       *prometheus.CounterVec // labels: severity
+	AlertsFailed          prometheus.Counter
+	ProcessingDuration    prometheus.Histogram
+	ContextGatherDuration prometheus.Histogram
+	QueueDepth            prometheus.Gauge
 
 	// Claude API
 	ClaudeAPIDuration prometheus.Histogram
@@ -102,6 +103,13 @@ func NewPrometheusMetrics(product Product) (*PrometheusMetrics, error) {
 		Help:        "End-to-end per-alert processing time.",
 		ConstLabels: constLabels,
 		Buckets:     []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 45, 60, 90, 120, 300},
+	})
+
+	pm.ContextGatherDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:        "alert_analyzer_context_gather_duration_seconds",
+		Help:        "Time spent in GatherContext (static prefetch) before the Claude API call.",
+		ConstLabels: constLabels,
+		Buckets:     []float64{0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30},
 	})
 
 	pm.QueueDepth = prometheus.NewGauge(prometheus.GaugeOpts{
@@ -208,7 +216,7 @@ func NewPrometheusMetrics(product Product) (*PrometheusMetrics, error) {
 
 	reg.MustRegister(
 		pm.WebhooksTotal, pm.AlertsEnqueued, pm.AlertsDropped, pm.AlertsResolved,
-		pm.AlertsProcessed, pm.AlertsFailed, pm.ProcessingDuration, pm.QueueDepth,
+		pm.AlertsProcessed, pm.AlertsFailed, pm.ProcessingDuration, pm.ContextGatherDuration, pm.QueueDepth,
 		pm.ClaudeAPIDuration, pm.ClaudeAPIErrors, pm.ClaudeTokens,
 		pm.AgentToolCalls, pm.AgentToolDuration, pm.AgentRoundsPerRun, pm.AgentRoundsExhausted,
 		pm.StormModeActive, pm.ClaudeCircuitBreakerState, pm.NotifyAggregatorDrops,
