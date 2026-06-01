@@ -1343,6 +1343,24 @@ func TestGetMetrics_WaitingAlertname(t *testing.T) {
 	}
 }
 
+// TestGetMetrics_PodAlertname verifies that alert names containing "pod" but not
+// matching any earlier branch (e.g. KubePodNotReady) emit the Non-Running Pods
+// section. KubePodCrashLooping is deliberately excluded from the table: it
+// contains "crashloop" and hits the crashloop branch first.
+func TestGetMetrics_PodAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"KubePodNotReady", "HighPodFailureRate", "PodNotScheduled"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "Non-Running Pods") {
+			t.Errorf("alert %q: expected Non-Running Pods section, got %q", name, result)
+		}
+	}
+}
+
 // TestGetMetrics_ReplicaQueryCoversStatefulSets verifies that the alertname-specific
 // PromQL query for replica/deploy/statefulset alerts includes the StatefulSet
 // unavailability metric. A query limited to kube_deployment_status_replicas_unavailable
