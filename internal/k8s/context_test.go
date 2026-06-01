@@ -2589,6 +2589,82 @@ func TestGetPodStatus_InitContainerReason(t *testing.T) {
 	}
 }
 
+// TestGetPodStatus_InitContainerReadySkipped verifies that a ready init
+// container does NOT contribute a reason entry — the ics.Ready continue branch.
+func TestGetPodStatus_InitContainerReadySkipped(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	pod := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "init-ready-pod", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			InitContainers: []corev1.Container{{Name: "setup"}},
+			Containers:     []corev1.Container{{Name: "app"}},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			InitContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name:  "setup",
+					Ready: true,
+				},
+			},
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name:  "app",
+					Ready: true,
+				},
+			},
+		},
+	}
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.PodList{Items: []corev1.Pod{pod}}, nil
+	})
+
+	result := getPodStatus(context.Background(), cs, "default")
+
+	if strings.Contains(result, "init-setup") {
+		t.Errorf("ready init container must not appear in reason list, got: %q", result)
+	}
+	if strings.Contains(result, "[") {
+		t.Errorf("no reason brackets expected when all containers are ready, got: %q", result)
+	}
+}
+
+// TestGetPodStatus_InitContainerTerminatedReason verifies that a terminated
+// init container (e.g. OOMKilled) surfaces its reason with an "init-" prefix.
+func TestGetPodStatus_InitContainerTerminatedReason(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	pod := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "init-oom-pod", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			InitContainers: []corev1.Container{{Name: "setup"}},
+			Containers:     []corev1.Container{{Name: "app"}},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			InitContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name:  "setup",
+					Ready: false,
+					State: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"},
+					},
+				},
+			},
+		},
+	}
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.PodList{Items: []corev1.Pod{pod}}, nil
+	})
+
+	result := getPodStatus(context.Background(), cs, "default")
+
+	if !strings.Contains(result, "init-setup:OOMKilled") {
+		t.Errorf("expected terminated init container reason in pod status output, got: %q", result)
+	}
+}
+
 // TestRunAsync_PanicMessageSanitized verifies that control characters embedded
 // in a panic value are stripped before the panic message is sent on the result
 // channel. A panic from a Prometheus or kube client could carry a crafted string
