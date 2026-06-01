@@ -2478,6 +2478,78 @@ func TestGetPodLogs_APIErrorSanitized(t *testing.T) {
 	}
 }
 
+// TestGetPodStatus_NotReadyReasons verifies that non-ready containers include
+// their waiting/terminated reason in the pod status line so Claude can identify
+// ImagePullBackOff, OOMKilled, etc. without a kubectl describe round-trip.
+func TestGetPodStatus_NotReadyReasons(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	pod := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-xyz", Namespace: "default"},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}, {Name: "sidecar"}}},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name:  "app",
+					Ready: false,
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff"},
+					},
+				},
+				{
+					Name:  "sidecar",
+					Ready: true,
+				},
+			},
+		},
+	}
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.PodList{Items: []corev1.Pod{pod}}, nil
+	})
+
+	result := getPodStatus(context.Background(), cs, "default")
+
+	if !strings.Contains(result, "app:ImagePullBackOff") {
+		t.Errorf("expected waiting reason in pod status output, got: %q", result)
+	}
+	if strings.Contains(result, "sidecar:") {
+		t.Errorf("ready container must not appear in reason list, got: %q", result)
+	}
+}
+
+// TestGetPodStatus_TerminatedReason verifies that a terminated (not waiting)
+// non-ready container also surfaces its reason (e.g. OOMKilled, Error).
+func TestGetPodStatus_TerminatedReason(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	pod := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "oom-pod", Namespace: "default"},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "worker"}}},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name:  "worker",
+					Ready: false,
+					State: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"},
+					},
+				},
+			},
+		},
+	}
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.PodList{Items: []corev1.Pod{pod}}, nil
+	})
+
+	result := getPodStatus(context.Background(), cs, "default")
+
+	if !strings.Contains(result, "worker:OOMKilled") {
+		t.Errorf("expected terminated reason in pod status output, got: %q", result)
+	}
+}
+
 // TestRunAsync_PanicMessageSanitized verifies that control characters embedded
 // in a panic value are stripped before the panic message is sent on the result
 // channel. A panic from a Prometheus or kube client could carry a crafted string

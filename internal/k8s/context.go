@@ -405,14 +405,33 @@ func getPodStatus(ctx context.Context, clientset kubernetes.Interface, namespace
 		restarts := 0
 		ready := 0
 		total := len(p.Spec.Containers)
+		var notReadyReasons []string
 		for _, cs := range p.Status.ContainerStatuses {
 			restarts += int(cs.RestartCount)
 			if cs.Ready {
 				ready++
+				continue
+			}
+			// Collect the reason for each non-ready container so Claude sees
+			// ImagePullBackOff, OOMKilled, etc. without needing a kubectl describe.
+			reason := ""
+			switch {
+			case cs.State.Waiting != nil && cs.State.Waiting.Reason != "":
+				reason = cs.State.Waiting.Reason
+			case cs.State.Terminated != nil && cs.State.Terminated.Reason != "":
+				reason = cs.State.Terminated.Reason
+			}
+			if reason != "" {
+				notReadyReasons = append(notReadyReasons,
+					shared.SanitizeAlertField(cs.Name)+":"+shared.SanitizeAlertField(reason))
 			}
 		}
-		lines = append(lines, fmt.Sprintf("%s %s %d/%d restarts=%d",
-			shared.SanitizeAlertField(p.Name), shared.SanitizeAlertField(phase), ready, total, restarts))
+		line := fmt.Sprintf("%s %s %d/%d restarts=%d",
+			shared.SanitizeAlertField(p.Name), shared.SanitizeAlertField(phase), ready, total, restarts)
+		if len(notReadyReasons) > 0 {
+			line += " [" + strings.Join(notReadyReasons, ",") + "]"
+		}
+		lines = append(lines, line)
 	}
 	if len(lines) == 0 {
 		return "(no pods)"
