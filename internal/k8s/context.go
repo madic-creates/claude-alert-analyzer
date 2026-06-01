@@ -233,6 +233,9 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	case strings.Contains(lower, "replica") || strings.Contains(lower, "deploy") || strings.Contains(lower, "statefulset"):
 		alertnameSectionName = "\n## Unavailable Replicas"
 		alertnameQueryStr = `(kube_deployment_status_replicas_unavailable > 0) or (kube_statefulset_status_replicas_unavailable > 0)`
+	case strings.Contains(lower, "hpa") || strings.Contains(lower, "autoscal"):
+		alertnameSectionName = "\n## HPA Status"
+		alertnameQueryStr = `kube_horizontalpodautoscaler_status_condition{condition="ScalingLimited",status="true"}`
 	}
 
 	// Launch the global firing-alerts query concurrently so it overlaps with
