@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -536,6 +537,33 @@ func TestNewHistoryStoreBadDir(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "create db dir") {
 		t.Errorf("error = %q, want it to mention 'create db dir'", err)
+	}
+}
+
+// TestNewSQLiteHistoryStore_CorruptDBFailsOnSchema verifies that
+// newSQLiteHistoryStore returns a "create schema" error when the DB file exists
+// but is not a valid SQLite database. The SQLite3 magic header must begin with
+// "SQLite format 3\x00"; writing arbitrary bytes causes the driver to return
+// SQLITE_NOTADB (26) on the first Exec, which covers the db.Exec(historySchemaDDL)
+// error branch in newSQLiteHistoryStore (lines 176–179 of history.go).
+func TestNewSQLiteHistoryStore_CorruptDBFailsOnSchema(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "corrupt.db")
+	if err := os.WriteFile(dbPath, []byte("not a sqlite file"), 0o600); err != nil {
+		t.Fatalf("write corrupt file: %v", err)
+	}
+	cfg := HistoryConfig{
+		Enabled:    true,
+		DBPath:     dbPath,
+		TTL:        6 * time.Hour,
+		MaxEntries: 5,
+	}
+	_, err := newSQLiteHistoryStore(cfg, ProductK8s, NewAlertMetrics(nil))
+	if err == nil {
+		t.Fatal("expected error for corrupt DB file, got nil")
+	}
+	if !strings.Contains(err.Error(), "create schema") {
+		t.Errorf("error = %q, want 'create schema' mention", err)
 	}
 }
 
