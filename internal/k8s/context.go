@@ -239,6 +239,9 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	case strings.Contains(lower, "job"):
 		alertnameSectionName = "\n## Failed Jobs"
 		alertnameQueryStr = `kube_job_status_failed > 0`
+	case strings.Contains(lower, "daemonset"):
+		alertnameSectionName = "\n## DaemonSet Status"
+		alertnameQueryStr = `kube_daemonset_status_number_unavailable > 0`
 	}
 
 	// Launch the global firing-alerts query concurrently so it overlaps with

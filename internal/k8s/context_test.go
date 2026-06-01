@@ -1228,6 +1228,20 @@ func TestGetMetrics_JobAlertname(t *testing.T) {
 	}
 }
 
+func TestGetMetrics_DaemonSetAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"KubeDaemonSetNotScheduled", "KubeDaemonSetMisScheduled", "KubeDaemonSetRolloutStuck"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "DaemonSet Status") {
+			t.Errorf("alert %q: expected DaemonSet Status section, got %q", name, result)
+		}
+	}
+}
+
 // TestGetMetrics_ReplicaQueryCoversStatefulSets verifies that the alertname-specific
 // PromQL query for replica/deploy/statefulset alerts includes the StatefulSet
 // unavailability metric. A query limited to kube_deployment_status_replicas_unavailable
