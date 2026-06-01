@@ -1256,6 +1256,20 @@ func TestGetMetrics_QuotaAlertname(t *testing.T) {
 	}
 }
 
+func TestGetMetrics_WaitingAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"KubeContainerWaiting", "KubePodPending", "PodPendingTooLong"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "Waiting Containers") {
+			t.Errorf("alert %q: expected Waiting Containers section, got %q", name, result)
+		}
+	}
+}
+
 // TestGetMetrics_ReplicaQueryCoversStatefulSets verifies that the alertname-specific
 // PromQL query for replica/deploy/statefulset alerts includes the StatefulSet
 // unavailability metric. A query limited to kube_deployment_status_replicas_unavailable

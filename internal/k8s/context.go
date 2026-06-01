@@ -245,6 +245,9 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	case strings.Contains(lower, "quota"):
 		alertnameSectionName = "\n## Resource Quota Usage"
 		alertnameQueryStr = `kube_resourcequota{type="used"} / ignoring(type) group_left() kube_resourcequota{type="hard"} > 0.8`
+	case strings.Contains(lower, "waiting") || strings.Contains(lower, "pending"):
+		alertnameSectionName = "\n## Waiting Containers"
+		alertnameQueryStr = `kube_pod_container_status_waiting_reason{reason!="CrashLoopBackOff"}`
 	}
 
 	// Launch the global firing-alerts query concurrently so it overlaps with
