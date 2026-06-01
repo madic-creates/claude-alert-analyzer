@@ -1224,7 +1224,7 @@ func TestGetMetrics_DiskAlertname(t *testing.T) {
 	defer srv.Close()
 
 	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
-	for _, name := range []string{"DiskFull", "VolumeAlmostFull", "StoragePressure"} {
+	for _, name := range []string{"DiskFull", "VolumeAlmostFull", "StorageAlmostFull"} {
 		alert := makeAlertWithLabels(map[string]string{"alertname": name})
 		result := prom.GetMetrics(context.Background(), alert)
 		if !strings.Contains(result, "PVC Usage") {
@@ -1242,6 +1242,33 @@ func TestGetMetrics_NodeAlertname(t *testing.T) {
 	result := prom.GetMetrics(context.Background(), alert)
 	if !strings.Contains(result, "Node Conditions") {
 		t.Errorf("expected Node Conditions section, got %q", result)
+	}
+}
+
+// TestGetMetrics_PressureAlertname verifies that node pressure alerts
+// (KubeNodeDiskPressure, KubeNodeMemoryPressure, KubeNodePIDPressure) route to
+// the pressure branch before the "disk" or "memory" branches can match. Without
+// the pressure guard, KubeNodeDiskPressure returns PVC usage data and
+// KubeNodeMemoryPressure returns container memory consumers — both wrong for a
+// node-condition alert.
+func TestGetMetrics_PressureAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"KubeNodeDiskPressure", "KubeNodeMemoryPressure", "KubeNodePIDPressure"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "Node Pressure Conditions") {
+			t.Errorf("alert %q: expected Node Pressure Conditions section, got %q", name, result)
+		}
+		// Confirm the wrong branches are not matched.
+		if name == "KubeNodeDiskPressure" && strings.Contains(result, "PVC Usage") {
+			t.Errorf("alert %q: must not match disk/pvc branch, got PVC Usage section", name)
+		}
+		if name == "KubeNodeMemoryPressure" && strings.Contains(result, "Top Memory Consumers") {
+			t.Errorf("alert %q: must not match memory branch, got Top Memory Consumers section", name)
+		}
 	}
 }
 

@@ -218,6 +218,12 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	case strings.Contains(lower, "crashloop"):
 		alertnameSectionName = "\n## CrashLoop Details"
 		alertnameQueryStr = `kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"}`
+	case strings.Contains(lower, "pressure"):
+		// Must precede memory/disk branches: KubeNodeDiskPressure contains "disk"
+		// and KubeNodeMemoryPressure contains "memory", so without this guard those
+		// alerts incorrectly route to PVC usage or container memory consumers.
+		alertnameSectionName = "\n## Node Pressure Conditions"
+		alertnameQueryStr = `kube_node_status_condition{condition=~"DiskPressure|MemoryPressure|PIDPressure",status="true"}`
 	case strings.Contains(lower, "memory") || strings.Contains(lower, "oom"):
 		alertnameSectionName = "\n## Top Memory Consumers"
 		alertnameQueryStr = `topk(5, sum(container_memory_working_set_bytes) by (namespace, pod))`
