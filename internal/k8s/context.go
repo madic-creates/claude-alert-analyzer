@@ -251,6 +251,12 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	case strings.Contains(lower, "endpoint"):
 		alertnameSectionName = "\n## Endpoint Status"
 		alertnameQueryStr = `kube_endpoint_address_not_ready > 0`
+	case strings.Contains(lower, "restart"):
+		alertnameSectionName = "\n## Container Restart Counts"
+		alertnameQueryStr = `kube_pod_container_status_restarts_total > 0`
+	case strings.Contains(lower, "namespace"):
+		alertnameSectionName = "\n## Namespace Status"
+		alertnameQueryStr = `kube_namespace_status_phase{phase="Terminating"} == 1`
 	case strings.Contains(lower, "waiting") || strings.Contains(lower, "pending"):
 		alertnameSectionName = "\n## Waiting Containers"
 		alertnameQueryStr = `kube_pod_container_status_waiting_reason{reason!="CrashLoopBackOff"}`

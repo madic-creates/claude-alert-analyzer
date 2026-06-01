@@ -1357,6 +1357,34 @@ func TestGetMetrics_EndpointAlertname(t *testing.T) {
 	}
 }
 
+func TestGetMetrics_RestartAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"KubeContainerHighRestartRate", "PodRestartingTooOften", "FrequentRestarts"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "Container Restart Counts") {
+			t.Errorf("alert %q: expected Container Restart Counts section, got %q", name, result)
+		}
+	}
+}
+
+func TestGetMetrics_NamespaceAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"KubeNamespaceStatusTerminating", "NamespaceStuckTerminating"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "Namespace Status") {
+			t.Errorf("alert %q: expected Namespace Status section, got %q", name, result)
+		}
+	}
+}
+
 func TestGetMetrics_WaitingAlertname(t *testing.T) {
 	srv := makePromServer(t, []PromResult{})
 	defer srv.Close()
