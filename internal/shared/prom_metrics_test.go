@@ -25,6 +25,8 @@ func TestNewPrometheusMetrics_PrematerializedSeries(t *testing.T) {
 		{"NotifyAggregatorDrops (2 aggregators)", testutil.CollectAndCount(pm.NotifyAggregatorDrops), 2},
 		{"AgentToolCalls (3 tools x 7 outcomes)", testutil.CollectAndCount(pm.AgentToolCalls), 21},
 		{"AgentToolDuration (3 tools)", testutil.CollectAndCount(pm.AgentToolDuration), 3},
+		{"HistoryEvents (2 kinds)", testutil.CollectAndCount(pm.HistoryEvents), 2},
+		{"HistoryErrors (3 ops)", testutil.CollectAndCount(pm.HistoryErrors), 3},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -61,6 +63,22 @@ func TestNewPrometheusMetrics_PrematerializedSeries(t *testing.T) {
 		v := testutil.ToFloat64(pm.AlertsProcessed.WithLabelValues(sev.String()))
 		if v != 0 {
 			t.Errorf("AlertsProcessed[severity=%q] = %v, want 0", sev, v)
+		}
+	}
+
+	// Verify each HistoryEvents kind is materialized at zero
+	for _, kind := range []string{"fire", "analysis"} {
+		v := testutil.ToFloat64(pm.HistoryEvents.WithLabelValues(kind))
+		if v != 0 {
+			t.Errorf("HistoryEvents[kind=%q] = %v, want 0 (zero-materialized)", kind, v)
+		}
+	}
+
+	// Verify each HistoryErrors op is materialized at zero
+	for _, op := range []string{"record", "lookup", "prune"} {
+		v := testutil.ToFloat64(pm.HistoryErrors.WithLabelValues(op))
+		if v != 0 {
+			t.Errorf("HistoryErrors[op=%q] = %v, want 0 (zero-materialized)", op, v)
 		}
 	}
 }
