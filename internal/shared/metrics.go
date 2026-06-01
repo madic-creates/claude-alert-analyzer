@@ -197,6 +197,17 @@ func (m *AlertMetrics) RecordHistoryError(op string) {
 	m.Prom.HistoryErrors.WithLabelValues(op).Inc()
 }
 
+func (m *AlertMetrics) RecordHistoryLookup(hit bool) {
+	if m == nil || m.Prom == nil {
+		return
+	}
+	result := "miss"
+	if hit {
+		result = "hit"
+	}
+	m.Prom.HistoryLookups.WithLabelValues(result).Inc()
+}
+
 func (m *AlertMetrics) ObserveRecurrence(n int) {
 	if m == nil || m.Prom == nil {
 		return

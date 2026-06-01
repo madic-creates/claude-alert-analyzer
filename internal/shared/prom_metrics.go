@@ -48,6 +48,7 @@ type PrometheusMetrics struct {
 	HistoryEvents     *prometheus.CounterVec // labels: kind
 	HistoryDrops      prometheus.Counter
 	HistoryErrors     *prometheus.CounterVec // labels: op
+	HistoryLookups    *prometheus.CounterVec // labels: result (hit|miss)
 	HistoryRecurrence prometheus.Histogram
 }
 
@@ -215,6 +216,12 @@ func NewPrometheusMetrics(product Product) (*PrometheusMetrics, error) {
 		ConstLabels: constLabels,
 	}, []string{"op"})
 
+	pm.HistoryLookups = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "alert_analyzer_history_lookups_total",
+		Help:        "History lookups by result: hit when recurrence context was found (count>1), miss when the fingerprint is new.",
+		ConstLabels: constLabels,
+	}, []string{"result"})
+
 	pm.HistoryRecurrence = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name:        "alert_analyzer_history_recurrence",
 		Help:        "Fire count for a fingerprint at the moment recurrence context was injected.",
@@ -229,7 +236,7 @@ func NewPrometheusMetrics(product Product) (*PrometheusMetrics, error) {
 		pm.AgentToolCalls, pm.AgentToolDuration, pm.AgentRoundsPerRun, pm.AgentRoundsExhausted,
 		pm.StormModeActive, pm.ClaudeCircuitBreakerState, pm.NotifyAggregatorDrops,
 		pm.NtfyPublishErrors,
-		pm.HistoryEvents, pm.HistoryDrops, pm.HistoryErrors, pm.HistoryRecurrence,
+		pm.HistoryEvents, pm.HistoryDrops, pm.HistoryErrors, pm.HistoryLookups, pm.HistoryRecurrence,
 	)
 
 	// Runtime/process collectors with the product ConstLabel applied via wrapper.
@@ -275,6 +282,9 @@ func NewPrometheusMetrics(product Product) (*PrometheusMetrics, error) {
 	}
 	for _, op := range []string{"record", "lookup", "prune"} {
 		pm.HistoryErrors.WithLabelValues(op)
+	}
+	for _, result := range []string{"hit", "miss"} {
+		pm.HistoryLookups.WithLabelValues(result)
 	}
 
 	return pm, nil

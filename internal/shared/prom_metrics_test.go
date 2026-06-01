@@ -27,6 +27,7 @@ func TestNewPrometheusMetrics_PrematerializedSeries(t *testing.T) {
 		{"AgentToolDuration (3 tools)", testutil.CollectAndCount(pm.AgentToolDuration), 3},
 		{"HistoryEvents (2 kinds)", testutil.CollectAndCount(pm.HistoryEvents), 2},
 		{"HistoryErrors (3 ops)", testutil.CollectAndCount(pm.HistoryErrors), 3},
+		{"HistoryLookups (2 results)", testutil.CollectAndCount(pm.HistoryLookups), 2},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -79,6 +80,14 @@ func TestNewPrometheusMetrics_PrematerializedSeries(t *testing.T) {
 		v := testutil.ToFloat64(pm.HistoryErrors.WithLabelValues(op))
 		if v != 0 {
 			t.Errorf("HistoryErrors[op=%q] = %v, want 0 (zero-materialized)", op, v)
+		}
+	}
+
+	// Verify each HistoryLookups result is materialized at zero
+	for _, result := range []string{"hit", "miss"} {
+		v := testutil.ToFloat64(pm.HistoryLookups.WithLabelValues(result))
+		if v != 0 {
+			t.Errorf("HistoryLookups[result=%q] = %v, want 0 (zero-materialized)", result, v)
 		}
 	}
 }

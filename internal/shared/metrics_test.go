@@ -33,6 +33,7 @@ func TestAlertMetrics_NilSafe(t *testing.T) {
 	m.RecordHistoryEvent("fire")
 	m.RecordHistoryDrop()
 	m.RecordHistoryError("record")
+	m.RecordHistoryLookup(true)
 	m.ObserveRecurrence(3)
 	if c := m.AggregatorDropsCounter("storm"); c != nil {
 		t.Errorf("AggregatorDropsCounter on nil receiver should return nil, got %v", c)
@@ -44,6 +45,7 @@ func TestAlertMetrics_NilSafe(t *testing.T) {
 	m2.RecordHistoryEvent("analysis")
 	m2.RecordHistoryDrop()
 	m2.RecordHistoryError("lookup")
+	m2.RecordHistoryLookup(false)
 	m2.ObserveRecurrence(2)
 	if c := m2.AggregatorDropsCounter("breaker"); c != nil {
 		t.Errorf("AggregatorDropsCounter with nil Prom should return nil, got %v", c)
@@ -194,6 +196,19 @@ func TestAlertMetrics_Delegation(t *testing.T) {
 	m.RecordHistoryError("record")
 	if got := testutil.ToFloat64(prom.HistoryErrors.WithLabelValues("record")); got != 1 {
 		t.Errorf("HistoryErrors[record] = %v, want 1", got)
+	}
+
+	m.RecordHistoryLookup(true)
+	if got := testutil.ToFloat64(prom.HistoryLookups.WithLabelValues("hit")); got != 1 {
+		t.Errorf("HistoryLookups[hit] = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(prom.HistoryLookups.WithLabelValues("miss")); got != 0 {
+		t.Errorf("HistoryLookups[miss] = %v, want 0 (only hit was recorded)", got)
+	}
+
+	m.RecordHistoryLookup(false)
+	if got := testutil.ToFloat64(prom.HistoryLookups.WithLabelValues("miss")); got != 1 {
+		t.Errorf("HistoryLookups[miss] = %v, want 1", got)
 	}
 
 	m.ObserveRecurrence(5)

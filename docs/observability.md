@@ -104,6 +104,7 @@ releases.
 | `alert_analyzer_history_events_total` | counter | `kind` (`fire`\|`analysis`) | History rows written. |
 | `alert_analyzer_history_drops_total` | counter | — | Writes dropped (write channel full). |
 | `alert_analyzer_history_store_errors_total` | counter | `op` (`record`\|`lookup`\|`prune`) | History store errors. |
+| `alert_analyzer_history_lookups_total` | counter | `result` (`hit`\|`miss`) | Lookups where recurrence context was found (`hit`, count>1) vs. first occurrence (`miss`). Useful for tuning `HISTORY_TTL`. |
 | `alert_analyzer_history_recurrence` | histogram | — | Fire count at recurrence-injection time. |
 
 Only emitted when `HISTORY_ENABLED=true`.

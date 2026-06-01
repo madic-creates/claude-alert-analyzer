@@ -147,6 +147,9 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	deps.Metrics.ObserveContextGatherDuration(time.Since(gatherStart))
 	var historyView shared.HistoryView
 	actx, historyView = shared.InjectHistory(ctx, deps.History, alert.Fingerprint, deps.HistoryInjectPrior, actx)
+	if historyView.Count > 0 {
+		deps.Metrics.RecordHistoryLookup(historyView.Count > 1)
+	}
 	if historyView.Count > 1 {
 		deps.Metrics.ObserveRecurrence(historyView.Count)
 	}
