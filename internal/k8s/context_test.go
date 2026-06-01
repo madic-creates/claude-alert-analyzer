@@ -589,6 +589,79 @@ func TestGetPodLogs_CrashLoopBackOff(t *testing.T) {
 	}
 }
 
+// TestGetPodLogs_InitContainerPodInitializingFallback verifies that getPodLogs
+// targets the failing init container when regular ContainerStatuses are
+// populated with "PodInitializing" entries — the real Kubernetes state for a
+// pod that is still in init phase. The previous code only fell back to init
+// containers when ContainerStatuses was empty; with PodInitializing entries
+// present the regular-container loop would pick the not-yet-started app
+// container and the log fetch would return nothing useful.
+func TestGetPodLogs_InitContainerPodInitializingFallback(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.PodList{Items: []corev1.Pod{{
+			ObjectMeta: metav1.ObjectMeta{Name: "init-pending-pod", Namespace: "prod"},
+			Spec: corev1.PodSpec{
+				InitContainers: []corev1.Container{{Name: "init-db"}},
+				Containers:     []corev1.Container{{Name: "app"}},
+			},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodPending,
+				// Kubernetes populates ContainerStatuses with PodInitializing
+				// while the pod is in init phase — the main container has not
+				// started yet and has no logs.
+				ContainerStatuses: []corev1.ContainerStatus{
+					{
+						Name:  "app",
+						Ready: false,
+						State: corev1.ContainerState{
+							Waiting: &corev1.ContainerStateWaiting{Reason: "PodInitializing"},
+						},
+					},
+				},
+				InitContainerStatuses: []corev1.ContainerStatus{
+					{
+						Name:  "init-db",
+						Ready: false,
+						State: corev1.ContainerState{
+							Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"},
+						},
+					},
+				},
+			},
+		}}}, nil
+	})
+
+	var capturedOpts *corev1.PodLogOptions
+	cs.PrependReactor("get", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		ga, ok := action.(k8stesting.GenericAction)
+		if !ok || action.GetSubresource() != "log" {
+			return false, nil, nil
+		}
+		if opts, ok := ga.GetValue().(*corev1.PodLogOptions); ok {
+			capturedOpts = opts
+		}
+		return false, nil, nil
+	})
+
+	cfg := Config{MaxLogBytes: 4096}
+	result := getPodLogs(context.Background(), cs, "prod", cfg)
+
+	if strings.Contains(result, "no failing pods") {
+		t.Error("pod with PodInitializing containers must not be excluded from pod logs")
+	}
+	if capturedOpts == nil {
+		t.Fatal("GetLogs was not called")
+	}
+	if capturedOpts.Container != "init-db" {
+		t.Errorf("expected Container=%q, got %q — must target failing init container, not PodInitializing main container", "init-db", capturedOpts.Container)
+	}
+	if capturedOpts.Previous {
+		t.Error("Previous must be false for terminated (non-CrashLoopBackOff) init container")
+	}
+}
+
 // TestGetPodLogs_HealthyRunningPodsExcluded verifies that getPodLogs skips
 // Running pods where all containers are Ready. Including healthy pods would
 // flood Claude with irrelevant logs and waste the maxLogPods budget.

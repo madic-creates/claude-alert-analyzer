@@ -547,10 +547,24 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, namespace s
 				break
 			}
 		}
-		// If no regular container statuses exist the main containers have not
-		// started yet. A failing init container is typically the root cause;
-		// collect its logs instead so the analysis has actionable output.
-		if len(p.Status.ContainerStatuses) == 0 {
+		// If no regular container statuses exist, OR if all regular containers
+		// report "PodInitializing" (pod is still in init phase — Kubernetes
+		// populates ContainerStatuses with PodInitializing entries while init
+		// containers are running), the failing init container is the root
+		// cause; collect its logs instead so the analysis has actionable
+		// output. Without the PodInitializing check, the loop above selects a
+		// not-yet-started regular container and the log fetch returns empty.
+		inInitPhase := len(p.Status.ContainerStatuses) == 0
+		if !inInitPhase {
+			inInitPhase = true
+			for _, cs := range p.Status.ContainerStatuses {
+				if cs.State.Waiting == nil || cs.State.Waiting.Reason != "PodInitializing" {
+					inInitPhase = false
+					break
+				}
+			}
+		}
+		if inInitPhase {
 			for _, ics := range p.Status.InitContainerStatuses {
 				if !ics.Ready {
 					targetContainer = ics.Name
