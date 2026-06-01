@@ -1141,12 +1141,194 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Mean time spent in GatherContext (static prefetch: Prometheus + Kubernetes or CheckMK + SSH API calls) before the Claude API is invoked. Persistent rises indicate slow upstream APIs.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 40
+      },
+      "id": 305,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (product) (rate(alert_analyzer_context_gather_duration_seconds_sum{product=~\"$product\"}[5m])) / clamp_min(sum by (product) (rate(alert_analyzer_context_gather_duration_seconds_count{product=~\"$product\"}[5m])), 1e-9)",
+          "legendFormat": "{{product}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Context gather duration (mean)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Mean time alerts spend waiting in the work queue before a worker picks them up. A rising trend indicates that workers cannot keep up with the incoming alert rate.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 40
+      },
+      "id": 306,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (product) (rate(alert_analyzer_queue_wait_duration_seconds_sum{product=~\"$product\"}[5m])) / clamp_min(sum by (product) (rate(alert_analyzer_queue_wait_duration_seconds_count{product=~\"$product\"}[5m])), 1e-9)",
+          "legendFormat": "{{product}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Queue wait duration (mean)",
+      "type": "timeseries"
+    },
+    {
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 40
+        "y": 48
       },
       "id": 400,
       "panels": [],
@@ -1192,7 +1374,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 41
+        "y": 49
       },
       "id": 401,
       "options": {
@@ -1344,7 +1526,7 @@
         "h": 8,
         "w": 16,
         "x": 8,
-        "y": 41
+        "y": 49
       },
       "id": 402,
       "options": {
@@ -1468,7 +1650,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 49
+        "y": 57
       },
       "id": 403,
       "options": {
@@ -1559,7 +1741,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 49
+        "y": 57
       },
       "id": 404,
       "options": {
@@ -1599,7 +1781,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 57
+        "y": 65
       },
       "id": 500,
       "panels": [],
@@ -1663,7 +1845,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 58
+        "y": 66
       },
       "id": 501,
       "options": {
@@ -1754,7 +1936,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 58
+        "y": 66
       },
       "id": 502,
       "options": {
@@ -1845,7 +2027,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 66
+        "y": 74
       },
       "id": 503,
       "options": {
@@ -1951,7 +2133,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 66
+        "y": 74
       },
       "id": 504,
       "options": {
@@ -1991,7 +2173,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 74
+        "y": 82
       },
       "id": 600,
       "panels": [],
@@ -2049,7 +2231,7 @@
         "h": 6,
         "w": 8,
         "x": 0,
-        "y": 75
+        "y": 83
       },
       "id": 601,
       "options": {
@@ -2142,7 +2324,7 @@
         "h": 6,
         "w": 8,
         "x": 8,
-        "y": 75
+        "y": 83
       },
       "id": 602,
       "options": {
@@ -2237,7 +2419,7 @@
         "h": 6,
         "w": 8,
         "x": 16,
-        "y": 75
+        "y": 83
       },
       "id": 603,
       "options": {
@@ -2280,7 +2462,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 81
+        "y": 89
       },
       "panels": []
     },
@@ -2432,7 +2614,7 @@
         "h": 8,
         "w": 16,
         "x": 0,
-        "y": 82
+        "y": 90
       },
       "id": 704,
       "options": {
@@ -2503,7 +2685,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 82
+        "y": 90
       },
       "id": 705,
       "options": {
