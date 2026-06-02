@@ -60,17 +60,14 @@ func loadConfig() checkmk.Config {
 		os.Exit(1)
 	}
 
-	var checkmkAPITimeout time.Duration
-	if v := os.Getenv("CHECKMK_API_TIMEOUT"); v != "" {
-		checkmkAPITimeout, err = time.ParseDuration(v)
-		if err != nil {
-			slog.Error("invalid CHECKMK_API_TIMEOUT", "error", err)
-			os.Exit(1)
-		}
-		if checkmkAPITimeout < 0 {
-			slog.Error("invalid CHECKMK_API_TIMEOUT", "error", "must be positive")
-			os.Exit(1)
-		}
+	checkmkAPITimeout, err := shared.ParseDurationEnv("CHECKMK_API_TIMEOUT", 0)
+	if err != nil {
+		slog.Error("invalid CHECKMK_API_TIMEOUT", "error", err)
+		os.Exit(1)
+	}
+	if checkmkAPITimeout < 0 {
+		slog.Error("invalid CHECKMK_API_TIMEOUT", "error", "must be positive")
+		os.Exit(1)
 	}
 
 	// SSH_DENIED_COMMANDS: not set = default denylist, empty = no guardrails, value = custom list

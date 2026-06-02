@@ -55,29 +55,23 @@ func loadConfig() k8s.Config {
 	_ = os.Unsetenv("ANTHROPIC_AUTH_TOKEN")
 	_ = os.Unsetenv("ANTHROPIC_BASE_URL")
 
-	var kubeAPITimeout time.Duration
-	if v := os.Getenv("KUBE_API_TIMEOUT"); v != "" {
-		kubeAPITimeout, err = time.ParseDuration(v)
-		if err != nil {
-			slog.Error("invalid KUBE_API_TIMEOUT", "error", err)
-			os.Exit(1)
-		}
-		if kubeAPITimeout < 0 {
-			slog.Error("invalid KUBE_API_TIMEOUT", "error", "must be positive")
-			os.Exit(1)
-		}
+	kubeAPITimeout, err := shared.ParseDurationEnv("KUBE_API_TIMEOUT", 0)
+	if err != nil {
+		slog.Error("invalid KUBE_API_TIMEOUT", "error", err)
+		os.Exit(1)
 	}
-	var promTimeout time.Duration
-	if v := os.Getenv("PROM_TIMEOUT"); v != "" {
-		promTimeout, err = time.ParseDuration(v)
-		if err != nil {
-			slog.Error("invalid PROM_TIMEOUT", "error", err)
-			os.Exit(1)
-		}
-		if promTimeout < 0 {
-			slog.Error("invalid PROM_TIMEOUT", "error", "must be positive")
-			os.Exit(1)
-		}
+	if kubeAPITimeout < 0 {
+		slog.Error("invalid KUBE_API_TIMEOUT", "error", "must be positive")
+		os.Exit(1)
+	}
+	promTimeout, err := shared.ParseDurationEnv("PROM_TIMEOUT", 0)
+	if err != nil {
+		slog.Error("invalid PROM_TIMEOUT", "error", err)
+		os.Exit(1)
+	}
+	if promTimeout < 0 {
+		slog.Error("invalid PROM_TIMEOUT", "error", "must be positive")
+		os.Exit(1)
 	}
 
 	return k8s.Config{
