@@ -1798,3 +1798,56 @@ func TestProcessAlert_ToolLoopPanicOpensBreaker(t *testing.T) {
 		t.Fatalf("breaker should be open after a panicked tool loop; Acquire returned err=%v", err)
 	}
 }
+
+// TestProcessAlert_RecordsHistoryLookupMetric verifies that RecordHistoryLookup
+// is wired correctly inside ProcessAlert for all three Count cases:
+//   - Count == 0 (history disabled / nop store): metric must NOT be recorded
+//   - Count == 1 (first fire, no prior context): metric recorded as miss
+//   - Count > 1 (recurring alert): metric recorded as hit
+func TestProcessAlert_RecordsHistoryLookupMetric(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		count    int
+		wantHit  float64
+		wantMiss float64
+	}{
+		{"count=0 (disabled)", 0, 0, 0},
+		{"count=1 (miss)", 1, 0, 1},
+		{"count=3 (hit)", 3, 1, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prom := shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)
+			metrics := shared.NewAlertMetrics(prom)
+			history := &fakeHistoryStore{
+				view: shared.HistoryView{Count: tc.count},
+			}
+			deps := PipelineDeps{
+				Analyzer:   &mockAnalyzer{result: "ok"},
+				Publishers: []shared.Publisher{&mockPublisher{}},
+				Cooldown:   shared.NewCooldownManager(),
+				Metrics:    metrics,
+				Policy:     &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 0},
+				SSHEnabled: false,
+				GatherContext: func(_ context.Context, _ shared.AlertPayload, _ *HostInfo) shared.AnalysisContext {
+					return shared.AnalysisContext{}
+				},
+				ValidateHost: func(_ context.Context, _, _ string) (*HostInfo, error) {
+					return &HostInfo{}, nil
+				},
+				History: history,
+			}
+
+			ProcessAlert(context.Background(), deps, shared.AlertPayload{
+				Fingerprint: "fp-lookup-metric",
+				Fields:      map[string]string{"hostname": "host1", "host_address": "10.0.0.1"},
+			})
+
+			if got := testutil.ToFloat64(prom.HistoryLookups.WithLabelValues("hit")); got != tc.wantHit {
+				t.Errorf("HistoryLookups[hit] = %v, want %v", got, tc.wantHit)
+			}
+			if got := testutil.ToFloat64(prom.HistoryLookups.WithLabelValues("miss")); got != tc.wantMiss {
+				t.Errorf("HistoryLookups[miss] = %v, want %v", got, tc.wantMiss)
+			}
+		})
+	}
+}
