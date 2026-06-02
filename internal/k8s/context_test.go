@@ -1255,6 +1255,44 @@ func TestGetMetrics_DiskAlertname(t *testing.T) {
 	}
 }
 
+// TestGetMetrics_EvictAlertname verifies that eviction alerts route to the
+// Evicted Pods section. The branch must precede "node" so that a hypothetical
+// "KubeNodeEviction" alert (containing "node") is not consumed by the generic
+// Node Conditions branch.
+func TestGetMetrics_EvictAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"KubePodEviction", "NodeEviction"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "Evicted Pods") {
+			t.Errorf("alert %q: expected Evicted Pods section, got %q", name, result)
+		}
+	}
+}
+
+// TestGetMetrics_ProbeAlertname verifies that readiness/liveness probe alerts
+// route to the Container Readiness section rather than Node Conditions.
+// KubeNodeReadinessProbe contains "node" and would otherwise hit that branch.
+func TestGetMetrics_ProbeAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"KubeContainerReadinessProbeFailing", "KubeLivenessProbeFailed", "KubeNodeReadinessProbe"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "Container Readiness") {
+			t.Errorf("alert %q: expected Container Readiness section, got %q", name, result)
+		}
+		if name == "KubeNodeReadinessProbe" && strings.Contains(result, "Node Conditions") {
+			t.Errorf("alert %q: must not route to node branch; got Node Conditions", name)
+		}
+	}
+}
+
 func TestGetMetrics_NodeAlertname(t *testing.T) {
 	srv := makePromServer(t, []PromResult{})
 	defer srv.Close()
@@ -1336,12 +1374,33 @@ func TestGetMetrics_HPAAlertname(t *testing.T) {
 	}
 }
 
+// TestGetMetrics_CronJobAlertname verifies that CronJob alerts route to the
+// CronJob Status section. The branch must precede "job" so that KubeCronJobFailed
+// (containing "job") is not consumed by the Failed Jobs branch.
+func TestGetMetrics_CronJobAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"KubeCronJobRunning", "KubeCronJobFailed", "CronJobSuspended"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "CronJob Status") {
+			t.Errorf("alert %q: expected CronJob Status section, got %q", name, result)
+		}
+		if strings.Contains(result, "Failed Jobs") {
+			t.Errorf("alert %q: must not route to job branch; got Failed Jobs", name)
+		}
+	}
+}
+
 func TestGetMetrics_JobAlertname(t *testing.T) {
 	srv := makePromServer(t, []PromResult{})
 	defer srv.Close()
 
 	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
-	for _, name := range []string{"KubeJobFailed", "KubeCronJobFailed", "JobCompletionTimeout"} {
+	// KubeCronJobFailed is intentionally excluded: it matches the "cron" branch first.
+	for _, name := range []string{"KubeJobFailed", "JobCompletionTimeout"} {
 		alert := makeAlertWithLabels(map[string]string{"alertname": name})
 		result := prom.GetMetrics(context.Background(), alert)
 		if !strings.Contains(result, "Failed Jobs") {
@@ -1425,11 +1484,50 @@ func TestGetMetrics_NamespaceAlertname(t *testing.T) {
 	defer srv.Close()
 
 	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	// Both alert names contain "terminat"; the namespace branch must precede the
+	// terminat branch so they are not incorrectly routed to Abnormal Terminations.
 	for _, name := range []string{"KubeNamespaceStatusTerminating", "NamespaceStuckTerminating"} {
 		alert := makeAlertWithLabels(map[string]string{"alertname": name})
 		result := prom.GetMetrics(context.Background(), alert)
 		if !strings.Contains(result, "Namespace Status") {
 			t.Errorf("alert %q: expected Namespace Status section, got %q", name, result)
+		}
+		if strings.Contains(result, "Abnormal Container Terminations") {
+			t.Errorf("alert %q: must not route to terminat branch; got Abnormal Container Terminations", name)
+		}
+	}
+}
+
+// TestGetMetrics_TerminatedAlertname verifies that container termination alerts
+// route to the Abnormal Container Terminations section. The branch must follow
+// "namespace" so that KubeNamespaceTerminating is not consumed by this branch.
+func TestGetMetrics_TerminatedAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"KubeContainerTerminated", "PodTerminatedAbnormally"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "Abnormal Container Terminations") {
+			t.Errorf("alert %q: expected Abnormal Container Terminations section, got %q", name, result)
+		}
+	}
+}
+
+// TestGetMetrics_ImagePullAlertname verifies that image pull failure alerts route
+// to the Image Pull Failures section rather than falling through to the generic
+// Non-Running Pods catch-all.
+func TestGetMetrics_ImagePullAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"KubeImagePullBackOff", "ContainerImagePullError", "ErrImagePull"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "Image Pull Failures") {
+			t.Errorf("alert %q: expected Image Pull Failures section, got %q", name, result)
 		}
 	}
 }

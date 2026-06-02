@@ -243,6 +243,16 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	case strings.Contains(lower, "disk") || strings.Contains(lower, "volume") || strings.Contains(lower, "storage") || strings.Contains(lower, "pvc"):
 		alertnameSectionName = "\n## PVC Usage"
 		alertnameQueryStr = `(kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes) > 0.8`
+	case strings.Contains(lower, "evict"):
+		// Must precede node: KubeNodeEviction contains "node" and would otherwise
+		// route to generic Node Conditions instead of eviction-specific data.
+		alertnameSectionName = "\n## Evicted Pods"
+		alertnameQueryStr = `kube_pod_status_reason{reason="Evicted"} > 0`
+	case strings.Contains(lower, "probe") || strings.Contains(lower, "readiness") || strings.Contains(lower, "liveness"):
+		// Must precede node: KubeNodeReadinessProbe contains "node"; probe is
+		// more specific so it takes precedence.
+		alertnameSectionName = "\n## Container Readiness"
+		alertnameQueryStr = `kube_pod_container_status_ready == 0`
 	case strings.Contains(lower, "node"):
 		alertnameSectionName = "\n## Node Conditions"
 		alertnameQueryStr = `kube_node_status_condition{condition="Ready"}`
@@ -252,6 +262,11 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	case strings.Contains(lower, "hpa") || strings.Contains(lower, "autoscal"):
 		alertnameSectionName = "\n## HPA Status"
 		alertnameQueryStr = `kube_horizontalpodautoscaler_status_condition{condition="ScalingLimited",status="true"}`
+	case strings.Contains(lower, "cron"):
+		// Must precede job: KubeCronJobRunning contains "job" and would otherwise
+		// route to Failed Jobs instead of CronJob-specific active-run data.
+		alertnameSectionName = "\n## CronJob Status"
+		alertnameQueryStr = `kube_cronjob_status_active > 0`
 	case strings.Contains(lower, "job"):
 		alertnameSectionName = "\n## Failed Jobs"
 		alertnameQueryStr = `kube_job_status_failed > 0`
@@ -273,6 +288,14 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	case strings.Contains(lower, "namespace"):
 		alertnameSectionName = "\n## Namespace Status"
 		alertnameQueryStr = `kube_namespace_status_phase{phase="Terminating"} == 1`
+	case strings.Contains(lower, "terminat"):
+		// Must follow namespace: KubeNamespaceTerminating contains "terminat";
+		// namespace branch takes precedence to route it to namespace status.
+		alertnameSectionName = "\n## Abnormal Container Terminations"
+		alertnameQueryStr = `kube_pod_container_status_last_terminated_reason{reason!="Completed"} > 0`
+	case strings.Contains(lower, "image"):
+		alertnameSectionName = "\n## Image Pull Failures"
+		alertnameQueryStr = `kube_pod_container_status_waiting_reason{reason=~"ImagePullBackOff|ErrImagePull|InvalidImageName"} > 0`
 	case strings.Contains(lower, "waiting") || strings.Contains(lower, "pending"):
 		alertnameSectionName = "\n## Waiting Containers"
 		alertnameQueryStr = `kube_pod_container_status_waiting_reason{reason!="CrashLoopBackOff"}`
