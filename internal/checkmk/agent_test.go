@@ -2700,6 +2700,34 @@ func TestDenyReason(t *testing.T) {
 			t.Errorf("gdbserver: expected message NOT to use generic phrasing; got: %s", msg)
 		}
 	})
+	t.Run("shells return targeted -c bypass message", func(t *testing.T) {
+		// Shells (bash, sh, zsh, etc.) are blocked because they accept a -c flag
+		// to execute arbitrary commands, bypassing the denylist. The message must
+		// explain that, not call them "destructive or privileged".
+		for _, shell := range []string{"bash", "sh", "zsh", "ksh", "ash"} {
+			msg := denyReason(DefaultDeniedCommands, []string{shell, "-c", "rm -rf /"})
+			if !strings.Contains(msg, "-c") {
+				t.Errorf("%s: expected message to mention '-c' flag; got: %s", shell, msg)
+			}
+			if strings.Contains(msg, "destructive or privileged") {
+				t.Errorf("%s: expected message NOT to use generic phrasing; got: %s", shell, msg)
+			}
+		}
+	})
+	t.Run("scripting interpreters return targeted bypass message", func(t *testing.T) {
+		// Scripting interpreters (python3, perl, awk, etc.) are blocked because they
+		// expose system/exec primitives that bypass the denylist. The message must
+		// explain that, not call them "destructive or privileged".
+		for _, interp := range []string{"python3", "perl", "ruby", "node", "awk", "gawk", "lua", "php"} {
+			msg := denyReason(DefaultDeniedCommands, []string{interp, "-e", "system('rm -rf /')"})
+			if !strings.Contains(msg, "system") {
+				t.Errorf("%s: expected message to mention 'system'; got: %s", interp, msg)
+			}
+			if strings.Contains(msg, "destructive or privileged") {
+				t.Errorf("%s: expected message NOT to use generic phrasing; got: %s", interp, msg)
+			}
+		}
+	})
 }
 
 // TestIsDenied_BlocksProcessWrappers verifies that process execution wrappers

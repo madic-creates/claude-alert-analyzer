@@ -801,8 +801,34 @@ func denyReason(denied map[string]bool, argv []string) string {
 		// are the most direct bypass: they fetch and execute a remote package in
 		// a single command without a prior install step. All package manager
 		// front-ends (pip, npm, gem, etc.) are blocked; use OS-level read-only
-		// commands (dpkg -l, rpm -qa) to inspect installed packages instead.
+		// commands (dpkg -l, rpm-qa) to inspect installed packages instead.
 		return fmt.Sprintf("Command denied: %q is a package manager; all package managers are blocked because installation runs arbitrary code (build hooks, setup scripts); use OS-level read-only commands such as \"dpkg -l\" or \"dpkg -l <name>\" (Debian/Ubuntu) or \"rpm -qa\" or \"rpm -qi <name>\" (RHEL/CentOS) to inspect installed packages instead", cmd)
+
+	case "bash", "sh", "dash", "zsh", "fish",
+		"tcsh", "csh", "ksh", "mksh", "ash":
+		// Shells accept a -c flag that executes an arbitrary command string as a
+		// child process (e.g. "bash -c 'rm -rf /'"), bypassing the command
+		// denylist entirely. The generic "destructive or privileged" label is
+		// inaccurate — shells are blocked as denylist bypass vectors, not because
+		// they are inherently harmful.
+		return fmt.Sprintf("Command denied: %q is a shell that accepts a -c flag to execute arbitrary commands (e.g. %s -c 'rm -rf /'), bypassing the command denylist; use individual read-only diagnostic commands directly instead (e.g. \"df -h\", \"ps aux\", \"journalctl -n 50\")", cmd, cmd)
+
+	case "python", "python2", "python3",
+		"perl", "ruby", "node", "nodejs",
+		"r", "rscript", "jshell", "groovy",
+		"lua", "tclsh", "wish", "php",
+		"awk", "gawk", "mawk", "nawk":
+		// Scripting interpreters and languages are blocked because they all
+		// expose primitives that execute arbitrary system commands as a child
+		// process, bypassing the command denylist:
+		//   python/ruby/node -e/-c 'import os; os.system("rm -rf /")'
+		//   perl -e 'system("rm -rf /")'
+		//   awk 'BEGIN{system("rm -rf /")}'
+		//   lua -e 'os.execute("rm -rf /")'
+		//   php -r 'system("reboot");'
+		// The generic "destructive or privileged" label is inaccurate — these
+		// interpreters are blocked as denylist bypass vectors.
+		return fmt.Sprintf("Command denied: %q is a scripting interpreter that can execute arbitrary commands via built-in system/exec primitives, bypassing the command denylist; use read-only diagnostic commands directly instead (e.g. \"ps aux\", \"df -h\", \"journalctl -n 50\")", cmd)
 
 	case "busybox":
 		// busybox is a multi-call binary that can invoke any Unix utility as a
