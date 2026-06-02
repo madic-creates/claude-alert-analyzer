@@ -163,6 +163,22 @@ func TestMain_FailsWhenMaxAgentRoundsInvalid(t *testing.T) {
 	}
 }
 
+// TestMain_FailsWhenGroupCooldownSecondsInvalid verifies that the binary exits
+// and logs an error mentioning GROUP_COOLDOWN_SECONDS when the value exceeds
+// the valid range [0, 86400]. GROUP_COOLDOWN_SECONDS is validated inside
+// LoadPolicy, which is called after loadConfig(), so minEnvWithAuth() is needed.
+func TestMain_FailsWhenGroupCooldownSecondsInvalid(t *testing.T) {
+	env := minEnvWithAuth()
+	env["GROUP_COOLDOWN_SECONDS"] = "86401" // exceeds max 86400
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid GROUP_COOLDOWN_SECONDS; output=%s", out)
+	}
+	if !strings.Contains(out, "GROUP_COOLDOWN_SECONDS") {
+		t.Errorf("expected 'GROUP_COOLDOWN_SECONDS' in output, got: %s", out)
+	}
+}
+
 // TestMain_FailsWhenCircuitBreakerThresholdInvalid verifies that the binary
 // exits and logs an error mentioning CIRCUIT_BREAKER_THRESHOLD when the value
 // exceeds the valid range [0, 100]. The threshold is a failure-count window,

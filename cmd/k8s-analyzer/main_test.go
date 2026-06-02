@@ -286,6 +286,23 @@ func TestMain_FailsWhenMaxAgentRoundsInvalid(t *testing.T) {
 	}
 }
 
+// TestMain_FailsWhenGroupCooldownSecondsInvalid verifies that the binary exits
+// and logs an error mentioning GROUP_COOLDOWN_SECONDS when the value exceeds
+// the valid range [0, 86400]. GROUP_COOLDOWN_SECONDS is validated inside
+// LoadPolicy, which is called after loadConfig() but before rest.InClusterConfig(),
+// so minEnv() is sufficient to reach this validation.
+func TestMain_FailsWhenGroupCooldownSecondsInvalid(t *testing.T) {
+	env := minEnv()
+	env["GROUP_COOLDOWN_SECONDS"] = "86401" // exceeds max 86400
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid GROUP_COOLDOWN_SECONDS; output=%s", out)
+	}
+	if !strings.Contains(out, "GROUP_COOLDOWN_SECONDS") {
+		t.Errorf("expected 'GROUP_COOLDOWN_SECONDS' in output, got: %s", out)
+	}
+}
+
 // TestMain_FailsWhenCooldownSecondsInvalid verifies that the binary exits and
 // logs an error mentioning COOLDOWN_SECONDS when the value is outside the valid
 // range [0, 86400]. COOLDOWN_SECONDS is the very first env var parsed in
