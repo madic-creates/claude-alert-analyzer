@@ -1497,7 +1497,10 @@ func TestGetMetrics_ProxyAlertname(t *testing.T) {
 }
 
 // TestGetMetrics_KubeletAlertname verifies that alert names containing "kubelet"
-// emit the Kubelet Pod Capacity section.
+// emit the Kubelet Pod Capacity section. KubeletTooManyPods is specifically
+// checked against the memory/oom branch because its name contains "oom" as a
+// substring (T-o-o-M), which previously caused incorrect routing before the
+// kubelet case was hoisted above the memory/oom case.
 func TestGetMetrics_KubeletAlertname(t *testing.T) {
 	srv := makePromServer(t, []PromResult{})
 	defer srv.Close()
@@ -1508,6 +1511,9 @@ func TestGetMetrics_KubeletAlertname(t *testing.T) {
 		result := prom.GetMetrics(context.Background(), alert)
 		if !strings.Contains(result, "Kubelet Pod Capacity") {
 			t.Errorf("alert %q: expected Kubelet Pod Capacity section, got %q", name, result)
+		}
+		if name == "KubeletTooManyPods" && strings.Contains(result, "Top Memory Consumers") {
+			t.Errorf("alert %q: must not route to memory/oom branch (name contains substring \"oom\"); got Top Memory Consumers", name)
 		}
 	}
 }
