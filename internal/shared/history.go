@@ -97,6 +97,10 @@ var testHookLookupPriorQueryFn func(context.Context, string, ...any) (*sql.Rows,
 // rows.Next() loop instead of rows.Err(). Nil in production.
 var testHookLookupRowsErrFn func() error
 
+// testHookLookupScanFn, if non-nil, replaces rows.Scan in the prior-analysis
+// loop. Nil in production.
+var testHookLookupScanFn func(*sql.Rows, ...any) error
+
 // nopHistoryStore is used when HISTORY_ENABLED=false. Never touches disk.
 type nopHistoryStore struct{}
 
@@ -307,13 +311,17 @@ func (s *sqliteHistoryStore) Lookup(ctx context.Context, fingerprint string) His
 		return view
 	}
 	defer func() { _ = rows.Close() }()
+	scanFn := (*sql.Rows).Scan
+	if testHookLookupScanFn != nil {
+		scanFn = testHookLookupScanFn
+	}
 	for rows.Next() {
 		var (
 			ts            int64
 			summary       sql.NullString
 			severityLabel string
 		)
-		if err := rows.Scan(&ts, &summary, &severityLabel); err != nil {
+		if err := scanFn(rows, &ts, &summary, &severityLabel); err != nil {
 			slog.Warn("history: scan prior row failed", "error", err)
 			continue
 		}

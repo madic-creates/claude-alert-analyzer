@@ -746,3 +746,27 @@ func TestHandleWriteFailureRecordsErrorMetric(t *testing.T) {
 		t.Errorf("HistoryEvents[fire] = %v, want 0 on write failure", got)
 	}
 }
+
+// TestLookupScanErrorSkipsRow verifies that a rows.Scan failure inside the
+// prior-analysis loop logs a warning and continues rather than aborting.
+// Covers the slog.Warn + continue branch (lines 317–318 of history.go) that
+// is unreachable without the hook because SQLite's driver returns valid typed
+// rows for every well-formed query.
+func TestLookupScanErrorSkipsRow(t *testing.T) {
+	s := newTestStore(t)
+
+	s.RecordAnalysis(context.Background(), "fp", SeverityWarning, "good summary")
+	s.flush()
+
+	old := testHookLookupScanFn
+	testHookLookupScanFn = func(_ *sql.Rows, _ ...any) error {
+		return errors.New("injected scan error")
+	}
+	defer func() { testHookLookupScanFn = old }()
+
+	view := s.Lookup(context.Background(), "fp")
+
+	if len(view.Prior) != 0 {
+		t.Errorf("Prior len = %d, want 0 (all scans failed)", len(view.Prior))
+	}
+}
