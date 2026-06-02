@@ -319,6 +319,22 @@ func TestMain_FailsWhenHistoryMaxEntriesInvalid(t *testing.T) {
 	}
 }
 
+// TestMain_FailsWhenHistoryTTLNegative verifies that a negative HISTORY_TTL is
+// rejected at startup. A negative duration is a valid Go duration string but
+// LoadHistoryConfig explicitly rejects ttl <= 0. Mirrors
+// TestMain_FailsWhenCheckmkAPITimeoutNegative.
+func TestMain_FailsWhenHistoryTTLNegative(t *testing.T) {
+	env := minEnvWithAuth()
+	env["HISTORY_TTL"] = "-1h"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for negative HISTORY_TTL; output=%s", out)
+	}
+	if !strings.Contains(out, "HISTORY_TTL") {
+		t.Errorf("expected 'HISTORY_TTL' in output, got: %s", out)
+	}
+}
+
 // TestMain_FailsWhenHistoryInjectPriorInvalid verifies that the binary exits
 // and logs an error mentioning HISTORY_INJECT_PRIOR when the env var is not a
 // valid boolean. Requires minEnvWithAuth to reach LoadHistoryConfig.
