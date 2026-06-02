@@ -303,6 +303,23 @@ func TestMain_FailsWhenGroupCooldownSecondsInvalid(t *testing.T) {
 	}
 }
 
+// TestMain_FailsWhenStormModeThresholdInvalid verifies that the binary exits
+// and logs an error mentioning STORM_MODE_THRESHOLD when the value exceeds
+// the valid range [0, 100000]. STORM_MODE_THRESHOLD is validated inside
+// LoadPolicy, which is called before rest.InClusterConfig(), so minEnv() is
+// sufficient to reach this validation.
+func TestMain_FailsWhenStormModeThresholdInvalid(t *testing.T) {
+	env := minEnv()
+	env["STORM_MODE_THRESHOLD"] = "100001" // exceeds max 100000
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid STORM_MODE_THRESHOLD; output=%s", out)
+	}
+	if !strings.Contains(out, "STORM_MODE_THRESHOLD") {
+		t.Errorf("expected 'STORM_MODE_THRESHOLD' in output, got: %s", out)
+	}
+}
+
 // TestMain_FailsWhenCooldownSecondsInvalid verifies that the binary exits and
 // logs an error mentioning COOLDOWN_SECONDS when the value is outside the valid
 // range [0, 86400]. COOLDOWN_SECONDS is the very first env var parsed in
