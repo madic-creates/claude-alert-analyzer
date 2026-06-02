@@ -540,6 +540,30 @@ func TestNewHistoryStoreBadDir(t *testing.T) {
 	}
 }
 
+// TestNewSQLiteHistoryStore_OpenError verifies that newSQLiteHistoryStore returns
+// an "open db" error when sql.Open fails. The modernc sqlite driver never returns
+// an error from sql.Open itself (it defers the first real I/O to the first query),
+// so this branch is untriggerable without the testHookSQLOpenFn hook.
+func TestNewSQLiteHistoryStore_OpenError(t *testing.T) {
+	wantErr := errors.New("injected open error")
+	testHookSQLOpenFn = func(_, _ string) (*sql.DB, error) { return nil, wantErr }
+	t.Cleanup(func() { testHookSQLOpenFn = nil })
+
+	cfg := HistoryConfig{
+		Enabled:    true,
+		DBPath:     filepath.Join(t.TempDir(), "history.db"),
+		TTL:        6 * time.Hour,
+		MaxEntries: 5,
+	}
+	_, err := newSQLiteHistoryStore(cfg, ProductK8s, NewAlertMetrics(nil))
+	if err == nil {
+		t.Fatal("expected error from sql.Open hook, got nil")
+	}
+	if !strings.Contains(err.Error(), "open db") {
+		t.Errorf("error = %q, want 'open db' mention", err)
+	}
+}
+
 // TestNewSQLiteHistoryStore_CorruptDBFailsOnSchema verifies that
 // newSQLiteHistoryStore returns a "create schema" error when the DB file exists
 // but is not a valid SQLite database. The SQLite3 magic header must begin with

@@ -101,6 +101,10 @@ var testHookLookupRowsErrFn func() error
 // loop. Nil in production.
 var testHookLookupScanFn func(*sql.Rows, ...any) error
 
+// testHookSQLOpenFn, if non-nil, replaces sql.Open in newSQLiteHistoryStore.
+// Nil in production; set in tests to inject a sql.Open error.
+var testHookSQLOpenFn func(string, string) (*sql.DB, error)
+
 // nopHistoryStore is used when HISTORY_ENABLED=false. Never touches disk.
 type nopHistoryStore struct{}
 
@@ -172,7 +176,11 @@ func newSQLiteHistoryStore(cfg HistoryConfig, product Product, metrics *AlertMet
 		}
 	}
 	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(DELETE)&_pragma=busy_timeout(2000)&_pragma=temp_store(MEMORY)", cfg.DBPath)
-	db, err := sql.Open("sqlite", dsn)
+	sqlOpenFn := sql.Open
+	if testHookSQLOpenFn != nil {
+		sqlOpenFn = testHookSQLOpenFn
+	}
+	db, err := sqlOpenFn("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("history: open db: %w", err)
 	}
