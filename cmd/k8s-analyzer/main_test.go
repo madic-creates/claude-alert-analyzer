@@ -335,3 +335,82 @@ func TestMain_FailsWhenSkipResolvedInvalid(t *testing.T) {
 		t.Errorf("expected 'SKIP_RESOLVED' in output, got: %s", out)
 	}
 }
+
+// TestMain_FailsWhenHistoryTTLInvalid verifies that the binary exits and logs
+// an error mentioning HISTORY_TTL when the env var is not a valid Go duration
+// string. LoadHistoryConfig is called in main() after loadConfig() and
+// LoadStormProtectionConfig() but before rest.InClusterConfig(), so minEnv()
+// is sufficient to reach this validation without a live cluster.
+func TestMain_FailsWhenHistoryTTLInvalid(t *testing.T) {
+	env := minEnv()
+	env["HISTORY_TTL"] = "notaduration"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid HISTORY_TTL; output=%s", out)
+	}
+	if !strings.Contains(out, "HISTORY_TTL") {
+		t.Errorf("expected 'HISTORY_TTL' in output, got: %s", out)
+	}
+}
+
+// TestMain_FailsWhenHistoryTTLNegative verifies that a negative HISTORY_TTL is
+// rejected at startup. A negative duration is a valid Go duration string but
+// LoadHistoryConfig explicitly rejects ttl <= 0. Mirrors
+// TestMain_FailsWhenKubeAPITimeoutNegative.
+func TestMain_FailsWhenHistoryTTLNegative(t *testing.T) {
+	env := minEnv()
+	env["HISTORY_TTL"] = "-1h"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for negative HISTORY_TTL; output=%s", out)
+	}
+	if !strings.Contains(out, "HISTORY_TTL") {
+		t.Errorf("expected 'HISTORY_TTL' in output, got: %s", out)
+	}
+}
+
+// TestMain_FailsWhenHistoryEnabledInvalid verifies that the binary exits and
+// logs an error mentioning HISTORY_ENABLED when the env var is not a valid
+// boolean. LoadHistoryConfig is called before rest.InClusterConfig() so
+// minEnv() is sufficient to reach this path.
+func TestMain_FailsWhenHistoryEnabledInvalid(t *testing.T) {
+	env := minEnv()
+	env["HISTORY_ENABLED"] = "notabool"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid HISTORY_ENABLED; output=%s", out)
+	}
+	if !strings.Contains(out, "HISTORY_ENABLED") {
+		t.Errorf("expected 'HISTORY_ENABLED' in output, got: %s", out)
+	}
+}
+
+// TestMain_FailsWhenHistoryMaxEntriesInvalid verifies that the binary exits
+// and logs an error mentioning HISTORY_MAX_ENTRIES when the value is outside
+// the valid range [1, 100]. Requires minEnv() to reach LoadHistoryConfig.
+func TestMain_FailsWhenHistoryMaxEntriesInvalid(t *testing.T) {
+	env := minEnv()
+	env["HISTORY_MAX_ENTRIES"] = "0" // below min 1
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid HISTORY_MAX_ENTRIES; output=%s", out)
+	}
+	if !strings.Contains(out, "HISTORY_MAX_ENTRIES") {
+		t.Errorf("expected 'HISTORY_MAX_ENTRIES' in output, got: %s", out)
+	}
+}
+
+// TestMain_FailsWhenHistoryInjectPriorInvalid verifies that the binary exits
+// and logs an error mentioning HISTORY_INJECT_PRIOR when the env var is not a
+// valid boolean. Requires minEnv() to reach LoadHistoryConfig.
+func TestMain_FailsWhenHistoryInjectPriorInvalid(t *testing.T) {
+	env := minEnv()
+	env["HISTORY_INJECT_PRIOR"] = "notabool"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid HISTORY_INJECT_PRIOR; output=%s", out)
+	}
+	if !strings.Contains(out, "HISTORY_INJECT_PRIOR") {
+		t.Errorf("expected 'HISTORY_INJECT_PRIOR' in output, got: %s", out)
+	}
+}

@@ -128,6 +128,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Validate history config before any external I/O so misconfigurations
+	// are caught early and the error message is not buried after k8s/metrics init.
+	histCfg, err := shared.LoadHistoryConfig()
+	if err != nil {
+		slog.Error("history config", "error", err)
+		os.Exit(1)
+	}
+
 	k8sConfig, err := rest.InClusterConfig()
 	if err != nil {
 		slog.Error("k8s config failed", "error", err)
@@ -150,11 +158,6 @@ func main() {
 		"prefix", "alert_analyzer_*",
 		"product", shared.ProductK8s.String())
 
-	histCfg, err := shared.LoadHistoryConfig()
-	if err != nil {
-		slog.Error("history config", "error", err)
-		os.Exit(1)
-	}
 	history, err := shared.NewHistoryStore(histCfg, shared.ProductK8s, metrics)
 	if err != nil {
 		slog.Error("history store init failed", "error", err)
