@@ -2728,6 +2728,42 @@ func TestDenyReason(t *testing.T) {
 			}
 		}
 	})
+	t.Run("versioned package manager returns package-manager targeted message", func(t *testing.T) {
+		// pip3 and pip3.10 are versioned variants of "pip" — denied via the
+		// versioned-stripping heuristic. denyReason must give the same targeted
+		// message as unversioned "pip" (build-hook risk, dpkg/rpm alternatives)
+		// rather than the generic "versioned variant … use direct read-only
+		// diagnostic commands" which omits the relevant inspection alternatives.
+		for _, pm := range []string{"pip3", "pip3.10"} {
+			msg := denyReason(DefaultDeniedCommands, []string{pm, "install", "evil"})
+			if !strings.Contains(msg, "package manager") {
+				t.Errorf("%s: expected message to mention 'package manager'; got: %s", pm, msg)
+			}
+			hasAlternative := strings.Contains(msg, "dpkg") || strings.Contains(msg, "rpm")
+			if !hasAlternative {
+				t.Errorf("%s: expected message to suggest 'dpkg' or 'rpm' as alternative; got: %s", pm, msg)
+			}
+			if strings.Contains(msg, "use direct read-only diagnostic commands instead") {
+				t.Errorf("%s: expected message NOT to use generic versioned-variant phrasing; got: %s", pm, msg)
+			}
+		}
+	})
+	t.Run("versioned shell returns shell targeted -c message", func(t *testing.T) {
+		// ksh93 and bash5 are versioned variants of "ksh"/"bash" — denied via the
+		// versioned-stripping heuristic. denyReason must give the same targeted
+		// -c bypass message as the unversioned shell rather than the generic
+		// "versioned variant … use direct read-only diagnostic commands" which
+		// does not mention the -c bypass mechanism.
+		for _, shell := range []string{"ksh93", "bash5"} {
+			msg := denyReason(DefaultDeniedCommands, []string{shell, "-c", "rm -rf /"})
+			if !strings.Contains(msg, "-c") {
+				t.Errorf("%s: expected message to mention '-c' flag; got: %s", shell, msg)
+			}
+			if strings.Contains(msg, "use direct read-only diagnostic commands instead") {
+				t.Errorf("%s: expected message NOT to use generic versioned-variant phrasing; got: %s", shell, msg)
+			}
+		}
+	})
 }
 
 // TestIsDenied_BlocksProcessWrappers verifies that process execution wrappers

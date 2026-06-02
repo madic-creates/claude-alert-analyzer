@@ -919,13 +919,27 @@ func denyReason(denied map[string]bool, argv []string) string {
 	// digits that is itself explicitly denied (but whose base is not) must get
 	// the generic "not allowed" message, not a misleading "versioned variant of
 	// X" message for a base command that is not denied.
-	// The message intentionally omits a category label (e.g. "scripting
-	// interpreter") because the denylist covers both interpreters (bash, python)
-	// and non-interpreter tools (nc, curl, ssh). Calling nc6 a "scripting
-	// interpreter" would be inaccurate; a generic description covers all cases.
+	// When the base IS denied, emit a category-aware message matching the
+	// targeted guidance given to the unversioned name above (shell, interpreter,
+	// package manager). nc6, curl7, ssh-2.x etc. fall through to the generic
+	// "versioned variant" message — calling a network tool a "scripting
+	// interpreter" would be inaccurate; a generic description covers those cases.
 	base := strings.TrimRight(cmd, "0123456789.")
 	base = strings.TrimRight(base, "-") // mirror isDenied: also strip hyphen separator
 	if base != cmd && base != "" && denied[base] {
+		switch base {
+		case "bash", "sh", "dash", "zsh", "fish",
+			"tcsh", "csh", "ksh", "mksh", "ash":
+			return fmt.Sprintf("Command denied: %q is a versioned variant of the %q shell that accepts a -c flag to execute arbitrary commands, bypassing the command denylist; use individual read-only diagnostic commands directly instead (e.g. \"df -h\", \"ps aux\", \"journalctl -n 50\")", cmd, base)
+		case "python", "python2", "python3",
+			"perl", "ruby", "node", "nodejs",
+			"r", "rscript", "jshell", "groovy",
+			"lua", "tclsh", "wish", "php",
+			"awk", "gawk", "mawk", "nawk":
+			return fmt.Sprintf("Command denied: %q is a versioned variant of the %q scripting interpreter that can execute arbitrary commands via built-in system/exec primitives, bypassing the command denylist; use read-only diagnostic commands directly instead (e.g. \"ps aux\", \"df -h\", \"journalctl -n 50\")", cmd, base)
+		case "pip", "pipx", "npm", "npx", "yarn", "gem":
+			return fmt.Sprintf("Command denied: %q is a versioned variant of the %q package manager; all package managers are blocked because installation runs arbitrary code (build hooks, setup scripts); use OS-level read-only commands such as \"dpkg -l\" or \"rpm -qa\" to inspect installed packages instead", cmd, base)
+		}
 		return fmt.Sprintf("Command denied: %q is a versioned variant of %q which is blocked by the command denylist; use direct read-only diagnostic commands instead", cmd, base)
 	}
 
