@@ -812,6 +812,22 @@ func denyReason(denied map[string]bool, argv []string) string {
 		return fmt.Sprintf("Command denied: %q is a multi-call binary that can invoke any Unix utility as a subcommand (e.g. \"busybox rm\", \"busybox sh\", \"busybox wget\"), bypassing the command denylist; use individual read-only diagnostic commands directly instead (e.g. \"df -h\", \"free -m\", \"journalctl -n 50\")", cmd)
 	}
 
+	// Process execution wrappers are blocked because they can invoke any command as
+	// a child process, bypassing the command denylist (e.g. "nohup rm -rf /",
+	// "timeout 5 sh -c '...'", "strace rm"). The generic "destructive or privileged"
+	// label is inaccurate — they are blocked as denylist bypass vectors.
+	switch cmd {
+	case "nohup", "setsid",
+		"timeout", "watch",
+		"nice", "ionice",
+		"flock",
+		"strace", "ltrace",
+		"script",
+		"nsenter", "unshare", "chroot",
+		"expect":
+		return fmt.Sprintf("Command denied: %q executes another command as a child process, which could bypass the command denylist; use individual read-only diagnostic commands directly instead", cmd)
+	}
+
 	// mkfs.TYPE filesystem-specific formatting tool (e.g. mkfs.ext4, mkfs.btrfs,
 	// mkfs.xfs). isDenied blocks these when "mkfs" is in the denylist; give
 	// Claude a specific message so it understands why and does not retry with

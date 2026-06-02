@@ -2662,6 +2662,21 @@ func TestDenyReason(t *testing.T) {
 			t.Errorf("expected message NOT to use generic phrasing for busybox; got: %s", msg)
 		}
 	})
+	t.Run("process execution wrappers return targeted bypass message", func(t *testing.T) {
+		// nohup is representative of the full set (nohup, setsid, timeout, watch,
+		// nice, ionice, flock, strace, ltrace, script, nsenter, unshare, chroot, expect).
+		// Each executes another command as a child process, making it a denylist bypass
+		// vector — the message must explain that, not call it "destructive or privileged".
+		for _, wrapper := range []string{"nohup", "timeout", "strace", "nsenter", "expect"} {
+			msg := denyReason(DefaultDeniedCommands, []string{wrapper, "rm", "-rf", "/"})
+			if !strings.Contains(msg, "child process") {
+				t.Errorf("%s: expected message to mention 'child process'; got: %s", wrapper, msg)
+			}
+			if strings.Contains(msg, "destructive or privileged") {
+				t.Errorf("%s: expected message NOT to use generic phrasing; got: %s", wrapper, msg)
+			}
+		}
+	})
 }
 
 // TestIsDenied_BlocksProcessWrappers verifies that process execution wrappers
