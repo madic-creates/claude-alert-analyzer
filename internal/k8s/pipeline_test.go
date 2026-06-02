@@ -13,6 +13,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 )
 
 type publishCall struct {
@@ -1492,6 +1493,58 @@ func TestProcessAlert_RecordsHistoryLookupMetric(t *testing.T) {
 			}
 			if got := testutil.ToFloat64(prom.HistoryLookups.WithLabelValues("miss")); got != tc.wantMiss {
 				t.Errorf("HistoryLookups[miss] = %v, want %v", got, tc.wantMiss)
+			}
+		})
+	}
+}
+
+// TestProcessAlert_ObservesRecurrenceCount verifies that ObserveRecurrence is
+// called with the correct count from ProcessAlert. count=0 and count=1 must
+// not record a histogram observation; count>1 must record exactly one
+// observation whose sum equals the count.
+func TestProcessAlert_ObservesRecurrenceCount(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		count      int
+		wantSample uint64
+		wantSum    float64
+	}{
+		{"count=0 (no lookup)", 0, 0, 0},
+		{"count=1 (first fire)", 1, 0, 0},
+		{"count=3 (recurrence)", 3, 1, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prom := shared.NewPrometheusMetricsForTest(shared.ProductK8s)
+			metrics := shared.NewAlertMetrics(prom)
+			history := &fakeHistoryStore{
+				view: shared.HistoryView{Count: tc.count},
+			}
+			deps := PipelineDeps{
+				ToolRunner:    &fakeToolLoopRunner{driver: func(_ func(string, json.RawMessage) (string, error)) (string, error) { return "ok", nil }},
+				KubectlRunner: &fakeKubectlRunner{},
+				Prom:          &fakePromQLQuerier{},
+				Publishers:    []shared.Publisher{&mockPublisher{}},
+				Cooldown:      shared.NewCooldownManager(),
+				Metrics:       metrics,
+				Policy:        &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 1},
+				GatherContext: func(context.Context, shared.AlertPayload) shared.AnalysisContext { return shared.AnalysisContext{} },
+				History:       history,
+			}
+
+			ProcessAlert(context.Background(), deps, shared.AlertPayload{
+				Fingerprint: "fp-recurrence",
+				Fields:      map[string]string{},
+			})
+
+			var m dto.Metric
+			if err := prom.HistoryRecurrence.Write(&m); err != nil {
+				t.Fatalf("HistoryRecurrence.Write: %v", err)
+			}
+			if got := m.Histogram.GetSampleCount(); got != tc.wantSample {
+				t.Errorf("HistoryRecurrence sample count = %d, want %d", got, tc.wantSample)
+			}
+			if got := m.Histogram.GetSampleSum(); got != tc.wantSum {
+				t.Errorf("HistoryRecurrence sample sum = %v, want %v", got, tc.wantSum)
 			}
 		})
 	}
