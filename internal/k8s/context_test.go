@@ -1207,6 +1207,28 @@ func TestGetMetrics_OOMAlertname(t *testing.T) {
 	}
 }
 
+// TestGetMetrics_ThrottlingAlertname verifies that CPU throttling alerts route
+// to the "CPU Throttling" section (throttled/total CFS periods ratio) rather
+// than the generic "Top CPU Consumers" section. CPUThrottlingHigh contains
+// "cpu" as a prefix, so the throttl branch must be ordered before the cpu
+// branch to prevent incorrect routing.
+func TestGetMetrics_ThrottlingAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"CPUThrottlingHigh", "ContainerCPUThrottling"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "CPU Throttling") {
+			t.Errorf("alert %q: expected CPU Throttling section, got %q", name, result)
+		}
+		if strings.Contains(result, "Top CPU Consumers") {
+			t.Errorf("alert %q: must not route to cpu branch (name contains \"cpu\"); got Top CPU Consumers", name)
+		}
+	}
+}
+
 func TestGetMetrics_CPUAlertname(t *testing.T) {
 	srv := makePromServer(t, []PromResult{})
 	defer srv.Close()

@@ -232,6 +232,11 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	case strings.Contains(lower, "memory") || strings.Contains(lower, "oom"):
 		alertnameSectionName = "\n## Top Memory Consumers"
 		alertnameQueryStr = `topk(5, sum(container_memory_working_set_bytes) by (namespace, pod))`
+	case strings.Contains(lower, "throttl"):
+		// Must precede cpu branch: CPUThrottlingHigh contains "cpu" and would
+		// otherwise route to Top CPU Consumers instead of the throttling ratio.
+		alertnameSectionName = "\n## CPU Throttling"
+		alertnameQueryStr = `sum(rate(container_cpu_cfs_throttled_seconds_total[5m])) by (pod, namespace) / sum(rate(container_cpu_cfs_periods_total[5m])) by (pod, namespace) > 0.25`
 	case strings.Contains(lower, "cpu"):
 		alertnameSectionName = "\n## Top CPU Consumers"
 		alertnameQueryStr = `topk(5, sum(rate(container_cpu_usage_seconds_total[5m])) by (namespace, pod))`
