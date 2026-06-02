@@ -140,6 +140,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Validate history config before any external I/O so misconfigurations
+	// are caught early and the error message is not buried after metrics init.
+	histCfg, err := shared.LoadHistoryConfig()
+	if err != nil {
+		slog.Error("history config", "error", err)
+		os.Exit(1)
+	}
+
 	prom, err := shared.NewPrometheusMetrics(shared.ProductCheckMK)
 	if err != nil {
 		slog.Error("metrics init failed", "error", err)
@@ -150,11 +158,6 @@ func main() {
 	slog.Info("metrics initialized",
 		"prefix", "alert_analyzer_*",
 		"product", shared.ProductCheckMK.String())
-	histCfg, err := shared.LoadHistoryConfig()
-	if err != nil {
-		slog.Error("history config", "error", err)
-		os.Exit(1)
-	}
 	history, err := shared.NewHistoryStore(histCfg, shared.ProductCheckMK, metrics)
 	if err != nil {
 		slog.Error("history store init failed", "error", err)
