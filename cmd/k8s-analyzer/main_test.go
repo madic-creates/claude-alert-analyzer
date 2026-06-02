@@ -125,6 +125,38 @@ func TestMain_FailsWhenCircuitBreakerNotifyIntervalInvalid(t *testing.T) {
 	}
 }
 
+// TestMain_FailsWhenStormModeNotifyIntervalNegative verifies that a negative
+// STORM_MODE_NOTIFY_INTERVAL is rejected at startup. A negative duration is a
+// valid Go duration string but LoadStormProtectionConfig rejects values <= 0.
+// Mirrors TestMain_FailsWhenKubeAPITimeoutNegative for the notify-interval path.
+func TestMain_FailsWhenStormModeNotifyIntervalNegative(t *testing.T) {
+	env := minEnv()
+	env["STORM_MODE_NOTIFY_INTERVAL"] = "-1s"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for negative STORM_MODE_NOTIFY_INTERVAL; output=%s", out)
+	}
+	if !strings.Contains(out, "STORM_MODE_NOTIFY_INTERVAL") {
+		t.Errorf("expected 'STORM_MODE_NOTIFY_INTERVAL' in output, got: %s", out)
+	}
+}
+
+// TestMain_FailsWhenCircuitBreakerNotifyIntervalNegative verifies that a
+// negative CIRCUIT_BREAKER_NOTIFY_INTERVAL is rejected at startup. A negative
+// duration is a valid Go duration string but LoadStormProtectionConfig rejects
+// values <= 0.
+func TestMain_FailsWhenCircuitBreakerNotifyIntervalNegative(t *testing.T) {
+	env := minEnv()
+	env["CIRCUIT_BREAKER_NOTIFY_INTERVAL"] = "-30s"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for negative CIRCUIT_BREAKER_NOTIFY_INTERVAL; output=%s", out)
+	}
+	if !strings.Contains(out, "CIRCUIT_BREAKER_NOTIFY_INTERVAL") {
+		t.Errorf("expected 'CIRCUIT_BREAKER_NOTIFY_INTERVAL' in output, got: %s", out)
+	}
+}
+
 // TestMain_FailsWhenCircuitBreakerThresholdInvalid verifies that the binary
 // exits and logs an error mentioning CIRCUIT_BREAKER_THRESHOLD when the value
 // exceeds the valid range [0, 100]. The threshold is a failure-count window,
