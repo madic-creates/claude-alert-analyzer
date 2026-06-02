@@ -51,9 +51,9 @@ func LoadStormProtectionConfig() (StormProtectionConfig, error) {
 	if err != nil {
 		return StormProtectionConfig{}, err
 	}
-	stormNotifyInterval, err := time.ParseDuration(EnvOrDefault("STORM_MODE_NOTIFY_INTERVAL", "60s"))
+	stormNotifyInterval, err := ParseDurationEnv("STORM_MODE_NOTIFY_INTERVAL", 60*time.Second)
 	if err != nil {
-		return StormProtectionConfig{}, fmt.Errorf("invalid STORM_MODE_NOTIFY_INTERVAL: %w", err)
+		return StormProtectionConfig{}, err
 	}
 	// NewNotifyAggregator short-circuits to nil when interval <= 0, which would
 	// silently drop every storm-mode notification at runtime without any startup
@@ -61,14 +61,14 @@ func LoadStormProtectionConfig() (StormProtectionConfig, error) {
 	// with a clear message — matching the min=1 bound applied to the integer-
 	// second env vars (CIRCUIT_BREAKER_OPEN_SECONDS, CIRCUIT_BREAKER_MAX_PROBE_SECONDS).
 	if stormNotifyInterval <= 0 {
-		return StormProtectionConfig{}, fmt.Errorf("invalid STORM_MODE_NOTIFY_INTERVAL: must be positive, got %v", stormNotifyInterval)
+		return StormProtectionConfig{}, fmt.Errorf("STORM_MODE_NOTIFY_INTERVAL: must be positive, got %v", stormNotifyInterval)
 	}
-	breakerNotifyInterval, err := time.ParseDuration(EnvOrDefault("CIRCUIT_BREAKER_NOTIFY_INTERVAL", "300s"))
+	breakerNotifyInterval, err := ParseDurationEnv("CIRCUIT_BREAKER_NOTIFY_INTERVAL", 300*time.Second)
 	if err != nil {
-		return StormProtectionConfig{}, fmt.Errorf("invalid CIRCUIT_BREAKER_NOTIFY_INTERVAL: %w", err)
+		return StormProtectionConfig{}, err
 	}
 	if breakerNotifyInterval <= 0 {
-		return StormProtectionConfig{}, fmt.Errorf("invalid CIRCUIT_BREAKER_NOTIFY_INTERVAL: must be positive, got %v", breakerNotifyInterval)
+		return StormProtectionConfig{}, fmt.Errorf("CIRCUIT_BREAKER_NOTIFY_INTERVAL: must be positive, got %v", breakerNotifyInterval)
 	}
 	return StormProtectionConfig{
 		BreakerThreshold:      breakerThreshold,
