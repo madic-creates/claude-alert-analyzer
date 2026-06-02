@@ -803,6 +803,13 @@ func denyReason(denied map[string]bool, argv []string) string {
 		// front-ends (pip, npm, gem, etc.) are blocked; use OS-level read-only
 		// commands (dpkg -l, rpm -qa) to inspect installed packages instead.
 		return fmt.Sprintf("Command denied: %q is a package manager; all package managers are blocked because installation runs arbitrary code (build hooks, setup scripts); use OS-level read-only commands such as \"dpkg -l\" or \"dpkg -l <name>\" (Debian/Ubuntu) or \"rpm -qa\" or \"rpm -qi <name>\" (RHEL/CentOS) to inspect installed packages instead", cmd)
+
+	case "busybox":
+		// busybox is a multi-call binary that can invoke any Unix utility as a
+		// subcommand (e.g. "busybox rm -rf /", "busybox sh -c '...'"), bypassing
+		// the command denylist. The generic message is misleading (busybox is not
+		// inherently destructive); explain the multi-call bypass risk instead.
+		return fmt.Sprintf("Command denied: %q is a multi-call binary that can invoke any Unix utility as a subcommand (e.g. \"busybox rm\", \"busybox sh\", \"busybox wget\"), bypassing the command denylist; use individual read-only diagnostic commands directly instead (e.g. \"df -h\", \"free -m\", \"journalctl -n 50\")", cmd)
 	}
 
 	// mkfs.TYPE filesystem-specific formatting tool (e.g. mkfs.ext4, mkfs.btrfs,

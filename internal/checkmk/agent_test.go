@@ -2647,6 +2647,21 @@ func TestDenyReason(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("busybox returns targeted multi-call binary message", func(t *testing.T) {
+		msg := denyReason(DefaultDeniedCommands, []string{"busybox", "rm", "-rf", "/"})
+		if !strings.Contains(msg, "multi-call") {
+			t.Errorf("expected message to mention 'multi-call'; got: %s", msg)
+		}
+		if !strings.Contains(msg, "busybox") {
+			t.Errorf("expected message to name 'busybox'; got: %s", msg)
+		}
+		// Must NOT use the generic "destructive or privileged" phrasing — busybox is
+		// blocked as a denylist bypass vector, not because it is inherently destructive.
+		if strings.Contains(msg, "destructive or privileged") {
+			t.Errorf("expected message NOT to use generic phrasing for busybox; got: %s", msg)
+		}
+	})
 }
 
 // TestIsDenied_BlocksProcessWrappers verifies that process execution wrappers
