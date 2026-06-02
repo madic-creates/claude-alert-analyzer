@@ -97,8 +97,8 @@ func TestQuery_FailedToParseResponse(t *testing.T) {
 
 	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
 	result := prom.queryForPrompt(context.Background(), "up")
-	if result != "(failed to parse response)" {
-		t.Errorf("expected '(failed to parse response)', got: %s", result)
+	if !strings.Contains(result, "failed to parse response") {
+		t.Errorf("expected string containing 'failed to parse response', got: %s", result)
 	}
 }
 

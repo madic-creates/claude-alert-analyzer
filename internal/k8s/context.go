@@ -3,7 +3,6 @@ package k8s
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -84,7 +83,7 @@ func (p *PrometheusClient) query(ctx context.Context, queryStr string) (string, 
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, shared.MaxResponseBytes))
 	if err != nil {
-		return "", errors.New("failed to read response")
+		return "", fmt.Errorf("failed to read response: %w", err)
 	}
 	// If the actual body exceeds MaxResponseBytes, ReadAll stops at the limit
 	// and leaves the tail unread. Closing without consuming the rest prevents
@@ -97,7 +96,7 @@ func (p *PrometheusClient) query(ctx context.Context, queryStr string) (string, 
 
 	var result PromQueryResponse
 	if err := json.Unmarshal(body, &result); err != nil {
-		return "", errors.New("failed to parse response")
+		return "", fmt.Errorf("failed to parse response: %w", err)
 	}
 	if result.Status != "success" {
 		if result.Error != "" {
