@@ -2664,10 +2664,11 @@ func TestDenyReason(t *testing.T) {
 	})
 	t.Run("process execution wrappers return targeted bypass message", func(t *testing.T) {
 		// nohup is representative of the full set (nohup, setsid, timeout, watch,
-		// nice, ionice, flock, strace, ltrace, script, nsenter, unshare, chroot, expect).
-		// Each executes another command as a child process, making it a denylist bypass
-		// vector — the message must explain that, not call it "destructive or privileged".
-		for _, wrapper := range []string{"nohup", "timeout", "strace", "nsenter", "expect"} {
+		// nice, ionice, flock, strace, ltrace, script, nsenter, unshare, chroot, expect,
+		// valgrind, env, xargs). Each executes another command as a child process,
+		// making it a denylist bypass vector — the message must explain that, not call
+		// it "destructive or privileged".
+		for _, wrapper := range []string{"nohup", "timeout", "strace", "nsenter", "expect", "valgrind", "env", "xargs"} {
 			msg := denyReason(DefaultDeniedCommands, []string{wrapper, "rm", "-rf", "/"})
 			if !strings.Contains(msg, "child process") {
 				t.Errorf("%s: expected message to mention 'child process'; got: %s", wrapper, msg)
@@ -2675,6 +2676,28 @@ func TestDenyReason(t *testing.T) {
 			if strings.Contains(msg, "destructive or privileged") {
 				t.Errorf("%s: expected message NOT to use generic phrasing; got: %s", wrapper, msg)
 			}
+		}
+	})
+	t.Run("debuggers return targeted shell-escape message", func(t *testing.T) {
+		// gdb/lldb/cgdb expose a built-in shell-escape that bypasses the denylist;
+		// the message must name that capability, not use the generic "destructive or privileged" phrasing.
+		for _, dbg := range []string{"gdb", "lldb", "cgdb"} {
+			msg := denyReason(DefaultDeniedCommands, []string{dbg, "-ex", "shell rm -rf /"})
+			if !strings.Contains(msg, "shell") {
+				t.Errorf("%s: expected message to mention 'shell'; got: %s", dbg, msg)
+			}
+			if strings.Contains(msg, "destructive or privileged") {
+				t.Errorf("%s: expected message NOT to use generic phrasing; got: %s", dbg, msg)
+			}
+		}
+	})
+	t.Run("gdbserver returns targeted remote-access message", func(t *testing.T) {
+		msg := denyReason(DefaultDeniedCommands, []string{"gdbserver", ":1234", "myprocess"})
+		if !strings.Contains(msg, "remote") {
+			t.Errorf("gdbserver: expected message to mention 'remote'; got: %s", msg)
+		}
+		if strings.Contains(msg, "destructive or privileged") {
+			t.Errorf("gdbserver: expected message NOT to use generic phrasing; got: %s", msg)
 		}
 	})
 }

@@ -814,8 +814,9 @@ func denyReason(denied map[string]bool, argv []string) string {
 
 	// Process execution wrappers are blocked because they can invoke any command as
 	// a child process, bypassing the command denylist (e.g. "nohup rm -rf /",
-	// "timeout 5 sh -c '...'", "strace rm"). The generic "destructive or privileged"
-	// label is inaccurate — they are blocked as denylist bypass vectors.
+	// "timeout 5 sh -c '...'", "strace rm", "env rm -rf /", "valgrind /bin/sh").
+	// The generic "destructive or privileged" label is inaccurate — they are blocked
+	// as denylist bypass vectors.
 	switch cmd {
 	case "nohup", "setsid",
 		"timeout", "watch",
@@ -824,8 +825,23 @@ func denyReason(denied map[string]bool, argv []string) string {
 		"strace", "ltrace",
 		"script",
 		"nsenter", "unshare", "chroot",
-		"expect":
+		"expect",
+		"valgrind",
+		"env", "xargs":
 		return fmt.Sprintf("Command denied: %q executes another command as a child process, which could bypass the command denylist; use individual read-only diagnostic commands directly instead", cmd)
+	}
+
+	// Debuggers expose a built-in shell-escape (e.g. gdb -ex 'shell CMD',
+	// lldb -o 'platform shell CMD') that executes an arbitrary child process,
+	// effectively the same denylist bypass as bash/python/env. gdbserver opens
+	// a TCP/Unix debug port that allows a remote client to control process
+	// execution. The generic "destructive or privileged" label is inaccurate for
+	// all four — they are blocked because of their remote/shell-escape capabilities.
+	switch cmd {
+	case "gdb", "lldb", "cgdb":
+		return fmt.Sprintf("Command denied: %q is a debugger with a built-in shell-escape (e.g. gdb -ex 'shell CMD') that can execute arbitrary child processes, bypassing the command denylist; use read-only diagnostic tools such as \"pstack\", \"strace -p\", or \"/proc/<pid>/maps\" directly instead", cmd)
+	case "gdbserver":
+		return fmt.Sprintf("Command denied: %q opens a remote debug port that allows an external client to control process execution on the host; it is blocked to prevent unauthorized remote access", cmd)
 	}
 
 	// mkfs.TYPE filesystem-specific formatting tool (e.g. mkfs.ext4, mkfs.btrfs,
