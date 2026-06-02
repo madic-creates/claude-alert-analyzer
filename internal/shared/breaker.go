@@ -184,6 +184,8 @@ func (b *CircuitBreaker) recordResult(p *Permit, err error) {
 	if b.consecFailures >= b.threshold {
 		b.state = breakerOpen
 		b.openedAt = b.now()
+		slog.Warn("circuit breaker: opened after consecutive failures",
+			"threshold", b.threshold, "consecFailures", b.consecFailures)
 	}
 }
 

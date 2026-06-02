@@ -549,6 +549,57 @@ func TestCircuitBreaker_ProbeWatchdogLogsWarn(t *testing.T) {
 	}
 }
 
+// TestCircuitBreaker_ThresholdOpenLogsWarn verifies that when consecutive
+// failures reach the threshold and the breaker opens, a slog.Warn is emitted
+// naming the threshold and failure count. Parallel to the probe-watchdog warn
+// emitted by Acquire: operators see both kinds of open transition in logs, not
+// just the gauge flip in metrics.
+func TestCircuitBreaker_ThresholdOpenLogsWarn(t *testing.T) {
+	var buf bytes.Buffer
+	handler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	old := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	clk := &fakeClock{t: time.Unix(0, 0)}
+	b := NewCircuitBreaker(2, time.Minute, time.Minute, clk.Now)
+
+	// First failure: below threshold, no warn expected.
+	p, _ := b.Acquire()
+	p.Done(errors.New("fail 1"))
+	if strings.Contains(buf.String(), "opened after consecutive failures") {
+		t.Fatal("expected no warn before threshold is reached")
+	}
+
+	// Second failure: reaches threshold=2, warn must fire.
+	p, _ = b.Acquire()
+	p.Done(errors.New("fail 2"))
+
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		if json.Unmarshal([]byte(line), &rec) != nil {
+			continue
+		}
+		if rec["msg"] != "circuit breaker: opened after consecutive failures" {
+			continue
+		}
+		found = true
+		if got := rec["threshold"]; got != float64(2) {
+			t.Errorf("threshold = %v, want 2", got)
+		}
+		if got := rec["consecFailures"]; got != float64(2) {
+			t.Errorf("consecFailures = %v, want 2", got)
+		}
+	}
+	if !found {
+		t.Errorf("no threshold-open slog warn found; log output:\n%s", buf.String())
+	}
+}
+
 // TestCircuitBreaker_NilNowDefaultsToTimeNow verifies that passing nil for
 // the now func does not panic and produces a functional breaker.
 func TestCircuitBreaker_NilNowDefaultsToTimeNow(t *testing.T) {
