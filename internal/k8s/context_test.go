@@ -1496,6 +1496,22 @@ func TestGetMetrics_ProxyAlertname(t *testing.T) {
 	}
 }
 
+// TestGetMetrics_KubeletAlertname verifies that alert names containing "kubelet"
+// emit the Kubelet Pod Capacity section.
+func TestGetMetrics_KubeletAlertname(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, name := range []string{"KubeletTooManyPods", "KubeletPlegDurationHigh"} {
+		alert := makeAlertWithLabels(map[string]string{"alertname": name})
+		result := prom.GetMetrics(context.Background(), alert)
+		if !strings.Contains(result, "Kubelet Pod Capacity") {
+			t.Errorf("alert %q: expected Kubelet Pod Capacity section, got %q", name, result)
+		}
+	}
+}
+
 // TestGetMetrics_PodAlertname verifies that alert names containing "pod" but not
 // matching any earlier branch (e.g. KubePodNotReady) emit the Non-Running Pods
 // section. KubePodCrashLooping is deliberately excluded from the table: it

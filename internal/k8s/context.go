@@ -224,6 +224,11 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 		// alerts incorrectly route to PVC usage or container memory consumers.
 		alertnameSectionName = "\n## Node Pressure Conditions"
 		alertnameQueryStr = `kube_node_status_condition{condition=~"DiskPressure|MemoryPressure|PIDPressure",status="true"}`
+	case strings.Contains(lower, "kubelet"):
+		// Must precede memory/oom branch: KubeletTooManyPods contains "oom" (T-o-o-M)
+		// as a substring, which would incorrectly route to the memory consumers query.
+		alertnameSectionName = "\n## Kubelet Pod Capacity"
+		alertnameQueryStr = `kubelet_running_pods / kube_node_status_allocatable{resource="pods"}`
 	case strings.Contains(lower, "memory") || strings.Contains(lower, "oom"):
 		alertnameSectionName = "\n## Top Memory Consumers"
 		alertnameQueryStr = `topk(5, sum(container_memory_working_set_bytes) by (namespace, pod))`
