@@ -144,6 +144,25 @@ func minEnvWithAuth() map[string]string {
 	return env
 }
 
+// TestMain_FailsWhenMaxAgentRoundsInvalid verifies that the binary exits and
+// logs an error mentioning MAX_AGENT_ROUNDS when the value is outside the valid
+// range [1, 50]. LoadPolicy is called in main() after loadConfig() so the
+// minimum auth env (minEnvWithAuth) must be provided to reach this validation.
+// MAX_AGENT_ROUNDS=0 is below the minimum (1 round = at least one tool loop);
+// the binary must fail fast rather than silently skipping agentic analysis
+// without operator awareness.
+func TestMain_FailsWhenMaxAgentRoundsInvalid(t *testing.T) {
+	env := minEnvWithAuth()
+	env["MAX_AGENT_ROUNDS"] = "0" // below min 1
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for invalid MAX_AGENT_ROUNDS; output=%s", out)
+	}
+	if !strings.Contains(out, "MAX_AGENT_ROUNDS") {
+		t.Errorf("expected 'MAX_AGENT_ROUNDS' in output, got: %s", out)
+	}
+}
+
 // TestMain_FailsWhenCircuitBreakerThresholdInvalid verifies that the binary
 // exits and logs an error mentioning CIRCUIT_BREAKER_THRESHOLD when the value
 // exceeds the valid range [0, 100]. The threshold is a failure-count window,
