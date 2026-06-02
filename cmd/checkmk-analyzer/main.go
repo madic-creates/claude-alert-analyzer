@@ -67,6 +67,10 @@ func loadConfig() checkmk.Config {
 			slog.Error("invalid CHECKMK_API_TIMEOUT", "error", err)
 			os.Exit(1)
 		}
+		if checkmkAPITimeout < 0 {
+			slog.Error("invalid CHECKMK_API_TIMEOUT", "error", "must be positive")
+			os.Exit(1)
+		}
 	}
 
 	// SSH_DENIED_COMMANDS: not set = default denylist, empty = no guardrails, value = custom list

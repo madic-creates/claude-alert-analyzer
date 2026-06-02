@@ -188,6 +188,22 @@ func TestMain_FailsWhenKubeAPITimeoutInvalid(t *testing.T) {
 	}
 }
 
+// TestMain_FailsWhenKubeAPITimeoutNegative verifies that a negative
+// KUBE_API_TIMEOUT is rejected at startup. A negative duration is a valid Go
+// duration string but creates an already-expired context, causing all Kubernetes
+// API calls to fail immediately with context.DeadlineExceeded.
+func TestMain_FailsWhenKubeAPITimeoutNegative(t *testing.T) {
+	env := minEnv()
+	env["KUBE_API_TIMEOUT"] = "-1s"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for negative KUBE_API_TIMEOUT; output=%s", out)
+	}
+	if !strings.Contains(out, "KUBE_API_TIMEOUT") {
+		t.Errorf("expected 'KUBE_API_TIMEOUT' in output, got: %s", out)
+	}
+}
+
 // TestMain_FailsWhenPromTimeoutInvalid verifies that the binary exits and logs
 // an error mentioning PROM_TIMEOUT when the env var is not a valid Go duration
 // string.
@@ -197,6 +213,22 @@ func TestMain_FailsWhenPromTimeoutInvalid(t *testing.T) {
 	exit, out := runMainWithEnv(t, env)
 	if exit == 0 {
 		t.Fatalf("expected non-zero exit for invalid PROM_TIMEOUT; output=%s", out)
+	}
+	if !strings.Contains(out, "PROM_TIMEOUT") {
+		t.Errorf("expected 'PROM_TIMEOUT' in output, got: %s", out)
+	}
+}
+
+// TestMain_FailsWhenPromTimeoutNegative verifies that a negative PROM_TIMEOUT
+// is rejected at startup. A negative duration is a valid Go duration string but
+// creates an already-expired context, causing all Prometheus API calls to fail
+// immediately with context.DeadlineExceeded.
+func TestMain_FailsWhenPromTimeoutNegative(t *testing.T) {
+	env := minEnv()
+	env["PROM_TIMEOUT"] = "-1s"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for negative PROM_TIMEOUT; output=%s", out)
 	}
 	if !strings.Contains(out, "PROM_TIMEOUT") {
 		t.Errorf("expected 'PROM_TIMEOUT' in output, got: %s", out)

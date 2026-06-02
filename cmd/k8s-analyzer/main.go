@@ -62,12 +62,20 @@ func loadConfig() k8s.Config {
 			slog.Error("invalid KUBE_API_TIMEOUT", "error", err)
 			os.Exit(1)
 		}
+		if kubeAPITimeout < 0 {
+			slog.Error("invalid KUBE_API_TIMEOUT", "error", "must be positive")
+			os.Exit(1)
+		}
 	}
 	var promTimeout time.Duration
 	if v := os.Getenv("PROM_TIMEOUT"); v != "" {
 		promTimeout, err = time.ParseDuration(v)
 		if err != nil {
 			slog.Error("invalid PROM_TIMEOUT", "error", err)
+			os.Exit(1)
+		}
+		if promTimeout < 0 {
+			slog.Error("invalid PROM_TIMEOUT", "error", "must be positive")
 			os.Exit(1)
 		}
 	}

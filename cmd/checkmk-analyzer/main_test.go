@@ -256,6 +256,22 @@ func TestMain_FailsWhenCheckmkAPITimeoutInvalid(t *testing.T) {
 	}
 }
 
+// TestMain_FailsWhenCheckmkAPITimeoutNegative verifies that a negative
+// CHECKMK_API_TIMEOUT is rejected at startup. A negative duration is a valid Go
+// duration string but creates an already-expired context, causing all CheckMK
+// API calls to fail immediately with context.DeadlineExceeded.
+func TestMain_FailsWhenCheckmkAPITimeoutNegative(t *testing.T) {
+	env := minEnvWithAuth()
+	env["CHECKMK_API_TIMEOUT"] = "-1s"
+	exit, out := runMainWithEnv(t, env)
+	if exit == 0 {
+		t.Fatalf("expected non-zero exit for negative CHECKMK_API_TIMEOUT; output=%s", out)
+	}
+	if !strings.Contains(out, "CHECKMK_API_TIMEOUT") {
+		t.Errorf("expected 'CHECKMK_API_TIMEOUT' in output, got: %s", out)
+	}
+}
+
 // TestMain_FailsWhenSSHEnabledInvalid verifies that the binary exits and logs
 // an error mentioning SSH_ENABLED when the env var is not a valid boolean.
 // SSH_ENABLED is validated after the auth check in loadConfig(), so the minimum
