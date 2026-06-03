@@ -596,6 +596,49 @@ func TestLoadConfig_MaxLogBytesIsPreserved(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_PortAndMetricsPortArePreserved verifies that PORT and
+// METRICS_PORT map to the correct Config fields and that their defaults differ.
+// The two fields are adjacent string assignments in the loadConfig return
+// literal; a copy-paste swap would silently bind the webhook server to port
+// 9101 and the metrics endpoint to port 8080, reversing the roles that
+// Kubernetes liveness/readiness probes and Prometheus scrape configs expect.
+// The default values are also tested explicitly because an operator who does not
+// set either var relies on the EnvOrDefault fallback strings being correct.
+func TestLoadConfig_PortAndMetricsPortArePreserved(t *testing.T) {
+	t.Run("defaults are correct when PORT and METRICS_PORT are unset", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("PORT", "")
+		os.Unsetenv("PORT")
+		t.Setenv("METRICS_PORT", "")
+		os.Unsetenv("METRICS_PORT")
+
+		cfg := loadConfig()
+		if cfg.Port != "8080" {
+			t.Errorf("Port = %q, want %q (default when PORT unset)", cfg.Port, "8080")
+		}
+		if cfg.MetricsPort != "9101" {
+			t.Errorf("MetricsPort = %q, want %q (default when METRICS_PORT unset)", cfg.MetricsPort, "9101")
+		}
+		if cfg.Port == cfg.MetricsPort {
+			t.Errorf("Port and MetricsPort must have distinct defaults, both = %q", cfg.Port)
+		}
+	})
+
+	t.Run("overrides are preserved and assigned to the correct field", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("PORT", "9000")
+		t.Setenv("METRICS_PORT", "9200")
+
+		cfg := loadConfig()
+		if cfg.Port != "9000" {
+			t.Errorf("Port = %q, want %q", cfg.Port, "9000")
+		}
+		if cfg.MetricsPort != "9200" {
+			t.Errorf("MetricsPort = %q, want %q", cfg.MetricsPort, "9200")
+		}
+	})
+}
+
 // TestLoadConfig_ClaudeModelIsPreserved verifies that CLAUDE_MODEL is stored in
 // Config.ClaudeModel and that the default "claude-sonnet-4-6" is used when the
 // env var is unset. ClaudeModel is passed to every Claude API call — a wrong
