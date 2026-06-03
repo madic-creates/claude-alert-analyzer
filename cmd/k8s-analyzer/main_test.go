@@ -563,19 +563,34 @@ func TestLoadConfig_AuthTokenPathPreservesToken(t *testing.T) {
 }
 
 // TestLoadConfig_PrometheusURLIsPreserved verifies that PROMETHEUS_URL is stored
-// in Config.PrometheusURL when set to a non-empty value. PrometheusURL is the
-// base URL for every PromQL query in GatherContext; if the field were silently
-// dropped or swapped with another string field, all Prometheus-based context
-// gathering would silently fail against the wrong endpoint, producing empty
-// metrics sections without any config-time error.
+// in Config.PrometheusURL. PrometheusURL is the base URL for every PromQL query
+// in GatherContext; if the field were silently dropped or swapped with another
+// string field, all Prometheus-based context gathering would silently fail
+// against the wrong endpoint, producing empty metrics sections without any
+// config-time error.
 func TestLoadConfig_PrometheusURLIsPreserved(t *testing.T) {
-	setLoadConfigEnv(t)
-	t.Setenv("PROMETHEUS_URL", "http://prometheus.example.com:9090")
+	t.Run("defaults to cluster-internal URL when PROMETHEUS_URL is unset", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("PROMETHEUS_URL", "")
+		os.Unsetenv("PROMETHEUS_URL")
 
-	cfg := loadConfig()
-	if cfg.PrometheusURL != "http://prometheus.example.com:9090" {
-		t.Errorf("PrometheusURL = %q, want %q", cfg.PrometheusURL, "http://prometheus.example.com:9090")
-	}
+		cfg := loadConfig()
+		const want = "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
+		if cfg.PrometheusURL != want {
+			t.Errorf("PrometheusURL = %q, want %q", cfg.PrometheusURL, want)
+		}
+	})
+
+	t.Run("custom URL is preserved when PROMETHEUS_URL is set", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		const custom = "http://prometheus.example.com:9090"
+		t.Setenv("PROMETHEUS_URL", custom)
+
+		cfg := loadConfig()
+		if cfg.PrometheusURL != custom {
+			t.Errorf("PrometheusURL = %q, want %q", cfg.PrometheusURL, custom)
+		}
+	})
 }
 
 // TestLoadConfig_MaxLogBytesIsPreserved verifies that MAX_LOG_BYTES is stored
