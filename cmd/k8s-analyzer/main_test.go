@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 // runMainWithEnv builds and runs the k8s-analyzer binary with the given env
@@ -525,5 +526,24 @@ func TestLoadConfig_SkipResolvedCanBeDisabled(t *testing.T) {
 	cfg := loadConfig()
 	if cfg.SkipResolved {
 		t.Errorf("SkipResolved = true, want false when SKIP_RESOLVED=false")
+	}
+}
+
+// TestLoadConfig_TimeoutsArePreserved verifies that KUBE_API_TIMEOUT and
+// PROM_TIMEOUT are stored in the correct Config fields when set to valid
+// positive durations. A field-swapped or dropped assignment would silently
+// cause context gatherers to use the wrong deadline, exposing the
+// misconfiguration only at runtime against a slow API server or Prometheus.
+func TestLoadConfig_TimeoutsArePreserved(t *testing.T) {
+	setLoadConfigEnv(t)
+	t.Setenv("KUBE_API_TIMEOUT", "45s")
+	t.Setenv("PROM_TIMEOUT", "20s")
+
+	cfg := loadConfig()
+	if cfg.KubeAPITimeout != 45*time.Second {
+		t.Errorf("KubeAPITimeout = %v, want %v", cfg.KubeAPITimeout, 45*time.Second)
+	}
+	if cfg.PromTimeout != 20*time.Second {
+		t.Errorf("PromTimeout = %v, want %v", cfg.PromTimeout, 20*time.Second)
 	}
 }
