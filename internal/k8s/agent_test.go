@@ -184,6 +184,10 @@ func TestParseKubectlInput_VerbAllowlist(t *testing.T) {
 		// (its integer value token was treated as the sub-verb, causing
 		// "kubectl rollout 5 is not permitted").
 		`["rollout","--revision","5","history","deployment/foo"]`,
+		// --revision=N (equals form) embeds the value in the flag token itself;
+		// the next token ("history") is the sub-verb, not the revision value.
+		// Mirrors the space-separated form above to verify both argv shapes work.
+		`["rollout","--revision=5","history","deployment/foo"]`,
 	}
 	for _, c := range allowed {
 		t.Run("allowed:"+c, func(t *testing.T) {
@@ -1123,6 +1127,23 @@ func TestSummarizeKubectlArgv(t *testing.T) {
 			name:     "--container before pod",
 			argv:     []string{"logs", "--container", "mycontainer", "pod-x"},
 			wantVerb: "logs", wantRes: "pod-x",
+		},
+		// --revision (space form) consumes the revision number so the sub-verb
+		// ("history") is the second non-flag token, not the digit "5".
+		// Mirrors the parseKubectlInput regression test to verify summarization
+		// also sees the correct verb/resource for rollout history commands.
+		{
+			name:     "--revision space form before sub-verb",
+			argv:     []string{"rollout", "--revision", "5", "history", "deployment/foo"},
+			wantVerb: "rollout", wantRes: "history",
+		},
+		// --revision=N (equals form) embeds the value in the flag token; no next
+		// token is consumed, so "history" is still correctly identified as the
+		// second non-flag token. The two forms must yield identical summarization.
+		{
+			name:     "--revision equals form before sub-verb",
+			argv:     []string{"rollout", "--revision=5", "history", "deployment/foo"},
+			wantVerb: "rollout", wantRes: "history",
 		},
 	}
 	for _, tc := range cases {
