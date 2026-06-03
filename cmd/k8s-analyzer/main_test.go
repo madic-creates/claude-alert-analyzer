@@ -448,3 +448,82 @@ func TestMain_FailsWhenHistoryInjectPriorInvalid(t *testing.T) {
 		t.Errorf("expected 'HISTORY_INJECT_PRIOR' in output, got: %s", out)
 	}
 }
+
+// setLoadConfigEnv sets every env var required by loadConfig so a sub-test
+// can call loadConfig() directly without triggering os.Exit. Each var is
+// registered via t.Setenv so the test harness restores the original value on
+// completion, even when loadConfig() internally calls os.Unsetenv for the
+// three Anthropic vars.
+func setLoadConfigEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("WEBHOOK_SECRET", "test-secret")
+	t.Setenv("ANTHROPIC_API_KEY", "test-api-key")
+	// Ensure ANTHROPIC_AUTH_TOKEN is unset so loadConfig does not reject
+	// both auth vars being set. Pattern from stormProtectionUnsetAll: call
+	// t.Setenv first (registers cleanup to restore the original value), then
+	// os.Unsetenv so LookupEnv sees "not set" rather than "set to empty".
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	os.Unsetenv("ANTHROPIC_AUTH_TOKEN")
+}
+
+// TestLoadConfig_AnthropicVarsUnsetAfterLoad verifies that loadConfig() clears
+// ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, and ANTHROPIC_BASE_URL from the
+// process environment after reading them. main.go is the single source of
+// truth for these values; removing them prevents the Claude SDK from later
+// re-reading the process env and picking up stale or incorrect credentials.
+// This also verifies that the values are preserved in the returned Config
+// struct even though the env vars are gone.
+func TestLoadConfig_AnthropicVarsUnsetAfterLoad(t *testing.T) {
+	setLoadConfigEnv(t)
+	t.Setenv("ANTHROPIC_BASE_URL", "https://test.example.com")
+
+	cfg := loadConfig()
+
+	// The returned config must carry the values that were set.
+	if cfg.APIKey != "test-api-key" {
+		t.Errorf("APIKey = %q, want %q", cfg.APIKey, "test-api-key")
+	}
+	if cfg.APIBaseURL != "https://test.example.com" {
+		t.Errorf("APIBaseURL = %q, want %q", cfg.APIBaseURL, "https://test.example.com")
+	}
+
+	// The env vars must have been removed so the SDK cannot read them.
+	if v, ok := os.LookupEnv("ANTHROPIC_API_KEY"); ok {
+		t.Errorf("ANTHROPIC_API_KEY still in env after loadConfig: %q", v)
+	}
+	if v, ok := os.LookupEnv("ANTHROPIC_AUTH_TOKEN"); ok {
+		t.Errorf("ANTHROPIC_AUTH_TOKEN still in env after loadConfig: %q", v)
+	}
+	if v, ok := os.LookupEnv("ANTHROPIC_BASE_URL"); ok {
+		t.Errorf("ANTHROPIC_BASE_URL still in env after loadConfig: %q", v)
+	}
+}
+
+// TestLoadConfig_SkipResolvedDefaultsTrue verifies that SKIP_RESOLVED defaults
+// to true when unset. Alertmanager sends resolved notifications for cleared
+// alerts; skipping them by default prevents re-analysis of alerts that are
+// no longer firing, which would waste API calls and confuse on-call responders.
+func TestLoadConfig_SkipResolvedDefaultsTrue(t *testing.T) {
+	setLoadConfigEnv(t)
+	t.Setenv("SKIP_RESOLVED", "")
+	os.Unsetenv("SKIP_RESOLVED")
+
+	cfg := loadConfig()
+	if !cfg.SkipResolved {
+		t.Errorf("SkipResolved = false, want true (default must be true when SKIP_RESOLVED is unset)")
+	}
+}
+
+// TestLoadConfig_SkipResolvedCanBeDisabled verifies that SKIP_RESOLVED=false
+// is honoured and causes loadConfig to return SkipResolved=false. Operators
+// who want resolved alerts to trigger a final analysis (e.g. to record the
+// recovery in history) must be able to opt in.
+func TestLoadConfig_SkipResolvedCanBeDisabled(t *testing.T) {
+	setLoadConfigEnv(t)
+	t.Setenv("SKIP_RESOLVED", "false")
+
+	cfg := loadConfig()
+	if cfg.SkipResolved {
+		t.Errorf("SkipResolved = true, want false when SKIP_RESOLVED=false")
+	}
+}
