@@ -727,22 +727,41 @@ func TestLoadConfig_ClaudeModelIsPreserved(t *testing.T) {
 }
 
 // TestLoadConfig_TimeoutsArePreserved verifies that KUBE_API_TIMEOUT and
-// PROM_TIMEOUT are stored in the correct Config fields when set to valid
-// positive durations. A field-swapped or dropped assignment would silently
-// cause context gatherers to use the wrong deadline, exposing the
-// misconfiguration only at runtime against a slow API server or Prometheus.
+// PROM_TIMEOUT are stored in the correct Config fields. Zero is the sentinel
+// meaning context.go's hardcoded defaults (30s each); positive values override
+// those defaults. A field-swapped or dropped assignment would silently cause
+// context gatherers to use the wrong deadline, exposing the misconfiguration
+// only at runtime against a slow API server or Prometheus.
 func TestLoadConfig_TimeoutsArePreserved(t *testing.T) {
-	setLoadConfigEnv(t)
-	t.Setenv("KUBE_API_TIMEOUT", "45s")
-	t.Setenv("PROM_TIMEOUT", "20s")
+	t.Run("both default to 0 (internal-default sentinel) when unset", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("KUBE_API_TIMEOUT", "")
+		os.Unsetenv("KUBE_API_TIMEOUT")
+		t.Setenv("PROM_TIMEOUT", "")
+		os.Unsetenv("PROM_TIMEOUT")
 
-	cfg := loadConfig()
-	if cfg.KubeAPITimeout != 45*time.Second {
-		t.Errorf("KubeAPITimeout = %v, want %v", cfg.KubeAPITimeout, 45*time.Second)
-	}
-	if cfg.PromTimeout != 20*time.Second {
-		t.Errorf("PromTimeout = %v, want %v", cfg.PromTimeout, 20*time.Second)
-	}
+		cfg := loadConfig()
+		if cfg.KubeAPITimeout != 0 {
+			t.Errorf("KubeAPITimeout = %v, want 0 (default when KUBE_API_TIMEOUT unset)", cfg.KubeAPITimeout)
+		}
+		if cfg.PromTimeout != 0 {
+			t.Errorf("PromTimeout = %v, want 0 (default when PROM_TIMEOUT unset)", cfg.PromTimeout)
+		}
+	})
+
+	t.Run("custom values are preserved and fields are not swapped", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("KUBE_API_TIMEOUT", "45s")
+		t.Setenv("PROM_TIMEOUT", "20s")
+
+		cfg := loadConfig()
+		if cfg.KubeAPITimeout != 45*time.Second {
+			t.Errorf("KubeAPITimeout = %v, want %v", cfg.KubeAPITimeout, 45*time.Second)
+		}
+		if cfg.PromTimeout != 20*time.Second {
+			t.Errorf("PromTimeout = %v, want %v", cfg.PromTimeout, 20*time.Second)
+		}
+	})
 }
 
 // TestLoadConfig_WebhookSecretIsPreserved verifies that WEBHOOK_SECRET is
