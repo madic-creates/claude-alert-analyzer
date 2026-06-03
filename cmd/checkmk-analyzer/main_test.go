@@ -568,6 +568,35 @@ func TestLoadConfig_CheckmkAPITimeoutIsPreserved(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_SSHConfigDefaultsArePreserved verifies that the SSH config
+// fields (SSHUser, SSHKeyPath, SSHKnownHostsPath) carry their documented
+// default values when the corresponding env vars are not set. These defaults
+// are the paths used by the in-cluster Deployment manifest; an operator who
+// does not override them expects the analyzer to find the key at /ssh/id_ed25519
+// and the known_hosts at /ssh/known_hosts, and to connect as the "nagios" user.
+// A dropped or transposed EnvOrDefault call would silently look in the wrong
+// place, causing every SSH connection to fail with a cryptic "no such file"
+// error rather than a clear config message.
+func TestLoadConfig_SSHConfigDefaultsArePreserved(t *testing.T) {
+	setLoadConfigEnv(t)
+	// Unset SSH config overrides so loadConfig uses EnvOrDefault fallbacks.
+	for _, key := range []string{"SSH_USER", "SSH_KEY_PATH", "SSH_KNOWN_HOSTS_PATH"} {
+		t.Setenv(key, "")
+		os.Unsetenv(key)
+	}
+
+	cfg := loadConfig()
+	if cfg.SSHUser != "nagios" {
+		t.Errorf("SSHUser = %q, want %q", cfg.SSHUser, "nagios")
+	}
+	if cfg.SSHKeyPath != "/ssh/id_ed25519" {
+		t.Errorf("SSHKeyPath = %q, want %q", cfg.SSHKeyPath, "/ssh/id_ed25519")
+	}
+	if cfg.SSHKnownHostsPath != "/ssh/known_hosts" {
+		t.Errorf("SSHKnownHostsPath = %q, want %q", cfg.SSHKnownHostsPath, "/ssh/known_hosts")
+	}
+}
+
 // TestLoadConfig_SSHDeniedCommandsParsing verifies that loadConfig correctly
 // parses the SSH_DENIED_COMMANDS env var into Config.SSHDeniedCommands. The
 // three distinct cases—unset (nil → default denylist), empty (no denylist),

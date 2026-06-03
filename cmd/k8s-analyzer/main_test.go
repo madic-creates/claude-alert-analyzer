@@ -562,6 +562,24 @@ func TestLoadConfig_AuthTokenPathPreservesToken(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_MaxLogBytesIsPreserved verifies that MAX_LOG_BYTES is stored
+// in Config.MaxLogBytes when set to a valid value within [256, 1048576]. The
+// only existing coverage is the subprocess error test for out-of-range values;
+// no direct-call test verified that a valid value propagates to the correct
+// field. MaxLogBytes controls how many bytes of pod logs are included in the
+// Claude prompt; a transposition with CooldownSeconds (also an int) would
+// silently truncate logs to a few seconds' worth of bytes, degrading analysis
+// quality without any runtime error.
+func TestLoadConfig_MaxLogBytesIsPreserved(t *testing.T) {
+	setLoadConfigEnv(t)
+	t.Setenv("MAX_LOG_BYTES", "4096")
+
+	cfg := loadConfig()
+	if cfg.MaxLogBytes != 4096 {
+		t.Errorf("MaxLogBytes = %d, want 4096", cfg.MaxLogBytes)
+	}
+}
+
 // TestLoadConfig_TimeoutsArePreserved verifies that KUBE_API_TIMEOUT and
 // PROM_TIMEOUT are stored in the correct Config fields when set to valid
 // positive durations. A field-swapped or dropped assignment would silently
