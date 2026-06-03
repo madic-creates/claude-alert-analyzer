@@ -718,6 +718,40 @@ func TestLoadConfig_ClaudeModelIsPreserved(t *testing.T) {
 	})
 }
 
+// TestLoadConfig_CheckMKAPIURLIsPreserved verifies that CHECKMK_API_URL is
+// stored in Config.CheckMKAPIURL and that the default cluster-internal URL is
+// used when the env var is unset. CheckMKAPIURL is the base URL for every
+// CheckMK REST API call in context gathering and host validation; a dropped
+// EnvOrDefault call would leave the field empty and silently fail all API
+// requests with a cryptic URL-parsing error rather than a clear config message.
+// The default value is the in-cluster Kubernetes service URL; operators who run
+// CheckMK outside the cluster rely on overriding it — a misassigned field
+// would silently ignore that override and point to the wrong host.
+func TestLoadConfig_CheckMKAPIURLIsPreserved(t *testing.T) {
+	t.Run("defaults to cluster-internal URL when CHECKMK_API_URL is unset", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("CHECKMK_API_URL", "")
+		os.Unsetenv("CHECKMK_API_URL")
+
+		cfg := loadConfig()
+		const want = "http://checkmk-service.monitoring:5000/cmk/check_mk/api/1.0/"
+		if cfg.CheckMKAPIURL != want {
+			t.Errorf("CheckMKAPIURL = %q, want %q (default when CHECKMK_API_URL unset)", cfg.CheckMKAPIURL, want)
+		}
+	})
+
+	t.Run("custom URL is preserved when CHECKMK_API_URL is set", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		const custom = "https://checkmk.example.com/cmk/check_mk/api/1.0/"
+		t.Setenv("CHECKMK_API_URL", custom)
+
+		cfg := loadConfig()
+		if cfg.CheckMKAPIURL != custom {
+			t.Errorf("CheckMKAPIURL = %q, want %q", cfg.CheckMKAPIURL, custom)
+		}
+	})
+}
+
 // TestLoadConfig_SSHDeniedCommandsParsing verifies that loadConfig correctly
 // parses the SSH_DENIED_COMMANDS env var into Config.SSHDeniedCommands. The
 // three distinct cases—unset (nil → default denylist), empty (no denylist),
