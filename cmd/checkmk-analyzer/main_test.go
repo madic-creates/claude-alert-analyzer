@@ -854,3 +854,29 @@ func TestLoadConfig_SSHDeniedCommandsParsing(t *testing.T) {
 		}
 	})
 }
+
+// TestLoadConfig_SSHConfigOverridesArePreserved verifies that SSH_USER,
+// SSH_KEY_PATH, and SSH_KNOWN_HOSTS_PATH each propagate to the correct
+// Config field when explicitly set. TestLoadConfig_SSHConfigDefaultsArePreserved
+// confirms the fallback values when these env vars are absent, but does not
+// exercise the assignment expressions themselves — a transposed pair such as
+// SSHUser: shared.EnvOrDefault("SSH_KEY_PATH", …) would pass that test while
+// silently storing the wrong path at runtime. This companion test sets all three
+// env vars to distinct values so that any transposition is immediately visible.
+func TestLoadConfig_SSHConfigOverridesArePreserved(t *testing.T) {
+	setLoadConfigEnv(t)
+	t.Setenv("SSH_USER", "monitor")
+	t.Setenv("SSH_KEY_PATH", "/custom/id_rsa")
+	t.Setenv("SSH_KNOWN_HOSTS_PATH", "/custom/known_hosts")
+
+	cfg := loadConfig()
+	if cfg.SSHUser != "monitor" {
+		t.Errorf("SSHUser = %q, want %q", cfg.SSHUser, "monitor")
+	}
+	if cfg.SSHKeyPath != "/custom/id_rsa" {
+		t.Errorf("SSHKeyPath = %q, want %q", cfg.SSHKeyPath, "/custom/id_rsa")
+	}
+	if cfg.SSHKnownHostsPath != "/custom/known_hosts" {
+		t.Errorf("SSHKnownHostsPath = %q, want %q", cfg.SSHKnownHostsPath, "/custom/known_hosts")
+	}
+}
