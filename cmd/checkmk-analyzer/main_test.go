@@ -550,22 +550,33 @@ func TestLoadConfig_SSHEnabledCanBeDisabled(t *testing.T) {
 	}
 }
 
-// TestLoadConfig_CheckmkAPITimeoutIsPreserved verifies that a valid positive
-// CHECKMK_API_TIMEOUT value is stored in Config.CheckMKAPITimeout. The existing
-// test suite only covers invalid and negative values via subprocess tests; no
-// direct-call test verified that a valid duration propagates to the correct
-// struct field. A field-dropped or misassigned timeout would silently cause
-// all CheckMK REST API calls to use the default (10 s) regardless of the
-// operator's configuration, masking the misconfiguration until a slow server
-// exposes it at runtime.
+// TestLoadConfig_CheckmkAPITimeoutIsPreserved verifies that CHECKMK_API_TIMEOUT
+// is stored in Config.CheckMKAPITimeout. Zero is the sentinel meaning "use the
+// internal 10s default in context.go"; a positive operator-set value overrides it.
+// A field-dropped or misassigned timeout would silently cause all CheckMK REST
+// API calls to ignore the operator's configuration, masking the misconfiguration
+// until a slow server exposes it at runtime.
 func TestLoadConfig_CheckmkAPITimeoutIsPreserved(t *testing.T) {
-	setLoadConfigEnv(t)
-	t.Setenv("CHECKMK_API_TIMEOUT", "45s")
+	t.Run("defaults to 0 (internal-default sentinel) when CHECKMK_API_TIMEOUT is unset", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("CHECKMK_API_TIMEOUT", "")
+		os.Unsetenv("CHECKMK_API_TIMEOUT")
 
-	cfg := loadConfig()
-	if cfg.CheckMKAPITimeout != 45*time.Second {
-		t.Errorf("CheckMKAPITimeout = %v, want %v", cfg.CheckMKAPITimeout, 45*time.Second)
-	}
+		cfg := loadConfig()
+		if cfg.CheckMKAPITimeout != 0 {
+			t.Errorf("CheckMKAPITimeout = %v, want 0 (default when CHECKMK_API_TIMEOUT unset)", cfg.CheckMKAPITimeout)
+		}
+	})
+
+	t.Run("custom timeout is preserved when CHECKMK_API_TIMEOUT is set", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("CHECKMK_API_TIMEOUT", "45s")
+
+		cfg := loadConfig()
+		if cfg.CheckMKAPITimeout != 45*time.Second {
+			t.Errorf("CheckMKAPITimeout = %v, want %v", cfg.CheckMKAPITimeout, 45*time.Second)
+		}
+	})
 }
 
 // TestLoadConfig_CheckMKCredentialsArePreserved verifies that CHECKMK_API_USER
