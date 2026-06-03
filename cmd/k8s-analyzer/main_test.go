@@ -596,6 +596,37 @@ func TestLoadConfig_MaxLogBytesIsPreserved(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_ClaudeModelIsPreserved verifies that CLAUDE_MODEL is stored in
+// Config.ClaudeModel and that the default "claude-sonnet-4-6" is used when the
+// env var is unset. ClaudeModel is passed to every Claude API call — a wrong
+// default would silently route all analyses to the wrong model, and a
+// transposed or dropped assignment would ignore the operator's model override
+// without any config-time error. The default value is checked separately from
+// the override to catch regressions where the EnvOrDefault fallback string is
+// updated in main.go but the corresponding expected string in tests is not.
+func TestLoadConfig_ClaudeModelIsPreserved(t *testing.T) {
+	t.Run("defaults to claude-sonnet-4-6 when CLAUDE_MODEL is unset", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("CLAUDE_MODEL", "")
+		os.Unsetenv("CLAUDE_MODEL")
+
+		cfg := loadConfig()
+		if cfg.ClaudeModel != "claude-sonnet-4-6" {
+			t.Errorf("ClaudeModel = %q, want %q (default when CLAUDE_MODEL unset)", cfg.ClaudeModel, "claude-sonnet-4-6")
+		}
+	})
+
+	t.Run("override is preserved when CLAUDE_MODEL is set", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("CLAUDE_MODEL", "claude-opus-4-7")
+
+		cfg := loadConfig()
+		if cfg.ClaudeModel != "claude-opus-4-7" {
+			t.Errorf("ClaudeModel = %q, want %q", cfg.ClaudeModel, "claude-opus-4-7")
+		}
+	})
+}
+
 // TestLoadConfig_TimeoutsArePreserved verifies that KUBE_API_TIMEOUT and
 // PROM_TIMEOUT are stored in the correct Config fields when set to valid
 // positive durations. A field-swapped or dropped assignment would silently
