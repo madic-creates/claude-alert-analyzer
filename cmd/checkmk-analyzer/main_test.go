@@ -752,6 +752,22 @@ func TestLoadConfig_CheckMKAPIURLIsPreserved(t *testing.T) {
 	})
 }
 
+// TestLoadConfig_WebhookSecretIsPreserved verifies that WEBHOOK_SECRET is
+// stored in Config.WebhookSecret. The field is required (binary refuses to
+// start without it), but no direct-call test verified that a valid value
+// propagates to the correct struct field. A dropped assignment would leave
+// cfg.WebhookSecret empty so every HandleWebhook call would compute
+// expectedTokenHash from "Bearer " alone — silently accepting any request
+// with that partial header — without any config-time error. Mirrors the
+// equivalent test in cmd/k8s-analyzer.
+func TestLoadConfig_WebhookSecretIsPreserved(t *testing.T) {
+	setLoadConfigEnv(t)
+	cfg := loadConfig()
+	if cfg.WebhookSecret != "test-secret" {
+		t.Errorf("WebhookSecret = %q, want %q", cfg.WebhookSecret, "test-secret")
+	}
+}
+
 // TestLoadConfig_SSHDeniedCommandsParsing verifies that loadConfig correctly
 // parses the SSH_DENIED_COMMANDS env var into Config.SSHDeniedCommands. The
 // three distinct cases—unset (nil → default denylist), empty (no denylist),

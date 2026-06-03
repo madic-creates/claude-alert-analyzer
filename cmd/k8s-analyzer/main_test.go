@@ -718,3 +718,18 @@ func TestLoadConfig_TimeoutsArePreserved(t *testing.T) {
 		t.Errorf("PromTimeout = %v, want %v", cfg.PromTimeout, 20*time.Second)
 	}
 }
+
+// TestLoadConfig_WebhookSecretIsPreserved verifies that WEBHOOK_SECRET is
+// stored in Config.WebhookSecret. The field is required (binary refuses to
+// start without it), but no direct-call test verified that a valid value
+// propagates to the correct struct field. A dropped assignment would leave
+// cfg.WebhookSecret empty so every HandleWebhook call would compute
+// expectedTokenHash from "Bearer " alone — silently accepting any request
+// with that partial header — without any config-time error.
+func TestLoadConfig_WebhookSecretIsPreserved(t *testing.T) {
+	setLoadConfigEnv(t)
+	cfg := loadConfig()
+	if cfg.WebhookSecret != "test-secret" {
+		t.Errorf("WebhookSecret = %q, want %q", cfg.WebhookSecret, "test-secret")
+	}
+}
