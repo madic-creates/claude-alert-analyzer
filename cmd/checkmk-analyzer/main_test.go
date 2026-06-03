@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 func runMainWithEnv(t *testing.T, env map[string]string) (int, string) {
@@ -511,6 +512,24 @@ func TestLoadConfig_SSHEnabledCanBeDisabled(t *testing.T) {
 	cfg := loadConfig()
 	if cfg.SSHEnabled {
 		t.Errorf("SSHEnabled = true, want false when SSH_ENABLED=false")
+	}
+}
+
+// TestLoadConfig_CheckmkAPITimeoutIsPreserved verifies that a valid positive
+// CHECKMK_API_TIMEOUT value is stored in Config.CheckMKAPITimeout. The existing
+// test suite only covers invalid and negative values via subprocess tests; no
+// direct-call test verified that a valid duration propagates to the correct
+// struct field. A field-dropped or misassigned timeout would silently cause
+// all CheckMK REST API calls to use the default (10 s) regardless of the
+// operator's configuration, masking the misconfiguration until a slow server
+// exposes it at runtime.
+func TestLoadConfig_CheckmkAPITimeoutIsPreserved(t *testing.T) {
+	setLoadConfigEnv(t)
+	t.Setenv("CHECKMK_API_TIMEOUT", "45s")
+
+	cfg := loadConfig()
+	if cfg.CheckMKAPITimeout != 45*time.Second {
+		t.Errorf("CheckMKAPITimeout = %v, want %v", cfg.CheckMKAPITimeout, 45*time.Second)
 	}
 }
 
