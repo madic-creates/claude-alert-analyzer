@@ -568,6 +568,29 @@ func TestLoadConfig_CheckmkAPITimeoutIsPreserved(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_CheckMKCredentialsArePreserved verifies that CHECKMK_API_USER
+// and CHECKMK_API_SECRET are stored in the correct Config fields. The two
+// values are fetched by adjacent RequireEnv calls and then assigned to adjacent
+// struct fields — a single-character typo or copy-paste swap would silently
+// send the secret as the username and the username as the secret, causing every
+// CheckMK REST API call to return 401 without any obvious config-time error.
+func TestLoadConfig_CheckMKCredentialsArePreserved(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "test-secret")
+	t.Setenv("CHECKMK_API_USER", "the-cmk-user")
+	t.Setenv("CHECKMK_API_SECRET", "the-cmk-secret")
+	t.Setenv("ANTHROPIC_API_KEY", "test-api-key")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	os.Unsetenv("ANTHROPIC_AUTH_TOKEN")
+
+	cfg := loadConfig()
+	if cfg.CheckMKAPIUser != "the-cmk-user" {
+		t.Errorf("CheckMKAPIUser = %q, want %q", cfg.CheckMKAPIUser, "the-cmk-user")
+	}
+	if cfg.CheckMKAPISecret != "the-cmk-secret" {
+		t.Errorf("CheckMKAPISecret = %q, want %q", cfg.CheckMKAPISecret, "the-cmk-secret")
+	}
+}
+
 // TestLoadConfig_SSHConfigDefaultsArePreserved verifies that the SSH config
 // fields (SSHUser, SSHKeyPath, SSHKnownHostsPath) carry their documented
 // default values when the corresponding env vars are not set. These defaults

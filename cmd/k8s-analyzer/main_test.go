@@ -562,6 +562,22 @@ func TestLoadConfig_AuthTokenPathPreservesToken(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_PrometheusURLIsPreserved verifies that PROMETHEUS_URL is stored
+// in Config.PrometheusURL when set to a non-empty value. PrometheusURL is the
+// base URL for every PromQL query in GatherContext; if the field were silently
+// dropped or swapped with another string field, all Prometheus-based context
+// gathering would silently fail against the wrong endpoint, producing empty
+// metrics sections without any config-time error.
+func TestLoadConfig_PrometheusURLIsPreserved(t *testing.T) {
+	setLoadConfigEnv(t)
+	t.Setenv("PROMETHEUS_URL", "http://prometheus.example.com:9090")
+
+	cfg := loadConfig()
+	if cfg.PrometheusURL != "http://prometheus.example.com:9090" {
+		t.Errorf("PrometheusURL = %q, want %q", cfg.PrometheusURL, "http://prometheus.example.com:9090")
+	}
+}
+
 // TestLoadConfig_MaxLogBytesIsPreserved verifies that MAX_LOG_BYTES is stored
 // in Config.MaxLogBytes when set to a valid value within [256, 1048576]. The
 // only existing coverage is the subprocess error test for out-of-range values;
