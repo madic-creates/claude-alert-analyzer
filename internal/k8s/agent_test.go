@@ -1633,6 +1633,53 @@ func TestHandlePromQLTool_ValidationErrorSanitized(t *testing.T) {
 	}
 }
 
+// TestValidateKubectlFlags exercises all four denial paths in validateKubectlFlags:
+// exact-token match, --flag=value form, -s=value short form, and -s<value>
+// POSIX-attached form. These paths close bypass vectors that allow a crafted
+// Claude tool call to swap the cluster identity or auth credentials.
+func TestValidateKubectlFlags(t *testing.T) {
+	cases := []struct {
+		name    string
+		argv    []string
+		wantErr bool
+	}{
+		// Path 1: exact-token match (deniedKubectlGlobalFlags[a])
+		{"deny exact --kubeconfig", []string{"get", "pods", "--kubeconfig"}, true},
+		{"deny exact --token", []string{"get", "pods", "--token"}, true},
+		{"deny exact -s (short alias for --server)", []string{"get", "pods", "-s"}, true},
+		// Path 2: --flag=value embedded form
+		{"deny --kubeconfig=value", []string{"get", "pods", "--kubeconfig=/root/.kube/config"}, true},
+		{"deny --server=value", []string{"get", "pods", "--server=https://attacker.com"}, true},
+		// Path 3: short flag with = separator: -s=<value>
+		{"deny -s=value short-dash-equals form", []string{"get", "pods", "-s=https://attacker.com"}, true},
+		// Path 4: POSIX attached value: -s<value> with no = separator
+		{"deny -s attached POSIX form", []string{"get", "pods", "-shttps://attacker.com"}, true},
+		// Happy paths: allowed flags must not be rejected
+		{"allow clean get pods", []string{"get", "pods"}, false},
+		{"allow -n namespace (not a denied flag)", []string{"get", "pods", "-n", "kube-system"}, false},
+		{"allow --output=json (not a denied flag)", []string{"get", "pods", "--output=json"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateKubectlFlags(tc.argv)
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error for argv %v, got nil", tc.argv)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("expected no error for argv %v, got: %v", tc.argv, err)
+			}
+			if tc.wantErr {
+				if !errors.Is(err, errVerbDenied) {
+					t.Errorf("expected errors.Is(err, errVerbDenied), got: %v", err)
+				}
+				if !strings.Contains(err.Error(), "command denied") {
+					t.Errorf("expected 'command denied' in error, got: %v", err)
+				}
+			}
+		})
+	}
+}
+
 // TestRunAgenticDiagnostics_UnknownToolErrorSanitized verifies that an
 // unknown tool name containing newlines is sanitized before being embedded
 // in the returned error message.
