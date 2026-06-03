@@ -529,6 +529,39 @@ func TestLoadConfig_SkipResolvedCanBeDisabled(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_AuthTokenPathPreservesToken verifies that ANTHROPIC_AUTH_TOKEN
+// (the OpenRouter bearer-token path) is stored in cfg.AuthToken and that
+// cfg.APIKey is empty. A transposed field assignment in loadConfig would
+// silently route all Claude API calls through the wrong header — "x-api-key"
+// instead of "Authorization: Bearer" — causing every call to fail with a 401.
+// The existing direct tests only exercise the ANTHROPIC_API_KEY path via
+// setLoadConfigEnv; this closes the gap for the alternate auth path.
+func TestLoadConfig_AuthTokenPathPreservesToken(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "test-secret")
+	// Set auth token only; ensure API key is absent so loadConfig sees exactly
+	// one auth var. Pattern: t.Setenv first (registers cleanup), then
+	// os.Unsetenv so LookupEnv returns (_, false) rather than ("", true).
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	os.Unsetenv("ANTHROPIC_API_KEY")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "test-auth-token")
+
+	cfg := loadConfig()
+	if cfg.AuthToken != "test-auth-token" {
+		t.Errorf("AuthToken = %q, want %q", cfg.AuthToken, "test-auth-token")
+	}
+	if cfg.APIKey != "" {
+		t.Errorf("APIKey = %q, want empty when using AuthToken path", cfg.APIKey)
+	}
+	// Both Anthropic vars must be cleared from the process env regardless of
+	// which auth path was used — loadConfig is the single source of truth.
+	if _, ok := os.LookupEnv("ANTHROPIC_AUTH_TOKEN"); ok {
+		t.Error("ANTHROPIC_AUTH_TOKEN still in env after loadConfig")
+	}
+	if _, ok := os.LookupEnv("ANTHROPIC_API_KEY"); ok {
+		t.Error("ANTHROPIC_API_KEY still in env after loadConfig")
+	}
+}
+
 // TestLoadConfig_TimeoutsArePreserved verifies that KUBE_API_TIMEOUT and
 // PROM_TIMEOUT are stored in the correct Config fields when set to valid
 // positive durations. A field-swapped or dropped assignment would silently
