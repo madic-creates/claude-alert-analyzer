@@ -594,21 +594,32 @@ func TestLoadConfig_PrometheusURLIsPreserved(t *testing.T) {
 }
 
 // TestLoadConfig_MaxLogBytesIsPreserved verifies that MAX_LOG_BYTES is stored
-// in Config.MaxLogBytes when set to a valid value within [256, 1048576]. The
-// only existing coverage is the subprocess error test for out-of-range values;
-// no direct-call test verified that a valid value propagates to the correct
-// field. MaxLogBytes controls how many bytes of pod logs are included in the
-// Claude prompt; a transposition with CooldownSeconds (also an int) would
-// silently truncate logs to a few seconds' worth of bytes, degrading analysis
-// quality without any runtime error.
+// in Config.MaxLogBytes with the correct default (2048) when unset and that a
+// custom value propagates to the correct field. MaxLogBytes controls how many
+// bytes of pod logs are included in the Claude prompt; a transposition with
+// CooldownSeconds (also an int) would silently truncate logs to a few seconds'
+// worth of bytes, degrading analysis quality without any runtime error.
 func TestLoadConfig_MaxLogBytesIsPreserved(t *testing.T) {
-	setLoadConfigEnv(t)
-	t.Setenv("MAX_LOG_BYTES", "4096")
+	t.Run("defaults to 2048 when MAX_LOG_BYTES is unset", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("MAX_LOG_BYTES", "")
+		os.Unsetenv("MAX_LOG_BYTES")
 
-	cfg := loadConfig()
-	if cfg.MaxLogBytes != 4096 {
-		t.Errorf("MaxLogBytes = %d, want 4096", cfg.MaxLogBytes)
-	}
+		cfg := loadConfig()
+		if cfg.MaxLogBytes != 2048 {
+			t.Errorf("MaxLogBytes = %d, want 2048 (default when MAX_LOG_BYTES unset)", cfg.MaxLogBytes)
+		}
+	})
+
+	t.Run("custom value is preserved when MAX_LOG_BYTES is set", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("MAX_LOG_BYTES", "4096")
+
+		cfg := loadConfig()
+		if cfg.MaxLogBytes != 4096 {
+			t.Errorf("MaxLogBytes = %d, want 4096", cfg.MaxLogBytes)
+		}
+	})
 }
 
 // TestLoadConfig_CooldownSecondsIsPreserved verifies that COOLDOWN_SECONDS is
