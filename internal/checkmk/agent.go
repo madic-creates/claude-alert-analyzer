@@ -938,7 +938,7 @@ func denyReason(denied map[string]bool, argv []string) string {
 			"awk", "gawk", "mawk", "nawk":
 			return fmt.Sprintf("Command denied: %q is a versioned variant of the %q scripting interpreter that can execute arbitrary commands via built-in system/exec primitives, bypassing the command denylist; use read-only diagnostic commands directly instead (e.g. \"ps aux\", \"df -h\", \"journalctl -n 50\")", cmd, base)
 		case "pip", "pipx", "npm", "npx", "yarn", "gem":
-			return fmt.Sprintf("Command denied: %q is a versioned variant of the %q package manager; all package managers are blocked because installation runs arbitrary code (build hooks, setup scripts); use OS-level read-only commands such as \"dpkg -l\" or \"rpm -qa\" to inspect installed packages instead", cmd, base)
+			return fmt.Sprintf("Command denied: %q is a versioned variant of the %q package manager; all package managers are blocked because installation runs arbitrary code (build hooks, setup scripts); use OS-level read-only commands such as \"dpkg -l\" or \"dpkg -l <name>\" (Debian/Ubuntu) or \"rpm -qa\" or \"rpm -qi <name>\" (RHEL/CentOS) to inspect installed packages instead", cmd, base)
 		}
 		return fmt.Sprintf("Command denied: %q is a versioned variant of %q which is blocked by the command denylist; use direct read-only diagnostic commands instead", cmd, base)
 	}

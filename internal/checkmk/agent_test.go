@@ -2743,6 +2743,9 @@ func TestDenyReason(t *testing.T) {
 			if !hasAlternative {
 				t.Errorf("%s: expected message to suggest 'dpkg' or 'rpm' as alternative; got: %s", pm, msg)
 			}
+			if !strings.Contains(msg, "dpkg -l <name>") || !strings.Contains(msg, "rpm -qi <name>") {
+				t.Errorf("%s: expected message to include per-package alternatives (dpkg -l <name>, rpm -qi <name>); got: %s", pm, msg)
+			}
 			if strings.Contains(msg, "use direct read-only diagnostic commands instead") {
 				t.Errorf("%s: expected message NOT to use generic versioned-variant phrasing; got: %s", pm, msg)
 			}
