@@ -1008,6 +1008,68 @@ func TestHandler_PopulatesSeverityLevel_HostDown(t *testing.T) {
 	}
 }
 
+// TestHandler_PopulatesSeverityLevel_ServiceWarning verifies that a WARNING
+// service state maps to SeverityWarning in AlertPayload.SeverityLevel. WARNING
+// is the most common production state for threshold alerts (disk, CPU, memory);
+// if SeverityFromCheckMK("WARNING", "") returned the wrong Severity, every
+// warning-level alert would be silently routed to the wrong model and
+// tool-loop budget via policy.ModelFor / policy.MaxRoundsFor. The existing
+// tests cover CRITICAL and host-DOWN (both SeverityCritical), leaving the
+// warning path completely untested for the routing field.
+func TestHandler_PopulatesSeverityLevel_ServiceWarning(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cd := shared.NewCooldownManager()
+	var received shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		received = ap
+		return true
+	}, nil, nil, shared.NewNopHistoryStore())
+
+	notif := makeNotification("host1", "Disk /var", "WARNING", "PROBLEM")
+	rr := postCheckmkWebhook(t, handler, "test-secret", notif)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if received.SeverityLevel != shared.SeverityWarning {
+		t.Errorf("expected SeverityLevel %v, got %v", shared.SeverityWarning, received.SeverityLevel)
+	}
+}
+
+// TestHandler_PopulatesSeverityLevel_HostUp verifies that a host-level
+// notification with HostState="UP" maps to SeverityInfo in
+// AlertPayload.SeverityLevel. Host-UP notifications arrive for
+// ACKNOWLEDGEMENT and DOWNTIME events on hosts that are currently healthy.
+// SeverityFromCheckMK("", "UP") returns SeverityInfo, which operators may
+// route to a lighter analysis policy (e.g. MAX_AGENT_ROUNDS_INFO=0 for
+// static-only). Without this test, a regression in SeverityFromCheckMK that
+// returns SeverityWarning for host-UP would silently trigger full agentic
+// analysis on every host acknowledgement, increasing costs without benefit.
+func TestHandler_PopulatesSeverityLevel_HostUp(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cd := shared.NewCooldownManager()
+	var received shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		received = ap
+		return true
+	}, nil, nil, shared.NewNopHistoryStore())
+
+	notif := CheckMKNotification{
+		Hostname:         "myhost",
+		HostAddress:      "10.0.0.2",
+		HostState:        "UP",
+		ServiceState:     "",
+		NotificationType: "ACKNOWLEDGEMENT",
+		Timestamp:        "2024-01-15T12:00:00Z",
+	}
+	rr := postCheckmkWebhook(t, handler, "test-secret", notif)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if received.SeverityLevel != shared.SeverityInfo {
+		t.Errorf("expected SeverityLevel %v, got %v", shared.SeverityInfo, received.SeverityLevel)
+	}
+}
+
 func TestFingerprint_NullByteSeparatorPreventsPrefixCollisions(t *testing.T) {
 	cases := [][2][4]string{
 		// hostname boundary shift: "host1"+"" vs "host"+"1"
