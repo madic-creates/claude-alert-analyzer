@@ -140,6 +140,19 @@ func mustMarshalCommand(argv []string) []byte {
 	return b
 }
 
+// mustMarshalQuery serializes a PromQL query string to JSON for test inputs
+// that require literal control characters (e.g. U+0080, 0x7F) that cannot be
+// expressed in a Go raw-string literal without triggering staticcheck ST1018.
+func mustMarshalQuery(q string) []byte {
+	b, err := json.Marshal(struct {
+		Query string `json:"query"`
+	}{Query: q})
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
 func TestParseKubectlInput_VerbAllowlist(t *testing.T) {
 	allowed := []string{
 		`["get","pods"]`,
@@ -508,6 +521,23 @@ func TestParsePromQLInput(t *testing.T) {
 		{
 			name:    "tab embedded",
 			input:   `{"query":"up\tfoo"}`,
+			wantErr: "control character",
+		},
+		{
+			// U+0080 is a C1 control character rejected by the (r >= 0x80 && r <= 0x9f)
+			// branch. The literal byte sequence 0xC2 0x80 (UTF-8 for U+0080) is embedded
+			// in the raw-string input so json.Unmarshal yields the actual rune, matching
+			// the parallel "C1 control char" test case in TestParseKubectlInput_BasicValidation.
+			name:    "C1 control char (U+0080)",
+			input:   string(mustMarshalQuery("up\u0080foo")),
+			wantErr: "control character",
+		},
+		{
+			// DEL (0x7F) is rejected by the same r == 0x7f branch that is tested
+			// for kubectl argv in TestParseKubectlInput_BasicValidation. Without
+			// this case that branch goes untested for PromQL queries.
+			name:    "DEL (0x7f)",
+			input:   string(mustMarshalQuery("up" + string([]byte{0x7f}) + "foo")),
 			wantErr: "control character",
 		},
 		{
