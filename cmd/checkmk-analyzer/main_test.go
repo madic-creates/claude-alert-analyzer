@@ -452,6 +452,68 @@ func setLoadConfigEnv(t *testing.T) {
 	os.Unsetenv("ANTHROPIC_AUTH_TOKEN")
 }
 
+// TestLoadConfig_AnthropicVarsUnsetAfterLoad verifies that loadConfig() clears
+// ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, and ANTHROPIC_BASE_URL from the
+// process environment after reading them. main.go is the single source of
+// truth for these values; removing them prevents the Claude SDK from later
+// re-reading the process env and picking up stale or incorrect credentials.
+// This also verifies that the values are preserved in the returned Config
+// struct even though the env vars are gone.
+func TestLoadConfig_AnthropicVarsUnsetAfterLoad(t *testing.T) {
+	setLoadConfigEnv(t)
+	t.Setenv("ANTHROPIC_BASE_URL", "https://test.example.com")
+
+	cfg := loadConfig()
+
+	// The returned config must carry the values that were set.
+	if cfg.APIKey != "test-api-key" {
+		t.Errorf("APIKey = %q, want %q", cfg.APIKey, "test-api-key")
+	}
+	if cfg.APIBaseURL != "https://test.example.com" {
+		t.Errorf("APIBaseURL = %q, want %q", cfg.APIBaseURL, "https://test.example.com")
+	}
+
+	// The env vars must have been removed so the SDK cannot read them.
+	if v, ok := os.LookupEnv("ANTHROPIC_API_KEY"); ok {
+		t.Errorf("ANTHROPIC_API_KEY still in env after loadConfig: %q", v)
+	}
+	if v, ok := os.LookupEnv("ANTHROPIC_AUTH_TOKEN"); ok {
+		t.Errorf("ANTHROPIC_AUTH_TOKEN still in env after loadConfig: %q", v)
+	}
+	if v, ok := os.LookupEnv("ANTHROPIC_BASE_URL"); ok {
+		t.Errorf("ANTHROPIC_BASE_URL still in env after loadConfig: %q", v)
+	}
+}
+
+// TestLoadConfig_SSHEnabledDefaultsTrue verifies that SSH_ENABLED defaults to
+// true when unset. SSH is the primary agentic diagnostic channel in the
+// checkmk analyzer; operators who do not set SSH_ENABLED must get SSH-enabled
+// behaviour rather than silently losing diagnostic capability.
+func TestLoadConfig_SSHEnabledDefaultsTrue(t *testing.T) {
+	setLoadConfigEnv(t)
+	t.Setenv("SSH_ENABLED", "")
+	os.Unsetenv("SSH_ENABLED")
+
+	cfg := loadConfig()
+	if !cfg.SSHEnabled {
+		t.Errorf("SSHEnabled = false, want true (default must be true when SSH_ENABLED is unset)")
+	}
+}
+
+// TestLoadConfig_SSHEnabledCanBeDisabled verifies that SSH_ENABLED=false is
+// honoured and causes loadConfig to return SSHEnabled=false. Operators in
+// environments without SSH access must be able to opt out of SSH diagnostics
+// without disabling the entire analyzer.
+func TestLoadConfig_SSHEnabledCanBeDisabled(t *testing.T) {
+	setLoadConfigEnv(t)
+	t.Setenv("SSH_ENABLED", "false")
+
+	cfg := loadConfig()
+	if cfg.SSHEnabled {
+		t.Errorf("SSHEnabled = true, want false when SSH_ENABLED=false")
+	}
+}
+
 // TestLoadConfig_SSHDeniedCommandsParsing verifies that loadConfig correctly
 // parses the SSH_DENIED_COMMANDS env var into Config.SSHDeniedCommands. The
 // three distinct cases—unset (nil → default denylist), empty (no denylist),
