@@ -596,6 +596,36 @@ func TestLoadConfig_MaxLogBytesIsPreserved(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_CooldownSecondsIsPreserved verifies that COOLDOWN_SECONDS is
+// stored in Config.CooldownSeconds with the correct default (300 s) when unset
+// and that a custom value propagates to the right field. CooldownSeconds and
+// MaxLogBytes are both parsed by ParseIntEnv and are the only int fields in the
+// loadConfig return literal for k8s; a copy-paste swap would silently use the
+// log-byte cap as the dedup window — allowing the same alert to re-fire every
+// 2048 seconds instead of every 5 minutes — without any config-time error.
+func TestLoadConfig_CooldownSecondsIsPreserved(t *testing.T) {
+	t.Run("defaults to 300 when COOLDOWN_SECONDS is unset", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("COOLDOWN_SECONDS", "")
+		os.Unsetenv("COOLDOWN_SECONDS")
+
+		cfg := loadConfig()
+		if cfg.CooldownSeconds != 300 {
+			t.Errorf("CooldownSeconds = %d, want 300 (default when COOLDOWN_SECONDS unset)", cfg.CooldownSeconds)
+		}
+	})
+
+	t.Run("custom value is preserved", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("COOLDOWN_SECONDS", "600")
+
+		cfg := loadConfig()
+		if cfg.CooldownSeconds != 600 {
+			t.Errorf("CooldownSeconds = %d, want 600", cfg.CooldownSeconds)
+		}
+	})
+}
+
 // TestLoadConfig_PortAndMetricsPortArePreserved verifies that PORT and
 // METRICS_PORT map to the correct Config fields and that their defaults differ.
 // The two fields are adjacent string assignments in the loadConfig return
