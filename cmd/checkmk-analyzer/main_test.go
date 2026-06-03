@@ -432,3 +432,98 @@ func TestMain_FailsWhenHistoryInjectPriorInvalid(t *testing.T) {
 		t.Errorf("expected 'HISTORY_INJECT_PRIOR' in output, got: %s", out)
 	}
 }
+
+// setLoadConfigEnv sets every env var required by loadConfig so a sub-test
+// can call loadConfig() directly without triggering os.Exit. Each var is
+// registered via t.Setenv so the test harness restores the original value on
+// completion, even when loadConfig() internally calls os.Unsetenv for the
+// three Anthropic vars.
+func setLoadConfigEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("WEBHOOK_SECRET", "test-secret")
+	t.Setenv("CHECKMK_API_USER", "test-user")
+	t.Setenv("CHECKMK_API_SECRET", "test-api-secret")
+	t.Setenv("ANTHROPIC_API_KEY", "test-api-key")
+	// Ensure ANTHROPIC_AUTH_TOKEN is unset so loadConfig does not reject
+	// both auth vars being set. Pattern from stormProtectionUnsetAll: call
+	// t.Setenv first (registers cleanup to restore the original value), then
+	// os.Unsetenv so LookupEnv sees "not set" rather than "set to empty".
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	os.Unsetenv("ANTHROPIC_AUTH_TOKEN")
+}
+
+// TestLoadConfig_SSHDeniedCommandsParsing verifies that loadConfig correctly
+// parses the SSH_DENIED_COMMANDS env var into Config.SSHDeniedCommands. The
+// three distinct cases—unset (nil → default denylist), empty (no denylist),
+// and a comma-separated list—each produce different runtime behaviour in
+// RunAgenticDiagnostics. Trim and lowercase normalisation is also checked
+// because the map stores lowercase keys and isDenied lowercases argv[0]
+// before lookup; a mismatch would silently allow commands that should be
+// blocked.
+func TestLoadConfig_SSHDeniedCommandsParsing(t *testing.T) {
+	t.Run("unset means nil (uses DefaultDeniedCommands)", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		// Use the stormProtectionUnsetAll pattern: t.Setenv registers cleanup
+		// to restore the original, then os.Unsetenv makes LookupEnv return
+		// (_, false) so the if-block in loadConfig is not entered.
+		t.Setenv("SSH_DENIED_COMMANDS", "")
+		os.Unsetenv("SSH_DENIED_COMMANDS")
+
+		cfg := loadConfig()
+		if cfg.SSHDeniedCommands != nil {
+			t.Errorf("SSHDeniedCommands: got %v, want nil (default denylist)", cfg.SSHDeniedCommands)
+		}
+	})
+
+	t.Run("empty string means empty map (all commands allowed)", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("SSH_DENIED_COMMANDS", "")
+		// SSH_DENIED_COMMANDS is set to "" — LookupEnv returns ("", true) so
+		// the parsing block is entered but produces an empty map.
+
+		cfg := loadConfig()
+		if cfg.SSHDeniedCommands == nil {
+			t.Fatal("SSHDeniedCommands: got nil, want non-nil empty map (empty value disables denylist)")
+		}
+		if len(cfg.SSHDeniedCommands) != 0 {
+			t.Errorf("SSHDeniedCommands len: got %d, want 0", len(cfg.SSHDeniedCommands))
+		}
+	})
+
+	t.Run("comma-separated list is stored as a map", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("SSH_DENIED_COMMANDS", "rm,mv,cp")
+
+		cfg := loadConfig()
+		if cfg.SSHDeniedCommands == nil {
+			t.Fatal("SSHDeniedCommands: got nil, want non-nil map")
+		}
+		for _, cmd := range []string{"rm", "mv", "cp"} {
+			if !cfg.SSHDeniedCommands[cmd] {
+				t.Errorf("SSHDeniedCommands[%q] = false, want true", cmd)
+			}
+		}
+		if len(cfg.SSHDeniedCommands) != 3 {
+			t.Errorf("SSHDeniedCommands len: got %d, want 3", len(cfg.SSHDeniedCommands))
+		}
+	})
+
+	t.Run("entries are trimmed and lowercased", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("SSH_DENIED_COMMANDS", "  RM  ,  MV  ")
+
+		cfg := loadConfig()
+		if cfg.SSHDeniedCommands == nil {
+			t.Fatal("SSHDeniedCommands: got nil, want non-nil map")
+		}
+		if !cfg.SSHDeniedCommands["rm"] {
+			t.Errorf(`SSHDeniedCommands["rm"] = false, want true (input was "  RM  ")`)
+		}
+		if !cfg.SSHDeniedCommands["mv"] {
+			t.Errorf(`SSHDeniedCommands["mv"] = false, want true (input was "  MV  ")`)
+		}
+		if len(cfg.SSHDeniedCommands) != 2 {
+			t.Errorf("SSHDeniedCommands len: got %d, want 2", len(cfg.SSHDeniedCommands))
+		}
+	})
+}
