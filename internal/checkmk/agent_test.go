@@ -4163,6 +4163,55 @@ func TestRunAgenticDiagnostics_UnknownToolErrorSanitized(t *testing.T) {
 	}
 }
 
+// TestDenyReason_VersionedAtBatchScheduler verifies that denyReason returns a
+// targeted scheduling-specific message for versioned at/batch variants
+// (e.g. "at2"). These are blocked because they schedule commands that persist
+// after the diagnostic session ends. The versioned-variant branch in denyReason
+// (lines 962-963) was previously uncovered.
+func TestDenyReason_VersionedAtBatchScheduler(t *testing.T) {
+	cases := []string{"at2", "at.1", "batch3", "batch-2"}
+	for _, cmd := range cases {
+		msg := denyReason(DefaultDeniedCommands, []string{cmd})
+		if !strings.Contains(msg, cmd) {
+			t.Errorf("%s: expected command name in message, got: %s", cmd, msg)
+		}
+		if !strings.Contains(msg, "schedules") {
+			t.Errorf("%s: expected 'schedules' in scheduling-denial message, got: %s", cmd, msg)
+		}
+		if !strings.Contains(msg, "session") {
+			t.Errorf("%s: expected 'session' in scheduling-denial message, got: %s", cmd, msg)
+		}
+	}
+}
+
+// TestDenyReason_VersionedGenericFallback verifies that denyReason returns the
+// generic versioned-variant message for commands whose base name is in the
+// denylist but has no category-specific message (e.g. tee2 → tee, dd2 → dd).
+// The fallback return at the end of the versioned-variant switch (line 965)
+// was previously uncovered.
+func TestDenyReason_VersionedGenericFallback(t *testing.T) {
+	cases := []struct {
+		cmd  string
+		base string
+	}{
+		{"tee2", "tee"},
+		{"dd2", "dd"},
+		{"mv3", "mv"},
+	}
+	for _, tc := range cases {
+		msg := denyReason(DefaultDeniedCommands, []string{tc.cmd})
+		if !strings.Contains(msg, tc.cmd) {
+			t.Errorf("%s: expected command name in message, got: %s", tc.cmd, msg)
+		}
+		if !strings.Contains(msg, tc.base) {
+			t.Errorf("%s: expected base name %q in message, got: %s", tc.cmd, tc.base, msg)
+		}
+		if !strings.Contains(msg, "versioned variant") {
+			t.Errorf("%s: expected 'versioned variant' in generic message, got: %s", tc.cmd, msg)
+		}
+	}
+}
+
 // TestRunAgenticDiagnostics_ValidationErrorSanitized verifies that a
 // parseCommandInput error is returned as "Invalid command: <detail>" with no
 // embedded newlines. SanitizeAlertField wraps err.Error() before it reaches
