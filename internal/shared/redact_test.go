@@ -1300,6 +1300,10 @@ func TestSanitizeAlertField(t *testing.T) {
 		// (e.g. "alertname\n## Injected Section\n..."); stripping the newline
 		// collapses it to a single line so the heading syntax never takes effect.
 		{"embedded newline prompt injection", "## Fake Section\nInjected content", "## Fake SectionInjected content"},
+		// U+2028 and U+2029 are not covered by unicode.IsControl but are treated as
+		// line breaks by ECMAScript and some renderers — same prompt-injection vector.
+		{"U+2028 line separator stripped", "foo bar", "foobar"},
+		{"U+2029 paragraph separator stripped", "foo bar", "foobar"},
 		{"empty string", "", ""},
 		{"only whitespace", "   ", ""},
 	}

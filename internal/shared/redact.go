@@ -210,11 +210,16 @@ func SanitizeOutput(s string) string {
 // embedded newlines or other control characters could inject fake Markdown
 // sections into the prompt (prompt injection). This mirrors the sanitization
 // applied by the CheckMK context gatherer to its single-line alert fields.
+//
+// U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR) are stripped
+// explicitly because unicode.IsControl does not cover them, yet ECMAScript
+// and some text renderers treat them as line breaks — the same prompt-injection
+// vector as an embedded newline.
 func SanitizeAlertField(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
-		if !unicode.IsControl(r) {
+		if !unicode.IsControl(r) && r != ' ' && r != ' ' {
 			b.WriteRune(r)
 		}
 	}
