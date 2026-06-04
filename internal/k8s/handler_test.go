@@ -805,6 +805,103 @@ func TestHandler_PopulatesSeverityLevel_Info(t *testing.T) {
 	}
 }
 
+// TestHandler_PopulatesSeverityLevel_Page verifies that an Alertmanager alert
+// with severity label "page" maps to SeverityCritical in
+// AlertPayload.SeverityLevel. "page" is a real-world severity label used by
+// PagerDuty-integrated Alertmanager setups as an alias for "critical"; it is
+// listed alongside "critical" in SeverityFromAlertmanager's switch arm.
+// Operators may configure CLAUDE_MODEL_CRITICAL and MAX_AGENT_ROUNDS_CRITICAL
+// overrides; if "page" silently mapped to SeverityWarning instead, those
+// operator configs would be bypassed for every page-severity alert.
+func TestHandler_PopulatesSeverityLevel_Page(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	var captured shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		captured = ap
+		return true
+	}, nil, nil, shared.NewNopHistoryStore())
+
+	alert := Alert{
+		Fingerprint: "fp-page",
+		Status:      "firing",
+		Labels:      map[string]string{"alertname": "PageAlert", "severity": "page"},
+		Annotations: map[string]string{},
+		StartsAt:    time.Now(),
+	}
+	rr := postWebhook(t, handler, "test-secret", makeWebhook([]Alert{alert}))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if captured.SeverityLevel != shared.SeverityCritical {
+		t.Errorf("expected SeverityCritical for 'page' label, got %v", captured.SeverityLevel)
+	}
+}
+
+// TestHandler_PopulatesSeverityLevel_Notice verifies that an Alertmanager alert
+// with severity label "notice" maps to SeverityWarning in
+// AlertPayload.SeverityLevel. "notice" is a low-urgency warning label used by
+// some alerting systems and is listed alongside "warning" in
+// SeverityFromAlertmanager's switch arm. It is covered at the unit-test level
+// in severity_test.go but was not exercised through the full handler path.
+func TestHandler_PopulatesSeverityLevel_Notice(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	var captured shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		captured = ap
+		return true
+	}, nil, nil, shared.NewNopHistoryStore())
+
+	alert := Alert{
+		Fingerprint: "fp-notice",
+		Status:      "firing",
+		Labels:      map[string]string{"alertname": "NoticeAlert", "severity": "notice"},
+		Annotations: map[string]string{},
+		StartsAt:    time.Now(),
+	}
+	rr := postWebhook(t, handler, "test-secret", makeWebhook([]Alert{alert}))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if captured.SeverityLevel != shared.SeverityWarning {
+		t.Errorf("expected SeverityWarning for 'notice' label, got %v", captured.SeverityLevel)
+	}
+}
+
+// TestHandler_PopulatesSeverityLevel_UnknownDefaultsToWarning verifies that an
+// Alertmanager alert with an unrecognized severity label defaults to
+// SeverityWarning in AlertPayload.SeverityLevel. The defensive default in
+// SeverityFromAlertmanager ensures that any alert with a non-standard severity
+// label (e.g. "severe", "fatal", or a typo) still triggers a full analysis
+// rather than being silently downgraded. If this path incorrectly returned
+// SeverityInfo or SeverityUnknown, an operator's MAX_AGENT_ROUNDS_WARNING
+// config would be bypassed for all such alerts.
+func TestHandler_PopulatesSeverityLevel_UnknownDefaultsToWarning(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	var captured shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		captured = ap
+		return true
+	}, nil, nil, shared.NewNopHistoryStore())
+
+	alert := Alert{
+		Fingerprint: "fp-unknown-sev",
+		Status:      "firing",
+		Labels:      map[string]string{"alertname": "UnknownSevAlert", "severity": "severe"},
+		Annotations: map[string]string{},
+		StartsAt:    time.Now(),
+	}
+	rr := postWebhook(t, handler, "test-secret", makeWebhook([]Alert{alert}))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if captured.SeverityLevel != shared.SeverityWarning {
+		t.Errorf("expected SeverityWarning for unknown severity label, got %v", captured.SeverityLevel)
+	}
+}
+
 // TestHandleWebhook_InvalidFingerprintIncrementsMetric verifies that alerts
 // dropped for an empty or oversized fingerprint increment the
 // AlertsInvalidFingerprint counter so operators can detect malformed payloads
