@@ -1289,3 +1289,71 @@ func TestHandler_PopulatesSeverityLevel_ServiceOK(t *testing.T) {
 		t.Errorf("expected SeverityLevel %v, got %v", shared.SeverityInfo, received.SeverityLevel)
 	}
 }
+
+// TestHandler_PopulatesSeverityLevel_HostUnreachable verifies that a host
+// UNREACHABLE state maps to SeverityCritical in AlertPayload.SeverityLevel.
+// "DOWN" and "UNREACHABLE" share the same Critical branch in
+// SeverityFromCheckMK; HostDown is already tested at the handler level, but
+// UNREACHABLE was only exercised via SeverityFromCheckMK unit tests. Operators
+// may configure CLAUDE_MODEL_CRITICAL and MAX_AGENT_ROUNDS_CRITICAL overrides;
+// if UNREACHABLE silently mapped to SeverityWarning instead of SeverityCritical,
+// those operator configs would be bypassed for every UNREACHABLE-state host.
+func TestHandler_PopulatesSeverityLevel_HostUnreachable(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cd := shared.NewCooldownManager()
+	var received shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		received = ap
+		return true
+	}, nil, nil, shared.NewNopHistoryStore())
+	notif := CheckMKNotification{
+		Hostname:         "router01",
+		HostAddress:      "10.0.0.254",
+		HostState:        "UNREACHABLE",
+		ServiceState:     "",
+		NotificationType: "PROBLEM",
+		Timestamp:        "2024-01-15T12:00:00Z",
+	}
+	rr := postCheckmkWebhook(t, handler, "test-secret", notif)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if received.SeverityLevel != shared.SeverityCritical {
+		t.Errorf("expected SeverityLevel %v for host UNREACHABLE, got %v", shared.SeverityCritical, received.SeverityLevel)
+	}
+}
+
+// TestHandler_PopulatesSeverityLevel_UnknownStateDefaultsToWarning verifies
+// that a CheckMK notification with no recognizable service or host state
+// defaults to SeverityWarning in AlertPayload.SeverityLevel. The fallback
+// return at the end of SeverityFromCheckMK is the defensive default: unrecognized
+// states should trigger a full analysis rather than being silently downgraded.
+// If this path returned SeverityUnknown instead of SeverityWarning, operators
+// with MAX_AGENT_ROUNDS_UNKNOWN=0 would inadvertently skip analysis for alerts
+// with unrecognized state values.
+func TestHandler_PopulatesSeverityLevel_UnknownStateDefaultsToWarning(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cd := shared.NewCooldownManager()
+	var received shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		received = ap
+		return true
+	}, nil, nil, shared.NewNopHistoryStore())
+	// Both ServiceState and HostState are empty, exercising the default
+	// return branch in SeverityFromCheckMK.
+	notif := CheckMKNotification{
+		Hostname:         "host99",
+		HostAddress:      "10.0.0.99",
+		HostState:        "",
+		ServiceState:     "",
+		NotificationType: "PROBLEM",
+		Timestamp:        "2024-01-15T12:00:00Z",
+	}
+	rr := postCheckmkWebhook(t, handler, "test-secret", notif)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if received.SeverityLevel != shared.SeverityWarning {
+		t.Errorf("expected SeverityLevel %v for unrecognized state, got %v", shared.SeverityWarning, received.SeverityLevel)
+	}
+}
