@@ -424,6 +424,11 @@ func (k *kubectlSubprocess) Exec(ctx context.Context, argv []string, timeout tim
 // Leading and trailing whitespace is stripped from the query before all checks
 // so that the returned string — used verbatim in the tool-result header and
 // sent to Prometheus — is clean and unambiguous.
+// U+2028/U+2029 are rejected for the same reason as in ValidateArgv: they
+// fall outside the C0/DEL/C1 range so the range check below misses them, yet
+// some renderers treat them as line breaks — the same prompt-injection vector
+// as an embedded newline. A hallucinated query containing U+2028 would be
+// echoed back in the Prometheus error path and injected into the model context.
 func parsePromQLInput(input json.RawMessage) (string, error) {
 	var parsed struct {
 		Query string `json:"query"`
@@ -440,7 +445,7 @@ func parsePromQLInput(input json.RawMessage) (string, error) {
 	}
 	// Explicit null-byte and newline checks before the C0 range loop so Claude
 	// receives a targeted error message rather than the generic "control character
-	// 0x00" / "0x0a". The C0 loop below remains the authoritative backstop.
+	// 0x000a". The C0/DEL/C1 + U+2028/U+2029 loop below remains the authoritative backstop.
 	if strings.ContainsRune(q, '\x00') {
 		return "", fmt.Errorf("query contains null byte")
 	}
@@ -448,8 +453,8 @@ func parsePromQLInput(input json.RawMessage) (string, error) {
 		return "", fmt.Errorf("query contains newline")
 	}
 	for _, r := range q {
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
-			return "", fmt.Errorf("query contains control character 0x%02x", r)
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == ' ' || r == ' ' {
+			return "", fmt.Errorf("query contains control character 0x%04x", r)
 		}
 	}
 	return q, nil
