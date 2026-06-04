@@ -42,6 +42,21 @@ func SeverityFromAlertmanager(labels map[string]string) Severity {
 	}
 }
 
+// NtfyPriority returns the ntfy priority string for the severity level.
+// ntfy priorities: 1=min, 2=low, 3=default, 4=high, 5=urgent (max).
+func (s Severity) NtfyPriority() string {
+	switch s {
+	case SeverityCritical:
+		return "5"
+	case SeverityWarning:
+		return "4"
+	case SeverityInfo:
+		return "2"
+	default: // SeverityUnknown
+		return "3"
+	}
+}
+
 // parseSeverity converts the stored lowercase string back to a Severity.
 // Used when reading rows written by Severity.String().
 func parseSeverity(s string) Severity {

@@ -234,8 +234,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	// and "notice" (→ warning) map to the correct ntfy priority. alert.Severity
 	// holds the raw label from the webhook and may not match the priority-map
 	// keys; SeverityLevel is always one of the four normalized enum values.
-	priorityMap := map[string]string{"critical": "5", "warning": "4", "info": "2", "unknown": "3"}
-	priority := priorityMap[alert.SeverityLevel.String()]
+	priority := alert.SeverityLevel.NtfyPriority()
 
 	if stormMode && deps.StormNotify != nil {
 		deps.StormNotify.Add(alertname)

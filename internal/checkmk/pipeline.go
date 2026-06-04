@@ -239,8 +239,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 
 	summary, body := shared.ParseSummary(analysis)
 
-	priorityMap := map[string]string{"critical": "5", "warning": "4", "info": "2", "unknown": "3"}
-	priority := priorityMap[alert.SeverityLevel.String()]
+	priority := alert.SeverityLevel.NtfyPriority()
 	title := fmt.Sprintf("Analysis: %s", safeTitle)
 
 	if stormMode && deps.StormNotify != nil {

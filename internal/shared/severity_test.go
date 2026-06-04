@@ -71,6 +71,25 @@ func TestSeverityString(t *testing.T) {
 	}
 }
 
+func TestSeverityNtfyPriority(t *testing.T) {
+	tests := []struct {
+		sev  Severity
+		want string
+	}{
+		{SeverityCritical, "5"},
+		{SeverityWarning, "4"},
+		{SeverityInfo, "2"},
+		{SeverityUnknown, "3"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.sev.String(), func(t *testing.T) {
+			if got := tt.sev.NtfyPriority(); got != tt.want {
+				t.Errorf("NtfyPriority() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestParseSeverity verifies that parseSeverity is the exact inverse of
 // Severity.String() for every defined Severity value and that an unrecognised
 // string falls back to SeverityUnknown.
