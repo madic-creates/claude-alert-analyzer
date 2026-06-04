@@ -191,13 +191,16 @@ var sensitivePatterns = []sensitivePattern{
 // and C1 Unicode control characters (U+0080–U+009F) are stripped — they serve
 // no diagnostic purpose and could be used to corrupt prompt formatting (e.g.
 // ANSI escape sequences) or for terminal-side prompt injection techniques.
+// U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR) are also stripped:
+// unicode.IsControl misses them, yet some renderers treat them as line breaks —
+// the same prompt-injection vector as an embedded carriage return.
 // This mirrors the sanitization applied by the CheckMK context gatherer to
 // long_plugin_output.
 func SanitizeOutput(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
-		if r == '\t' || r == '\n' || !unicode.IsControl(r) {
+		if r == '\t' || r == '\n' || (!unicode.IsControl(r) && r != ' ' && r != ' ') {
 			b.WriteRune(r)
 		}
 	}

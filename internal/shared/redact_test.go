@@ -1336,6 +1336,8 @@ func TestSanitizeOutput(t *testing.T) {
 		{"regular text unchanged", "hello world", "hello world"},
 		{"empty string", "", ""},
 		{"only newlines and tabs", "\n\t\n", "\n\t\n"},
+		{"U+2028 line separator stripped", "foo bar", "foobar"},
+		{"U+2029 paragraph separator stripped", "foo bar", "foobar"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
