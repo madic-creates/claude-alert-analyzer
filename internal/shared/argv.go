@@ -44,7 +44,7 @@ const (
 // defeat exact-match denylist lookups: "-exec\t" and "-exec" both
 // pass TrimSpace unchanged but never equal the "-exec" key in a denylist
 // map. U+2028/U+2029 are rejected for the same reason: they are not in the
-// C0/DEL/C1 range so unicode.IsControl misses them, yet "-exec " would
+// C0/DEL/C1 range so unicode.IsControl misses them, yet "-exec\u2028" would
 // bypass the findExecFlags map lookup that blocks "-exec".
 func ValidateArgv(argv []string) error {
 	if len(argv) == 0 {
@@ -74,7 +74,7 @@ func ValidateArgv(argv []string) error {
 			return fmt.Errorf("argument %d has leading or trailing whitespace", i)
 		}
 		for _, r := range arg {
-			if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == ' ' || r == ' ' {
+			if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == '\u2028' || r == '\u2029' {
 				return fmt.Errorf("argument %d contains control character 0x%04x", i, r)
 			}
 		}

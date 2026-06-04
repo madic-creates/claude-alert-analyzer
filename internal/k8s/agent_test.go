@@ -549,13 +549,13 @@ func TestParsePromQLInput(t *testing.T) {
 			// check alone misses it, yet renderers treating it as a newline would
 			// allow prompt injection via the Prometheus error-echo path.
 			name:    "U+2028 line separator",
-			input:   string(mustMarshalQuery("up foo")),
+			input:   string(mustMarshalQuery("up\u2028foo")),
 			wantErr: "control character",
 		},
 		{
 			// U+2029 (PARAGRAPH SEPARATOR) — same reasoning as U+2028 above.
 			name:    "U+2029 paragraph separator",
-			input:   string(mustMarshalQuery("up foo")),
+			input:   string(mustMarshalQuery("up\u2029foo")),
 			wantErr: "control character",
 		},
 		{

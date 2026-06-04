@@ -200,7 +200,7 @@ func SanitizeOutput(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
-		if r == '\t' || r == '\n' || (!unicode.IsControl(r) && r != ' ' && r != ' ') {
+		if r == '\t' || r == '\n' || (!unicode.IsControl(r) && r != '\u2028' && r != '\u2029') {
 			b.WriteRune(r)
 		}
 	}
@@ -222,7 +222,7 @@ func SanitizeAlertField(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
-		if !unicode.IsControl(r) && r != ' ' && r != ' ' {
+		if !unicode.IsControl(r) && r != '\u2028' && r != '\u2029' {
 			b.WriteRune(r)
 		}
 	}

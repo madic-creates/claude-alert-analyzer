@@ -453,7 +453,7 @@ func parsePromQLInput(input json.RawMessage) (string, error) {
 		return "", fmt.Errorf("query contains newline")
 	}
 	for _, r := range q {
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == ' ' || r == ' ' {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == '\u2028' || r == '\u2029' {
 			return "", fmt.Errorf("query contains control character 0x%04x", r)
 		}
 	}

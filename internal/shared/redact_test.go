@@ -1302,8 +1302,8 @@ func TestSanitizeAlertField(t *testing.T) {
 		{"embedded newline prompt injection", "## Fake Section\nInjected content", "## Fake SectionInjected content"},
 		// U+2028 and U+2029 are not covered by unicode.IsControl but are treated as
 		// line breaks by ECMAScript and some renderers — same prompt-injection vector.
-		{"U+2028 line separator stripped", "foo bar", "foobar"},
-		{"U+2029 paragraph separator stripped", "foo bar", "foobar"},
+		{"U+2028 line separator stripped", "foo\u2028bar", "foobar"},
+		{"U+2029 paragraph separator stripped", "foo\u2029bar", "foobar"},
 		{"empty string", "", ""},
 		{"only whitespace", "   ", ""},
 	}
@@ -1336,8 +1336,8 @@ func TestSanitizeOutput(t *testing.T) {
 		{"regular text unchanged", "hello world", "hello world"},
 		{"empty string", "", ""},
 		{"only newlines and tabs", "\n\t\n", "\n\t\n"},
-		{"U+2028 line separator stripped", "foo bar", "foobar"},
-		{"U+2029 paragraph separator stripped", "foo bar", "foobar"},
+		{"U+2028 line separator stripped", "foo\u2028bar", "foobar"},
+		{"U+2029 paragraph separator stripped", "foo\u2029bar", "foobar"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
