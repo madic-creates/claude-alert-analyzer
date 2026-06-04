@@ -778,6 +778,7 @@ func denyReason(denied map[string]bool, argv []string) string {
 				return fmt.Sprintf("Command denied: find %s is not permitted (destructive flag); omit %s", arg, arg)
 			}
 		}
+		// find is in the custom denylist without exec/destructive flags — fall through to generic message.
 
 	case "sed":
 		for _, arg := range argv[1:] {
