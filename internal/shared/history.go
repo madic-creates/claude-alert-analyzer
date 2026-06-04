@@ -418,6 +418,11 @@ func ParseSummary(text string) (summary, body string) {
 			if rest == "" {
 				continue
 			}
+			// Cap at 200 runes, matching the fallback path's truncation, to guard
+			// against an unexpectedly long SUMMARY line corrupting history context.
+			if runes := []rune(rest); len(runes) > 200 {
+				rest = string(runes[:200])
+			}
 			kept := make([]string, 0, len(lines)-1)
 			kept = append(kept, lines[:i]...)
 			kept = append(kept, lines[i+1:]...)

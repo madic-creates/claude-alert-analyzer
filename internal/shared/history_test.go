@@ -466,6 +466,19 @@ func TestParseSummary(t *testing.T) {
 			wantSummary: "fallback line",
 			wantBody:    "## heading\nSUMMARY:\nSUMMARY:   \nfallback line",
 		},
+		{
+			name:        "SUMMARY line longer than 200 runes is truncated",
+			input:       "Some text.\nSUMMARY: " + strings.Repeat("x", 250),
+			wantSummary: strings.Repeat("x", 200),
+			wantBody:    "Some text.",
+		},
+		{
+			// 'ä' is 2 UTF-8 bytes; rune-based truncation must not cut mid-rune.
+			name:        "SUMMARY line longer than 200 runes multibyte truncated correctly",
+			input:       "text\nSUMMARY: " + strings.Repeat("ä", 201),
+			wantSummary: strings.Repeat("ä", 200),
+			wantBody:    "text",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
