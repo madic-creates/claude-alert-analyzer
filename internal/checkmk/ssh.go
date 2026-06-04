@@ -107,7 +107,7 @@ func (d *SSHDialer) Dial(ctx context.Context, hostname, ip string) (*ssh.Client,
 	// that the known_hosts callback receives the hostname as the key.
 	// known_hosts entries are typically recorded by hostname; using the IP
 	// here would cause verification to fail for hostname-keyed entries.
-	hostnameAddr := net.JoinHostPort(hostname, "22")
+	hostnameAddr := net.JoinHostPort(hostname, port)
 	c, chans, reqs, err := ssh.NewClientConn(conn, hostnameAddr, sshCfg)
 	close(handshakeDone)
 

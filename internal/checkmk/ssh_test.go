@@ -603,3 +603,84 @@ func TestSSHDialer_HandshakeContextCancellation(t *testing.T) {
 		t.Errorf("expected context error in message, got: %v", err)
 	}
 }
+
+// TestSSHDialer_Dial_HostnameAddrUsesConfiguredPort verifies that when sshPort
+// is set to a non-default value, the HostKeyCallback receives a hostnameAddr
+// built with that port rather than the hardcoded "22". Before the fix,
+// hostnameAddr was always net.JoinHostPort(hostname, "22") regardless of sshPort,
+// so known_hosts entries keyed by [hostname]:port would never match.
+func TestSSHDialer_Dial_HostnameAddrUsesConfiguredPort(t *testing.T) {
+	hostPub, hostPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate host key: %v", err)
+	}
+	hostSigner, err := ssh.NewSignerFromKey(hostPriv)
+	if err != nil {
+		t.Fatalf("host signer: %v", err)
+	}
+	hostPubKey, err := ssh.NewPublicKey(hostPub)
+	if err != nil {
+		t.Fatalf("host pub key: %v", err)
+	}
+
+	_, clientPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate client key: %v", err)
+	}
+	clientSigner, err := ssh.NewSignerFromKey(clientPriv)
+	if err != nil {
+		t.Fatalf("client signer: %v", err)
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	serverCfg := &ssh.ServerConfig{NoClientAuth: true}
+	serverCfg.AddHostKey(hostSigner)
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		srvConn, chans, reqs, err := ssh.NewServerConn(conn, serverCfg)
+		if err != nil {
+			return
+		}
+		defer srvConn.Close()
+		go ssh.DiscardRequests(reqs)
+		for newChan := range chans {
+			_ = newChan.Reject(ssh.UnknownChannelType, "not needed")
+		}
+	}()
+
+	port := fmt.Sprintf("%d", ln.Addr().(*net.TCPAddr).Port)
+	var capturedAddr string
+
+	d := &SSHDialer{
+		signer: clientSigner,
+		hostKeyCallback: func(hostname string, _ net.Addr, key ssh.PublicKey) error {
+			capturedAddr = hostname
+			if string(key.Marshal()) != string(hostPubKey.Marshal()) {
+				return fmt.Errorf("unexpected host key")
+			}
+			return nil
+		},
+		user:    "test",
+		sshPort: port,
+	}
+
+	client, err := d.Dial(context.Background(), "myhost", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	client.Close()
+
+	want := net.JoinHostPort("myhost", port)
+	if capturedAddr != want {
+		t.Errorf("HostKeyCallback addr = %q, want %q\n(hostnameAddr must use the configured port, not hardcoded 22)", capturedAddr, want)
+	}
+}
