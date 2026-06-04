@@ -839,6 +839,23 @@ func denyReason(denied map[string]bool, argv []string) string {
 		return fmt.Sprintf("Command denied: %q is a multi-call binary that can invoke any Unix utility as a subcommand (e.g. \"busybox rm\", \"busybox sh\", \"busybox wget\"), bypassing the command denylist; use individual read-only diagnostic commands directly instead (e.g. \"df -h\", \"free -m\", \"journalctl -n 50\")", cmd)
 	}
 
+	// Network and data-transfer tools are blocked because they can download
+	// remote payloads, exfiltrate gathered diagnostic data to remote hosts, open
+	// raw TCP/UDP tunnels, or enable lateral movement to other hosts. The generic
+	// "destructive or privileged" label is inaccurate for most of these — they
+	// are blocked for exfiltration and lateral-movement risk, not because they
+	// are inherently destructive or require elevated privileges.
+	switch cmd {
+	case "curl", "wget":
+		return fmt.Sprintf("Command denied: %q can download remote payloads or exfiltrate data to remote hosts; use read-only local network commands instead (e.g. \"ss -tnlp\", \"netstat -tnp\", or \"/proc/net/tcp\")", cmd)
+	case "nc", "ncat", "netcat", "socat":
+		return fmt.Sprintf("Command denied: %q opens raw TCP/UDP connections that can tunnel arbitrary data out of the host or spawn a remote shell; use read-only network inspection commands instead (e.g. \"ss -tnlp\", \"netstat -tnp\")", cmd)
+	case "ssh", "scp", "sftp", "rsync", "ftp", "lftp":
+		return fmt.Sprintf("Command denied: %q can exfiltrate gathered diagnostic data to remote hosts or enable lateral movement; investigate the current host using read-only diagnostic commands only (e.g. \"journalctl\", \"ps aux\", \"df -h\")", cmd)
+	case "at", "batch":
+		return fmt.Sprintf("Command denied: %q schedules commands for execution after the current diagnostic session ends, which could persist side effects on the host; use only synchronous read-only diagnostic commands", cmd)
+	}
+
 	// Process execution wrappers are blocked because they can invoke any command as
 	// a child process, bypassing the command denylist (e.g. "nohup rm -rf /",
 	// "timeout 5 sh -c '...'", "strace rm", "env rm -rf /", "valgrind /bin/sh").
