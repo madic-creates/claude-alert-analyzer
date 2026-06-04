@@ -1,13 +1,17 @@
 package shared
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -781,6 +785,84 @@ func TestHandleWriteFailureRecordsErrorMetric(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(prom.HistoryEvents.WithLabelValues("fire")); got != 0 {
 		t.Errorf("HistoryEvents[fire] = %v, want 0 on write failure", got)
+	}
+}
+
+// TestHistoryCloseTimesOutOnStubbornWriteLoop verifies that Close() returns
+// within its configured timeout even when the writeLoop goroutine is stuck
+// in a blocking DB call and cannot react to the stop signal. Without the
+// timeout, a slow prune() or INSERT (e.g. disk pressure, SQLite WAL replay)
+// would cause the process to hang at shutdown indefinitely.
+func TestHistoryCloseTimesOutOnStubbornWriteLoop(t *testing.T) {
+	s := newTestStore(t)
+	s.closeTimeout = 100 * time.Millisecond
+
+	// Block the writeLoop at the start of the first handle() call (simulates
+	// a slow SQLite operation). Use sync.Once so entered is closed exactly once
+	// even if handle() were somehow called a second time before Close() fires.
+	gate := make(chan struct{})
+	entered := make(chan struct{})
+	var enterOnce sync.Once
+	testHookBeforeHandleFn = func() {
+		enterOnce.Do(func() { close(entered) })
+		<-gate
+	}
+	t.Cleanup(func() {
+		testHookBeforeHandleFn = nil
+		select {
+		case <-gate:
+		default:
+			close(gate) // release the stuck writeLoop so it can exit
+		}
+	})
+
+	// Enqueue an op so the writeLoop picks it up and enters handle().
+	s.RecordFire(context.Background(), "fp", SeverityWarning)
+
+	// Wait until the writeLoop is confirmed blocked inside handle().
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("writeLoop never entered handle(); hook not reached")
+	}
+
+	// Capture slog output to assert the timeout warning is emitted.
+	var buf bytes.Buffer
+	handler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	defer slog.SetDefault(oldLogger)
+
+	// Close() must return within ~closeTimeout, not block indefinitely.
+	start := time.Now()
+	if err := s.Close(); err != nil {
+		t.Errorf("Close returned unexpected error: %v", err)
+	}
+	elapsed := time.Since(start)
+	if elapsed > time.Second {
+		t.Errorf("Close blocked for %v; want < 1s (closeTimeout=%v)", elapsed, s.closeTimeout)
+	}
+
+	// Verify the timeout warning was logged with the timeout field.
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		if json.Unmarshal([]byte(line), &rec) != nil {
+			continue
+		}
+		if rec["msg"] != "history: writeLoop did not stop within timeout; closing DB anyway" {
+			continue
+		}
+		found = true
+		if _, ok := rec["timeout"]; !ok {
+			t.Errorf("slog record missing timeout field; record: %s", line)
+		}
+	}
+	if !found {
+		t.Errorf("no close-timeout slog warn found; log output:\n%s", buf.String())
 	}
 }
 

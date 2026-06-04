@@ -105,6 +105,11 @@ var testHookLookupScanFn func(*sql.Rows, ...any) error
 // Nil in production; set in tests to inject a sql.Open error.
 var testHookSQLOpenFn func(string, string) (*sql.DB, error)
 
+// testHookBeforeHandleFn, if non-nil, is called at the start of handle()
+// before the DB write. Nil in production; set in tests to simulate a stuck
+// SQLite operation so that Close() timeout logic can be exercised.
+var testHookBeforeHandleFn func()
+
 // nopHistoryStore is used when HISTORY_ENABLED=false. Never touches disk.
 type nopHistoryStore struct{}
 
@@ -167,6 +172,7 @@ type sqliteHistoryStore struct {
 	nowFn            func() int64 // overridable in tests
 	pruneInterval    int
 	writesSincePrune int
+	closeTimeout     time.Duration // overridable in tests; 0 → 5s default
 }
 
 func newSQLiteHistoryStore(cfg HistoryConfig, product Product, metrics *AlertMetrics) (*sqliteHistoryStore, error) {
@@ -246,6 +252,9 @@ func (s *sqliteHistoryStore) drainRemaining() {
 }
 
 func (s *sqliteHistoryStore) handle(op writeOp) {
+	if testHookBeforeHandleFn != nil {
+		testHookBeforeHandleFn()
+	}
 	if op.kind == "" { // flush sentinel
 		if op.done != nil {
 			close(op.done)
@@ -357,7 +366,18 @@ func (s *sqliteHistoryStore) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
 		close(s.stop)
-		<-s.stopped
+		timeout := s.closeTimeout
+		if timeout <= 0 {
+			timeout = 5 * time.Second
+		}
+		t := time.NewTimer(timeout)
+		defer t.Stop()
+		select {
+		case <-s.stopped:
+		case <-t.C:
+			slog.Warn("history: writeLoop did not stop within timeout; closing DB anyway",
+				"timeout", timeout)
+		}
 		err = s.db.Close()
 	})
 	return err
