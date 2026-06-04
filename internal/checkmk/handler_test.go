@@ -1237,3 +1237,55 @@ func TestHandlerRecordsFireBeforeCooldown(t *testing.T) {
 		t.Errorf("RecordFire called %d times, want 2", hist.fires)
 	}
 }
+
+// TestHandler_PopulatesSeverityLevel_ServiceUnknown verifies that a UNKNOWN
+// service state maps to SeverityUnknown in AlertPayload.SeverityLevel.
+// SeverityUnknown is a distinct value from SeverityWarning; operators may
+// configure MAX_AGENT_ROUNDS_UNKNOWN=0 to skip agentic analysis for
+// probe-state alerts. If SeverityFromCheckMK("UNKNOWN", "") incorrectly
+// returned SeverityWarning, that operator config would be silently ignored
+// and every UNKNOWN-state alert would consume a full tool-loop budget.
+func TestHandler_PopulatesSeverityLevel_ServiceUnknown(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cd := shared.NewCooldownManager()
+	var received shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		received = ap
+		return true
+	}, nil, nil, shared.NewNopHistoryStore())
+	notif := makeNotification("host1", "HTTP Check", "UNKNOWN", "PROBLEM")
+	rr := postCheckmkWebhook(t, handler, "test-secret", notif)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if received.SeverityLevel != shared.SeverityUnknown {
+		t.Errorf("expected SeverityLevel %v, got %v", shared.SeverityUnknown, received.SeverityLevel)
+	}
+}
+
+// TestHandler_PopulatesSeverityLevel_ServiceOK verifies that an OK service
+// state maps to SeverityInfo in AlertPayload.SeverityLevel. RECOVERY
+// notifications are skipped before the enqueue gate, so this test uses
+// ACKNOWLEDGEMENT as the notification type — an unusual combination in
+// production but valid for exercising the SeverityFromCheckMK("OK", "")
+// code path through the full handler. Operators may configure
+// MAX_AGENT_ROUNDS_INFO=0 to skip agentic analysis for OK-state alerts;
+// if SeverityFromCheckMK("OK", "") returned SeverityWarning instead of
+// SeverityInfo, that operator config would be silently ignored.
+func TestHandler_PopulatesSeverityLevel_ServiceOK(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cd := shared.NewCooldownManager()
+	var received shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		received = ap
+		return true
+	}, nil, nil, shared.NewNopHistoryStore())
+	notif := makeNotification("host1", "Disk /var", "OK", "ACKNOWLEDGEMENT")
+	rr := postCheckmkWebhook(t, handler, "test-secret", notif)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if received.SeverityLevel != shared.SeverityInfo {
+		t.Errorf("expected SeverityLevel %v, got %v", shared.SeverityInfo, received.SeverityLevel)
+	}
+}
