@@ -6,9 +6,14 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -202,6 +207,105 @@ func TestSSHDialer_Dial_ContextCancelled(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for already-cancelled context, got nil")
 	}
+}
+
+// TestSSHDialer_Dial_ConnectionUsableAfterHandshake is a regression test for a
+// race between the watcher goroutine inside Dial and defer dialCancel(). Before
+// the fix, defer dialCancel() fires between close(handshakeDone) and the
+// function's return, making both channels ready simultaneously; Go's select
+// then picks dialCtx.Done() at random ~50% of the time, closing the TCP
+// connection underneath the returned *ssh.Client. The fix adds a non-blocking
+// check of handshakeDone inside the dialCtx.Done() case: if handshakeDone is
+// already closed, the connection belongs to the SSH client and must not be
+// closed by the watcher goroutine.
+func TestSSHDialer_Dial_ConnectionUsableAfterHandshake(t *testing.T) {
+	const iters = 20
+	for i := 0; i < iters; i++ {
+		func() {
+			_, hostPriv, err := ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatalf("iter %d: generate host key: %v", i, err)
+			}
+			hostSigner, err := ssh.NewSignerFromKey(hostPriv)
+			if err != nil {
+				t.Fatalf("iter %d: host signer: %v", i, err)
+			}
+			serverCfg := &ssh.ServerConfig{NoClientAuth: true}
+			serverCfg.AddHostKey(hostSigner)
+
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("iter %d: listen: %v", i, err)
+			}
+			defer ln.Close()
+
+			go func() {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				srvConn, chans, reqs, err := ssh.NewServerConn(conn, serverCfg)
+				if err != nil {
+					return
+				}
+				defer srvConn.Close()
+				go ssh.DiscardRequests(reqs)
+				for newChan := range chans {
+					if newChan.ChannelType() != "session" {
+						_ = newChan.Reject(ssh.UnknownChannelType, "not needed")
+						continue
+					}
+					ch, requests, err := newChan.Accept()
+					if err != nil {
+						return
+					}
+					go serveSession(ch, requests, func(_ string, ch ssh.Channel) {
+						_, _ = io.WriteString(ch, "ok\n")
+						sendExitStatus(ch, 0)
+					})
+				}
+			}()
+
+			port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+			d := &SSHDialer{
+				user:            "test",
+				signer:          mustBuildSigner(t),
+				hostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec — test only
+				sshPort:         port,
+			}
+
+			client, err := d.Dial(context.Background(), "127.0.0.1", "127.0.0.1")
+			if err != nil {
+				t.Fatalf("iter %d: Dial failed: %v", i, err)
+			}
+			defer client.Close()
+
+			// Run a command to verify the connection is usable. Without the fix
+			// the watcher goroutine may have closed the TCP connection after
+			// defer dialCancel() ran, before the function returned to the caller.
+			r := runSSHCommand(context.Background(), client, []string{"echo", "ok"}, 5*time.Second)
+			if r.err != nil {
+				t.Fatalf("iter %d: connection not usable after Dial returned: %v", i, r.err)
+			}
+			if !strings.Contains(r.output, "ok") {
+				t.Errorf("iter %d: unexpected output: %q", i, r.output)
+			}
+		}()
+	}
+}
+
+// mustBuildSigner generates a throw-away ed25519 signer for test use.
+func mustBuildSigner(t *testing.T) ssh.Signer {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatalf("new signer: %v", err)
+	}
+	return signer
 }
 
 // marshalPrivateKeyPEM marshals an ed25519 private key into the OpenSSH PEM

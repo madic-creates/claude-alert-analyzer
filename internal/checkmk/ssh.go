@@ -98,7 +98,17 @@ func (d *SSHDialer) Dial(ctx context.Context, hostname, ip string) (*ssh.Client,
 	go func() {
 		select {
 		case <-dialCtx.Done():
-			_ = conn.Close()
+			// Guard against the race where defer dialCancel() fires between
+			// close(handshakeDone) and the function's return: both channels
+			// become ready simultaneously and Go's select picks one at random.
+			// If handshakeDone is already closed, the TCP connection is now
+			// owned by the SSH client — closing it here would silently break
+			// the returned *ssh.Client for any subsequent commands.
+			select {
+			case <-handshakeDone:
+			default:
+				_ = conn.Close()
+			}
 		case <-handshakeDone:
 		}
 	}()
