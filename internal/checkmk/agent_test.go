@@ -3227,6 +3227,15 @@ func TestDenyReason_NcTypeVariants(t *testing.T) {
 		if strings.Contains(msg, "not allowed (destructive or privileged command)") {
 			t.Errorf("denyReason(%v) returned generic message instead of targeted guidance: %q", argv, msg)
 		}
+		// Must explain the actual TCP/UDP tunneling risk, consistent with the
+		// unversioned nc/ncat/netcat/socat message and versioned nc variants.
+		if !strings.Contains(msg, "TCP") && !strings.Contains(msg, "tunnel") {
+			t.Errorf("denyReason(%v) = %q; expected tunneling risk explanation (TCP/tunnel)", argv, msg)
+		}
+		// Must suggest read-only network inspection alternatives.
+		if !strings.Contains(msg, "ss") && !strings.Contains(msg, "netstat") {
+			t.Errorf("denyReason(%v) = %q; expected read-only network inspection alternative (ss/netstat)", argv, msg)
+		}
 	}
 }
 

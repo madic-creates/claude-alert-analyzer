@@ -900,7 +900,7 @@ func denyReason(denied map[string]bool, argv []string) string {
 	// these when "nc" is in the denylist; give Claude a specific message so it
 	// understands why and does not retry with another netcat variant.
 	if strings.HasPrefix(cmd, "nc.") && len(cmd) > 3 && denied["nc"] {
-		return fmt.Sprintf("Command denied: %q is a netcat variant blocked as a variant of %q which is in the command denylist; use read-only diagnostic commands instead", cmd, "nc")
+		return fmt.Sprintf("Command denied: %q is a netcat variant of %q that opens raw TCP/UDP connections which can tunnel arbitrary data out of the host or spawn a remote shell; use read-only network inspection commands instead (e.g. \"ss -tnlp\", \"netstat -tnp\")", cmd, "nc")
 	}
 
 	// iptables-TYPE / ip6tables-TYPE firewall variant (e.g. iptables-legacy, iptables-nft,
