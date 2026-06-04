@@ -177,10 +177,10 @@ var deniedKubectlGlobalFlags = map[string]bool{
 }
 
 // validateKubectlFlags rejects any argv element that names a denied global flag,
-// in either the "--flag value" form (exact-token match) or the "--flag=value"
-// form (prefix match up to the "="). The single-dash "-s" form is matched only
-// as an exact token so that per-subcommand short flags like "--since" or "-c"
-// are unaffected.
+// in either the "--flag value" form (exact-token match), the "--flag=value"
+// form (prefix match up to the "="), or the single-dash "-s=value" / "-svalue"
+// POSIX forms. The single-dash "-s" form is matched as an exact token so that
+// per-subcommand short flags like "--since" or "-c" are unaffected.
 func validateKubectlFlags(argv []string) error {
 	for _, a := range argv {
 		// Exact-token match (covers "--kubeconfig" alone before its value, and "-s")
@@ -195,25 +195,22 @@ func validateKubectlFlags(argv []string) error {
 				}
 			}
 		}
-		// Single-dash short flag with =, e.g. "-s=https://attacker.com"
-		// kubectl accepts this form for short flags, so it must be denied
-		// to close the -s bypass equivalent to --server=value.
+		// Single-dash short flags: two forms, checked together since both only
+		// apply when the argument starts with a single dash.
 		if len(a) > 1 && a[0] == '-' && a[1] != '-' {
+			// "-s=value" form: split on "=" and check the head.
 			if eq := strings.IndexByte(a, '='); eq != -1 {
 				if deniedKubectlGlobalFlags[a[:eq]] {
 					return fmt.Errorf("command denied: %s is not permitted; the in-cluster ServiceAccount is the only allowed identity: %w", a[:eq], errVerbDenied)
 				}
 			}
-		}
-		// Single-dash short flag with attached value (POSIX form), e.g. "-shttps://attacker"
-		// kubectl accepts -s<value> as equivalent to --server=<value>; check by iterating
-		// the denylist for any single-dash entry that is a strict prefix of `a`.
-		if len(a) > 1 && a[0] == '-' && a[1] != '-' {
+			// POSIX attached-value form "-shttps://attacker": iterate the denylist
+			// for any single-dash entry that is a strict prefix of `a`. The "="
+			// form is already handled above, so only reject when the next char is
+			// not "=" (which would mean a longer flag name or an attached value).
 			for flag := range deniedKubectlGlobalFlags {
 				if len(flag) >= 2 && flag[0] == '-' && flag[1] != '-' &&
 					len(a) > len(flag) && strings.HasPrefix(a, flag) {
-					// Reject if next char is not '=' (already handled above) and not the start
-					// of a longer flag name.
 					next := a[len(flag)]
 					if next != '=' {
 						return fmt.Errorf("command denied: %s (attached form of %s) is not permitted; the in-cluster ServiceAccount is the only allowed identity: %w", a, flag, errVerbDenied)
