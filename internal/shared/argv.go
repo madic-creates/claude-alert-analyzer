@@ -30,11 +30,12 @@ const (
 // ValidateArgv applies byte-level structural checks to an argv produced from a
 // Claude tool call. It rejects empty/oversized arrays, empty or
 // whitespace-only elements, oversized elements, null bytes, newlines,
-// surrounding whitespace, C0/DEL/C1 control characters, and total byte
-// overflow. Callers layer their own verb/flag policy on top of the validated
-// argv. The C0/DEL/C1 sweep is the authoritative backstop; the explicit null
-// and newline checks fire first only so callers see a targeted error message
-// instead of the generic "control character 0x0a".
+// surrounding whitespace, C0/DEL/C1 control characters, Unicode line
+// terminators U+2028/U+2029, and total byte overflow. Callers layer their
+// own verb/flag policy on top of the validated argv. The C0/DEL/C1 sweep is
+// the authoritative backstop; the explicit null and newline checks fire first
+// only so callers see a targeted error message instead of the generic
+// "control character 0x000a".
 //
 // The leading/trailing-whitespace check closes a specific denylist-bypass:
 // an argument like " -i" would shift byte positions and bypass a sed -i
@@ -42,7 +43,9 @@ const (
 // not "-i"). Embedded tabs and C1 characters (U+0080..U+009F) likewise
 // defeat exact-match denylist lookups: "-exec\t" and "-exec" both
 // pass TrimSpace unchanged but never equal the "-exec" key in a denylist
-// map.
+// map. U+2028/U+2029 are rejected for the same reason: they are not in the
+// C0/DEL/C1 range so unicode.IsControl misses them, yet "-exec " would
+// bypass the findExecFlags map lookup that blocks "-exec".
 func ValidateArgv(argv []string) error {
 	if len(argv) == 0 {
 		return fmt.Errorf("empty command")
@@ -71,8 +74,8 @@ func ValidateArgv(argv []string) error {
 			return fmt.Errorf("argument %d has leading or trailing whitespace", i)
 		}
 		for _, r := range arg {
-			if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
-				return fmt.Errorf("argument %d contains control character 0x%02x", i, r)
+			if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == ' ' || r == ' ' {
+				return fmt.Errorf("argument %d contains control character 0x%04x", i, r)
 			}
 		}
 		totalBytes += len(arg)

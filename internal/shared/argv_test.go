@@ -52,6 +52,8 @@ func TestValidateArgv_RejectionClasses(t *testing.T) {
 		{"DEL", []string{"cat", "foo\x7fbar"}, "control character"},
 		{"C1 control U+0080", []string{"cat", "foo\u0080bar"}, "control character"},
 		{"C1 control U+009F", []string{"cat", "foo\u009fbar"}, "control character"},
+		{"U+2028 line separator", []string{"find", ".", "-exec\u2028rm"}, "control character"},
+		{"U+2029 paragraph separator", []string{"find", ".", "-exec\u2029rm"}, "control character"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
