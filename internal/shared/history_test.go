@@ -453,6 +453,23 @@ func TestParseSummary(t *testing.T) {
 			wantBody:    strings.Repeat("ä", 201),
 		},
 		{
+			// If Claude's entire response is only the SUMMARY line (no analysis
+			// body), stripping it would leave an empty ntfy notification body.
+			// The fallback preserves the full text so the operator sees content.
+			name:        "only SUMMARY line body falls back to full text",
+			input:       "SUMMARY: High CPU due to runaway process",
+			wantSummary: "High CPU due to runaway process",
+			wantBody:    "SUMMARY: High CPU due to runaway process",
+		},
+		{
+			// Whitespace-only body after stripping the SUMMARY line also falls
+			// back to the full text; a blank line is not useful notification content.
+			name:        "SUMMARY with blank body falls back to full text",
+			input:       "   \n\nSUMMARY: root cause is disk full",
+			wantSummary: "root cause is disk full",
+			wantBody:    "   \n\nSUMMARY: root cause is disk full",
+		},
+		{
 			name:        "only headings returns empty summary",
 			input:       "## Root cause\n### Details",
 			wantSummary: "",

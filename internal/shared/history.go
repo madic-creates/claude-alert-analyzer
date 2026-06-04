@@ -446,7 +446,13 @@ func ParseSummary(text string) (summary, body string) {
 			kept := make([]string, 0, len(lines)-1)
 			kept = append(kept, lines[:i]...)
 			kept = append(kept, lines[i+1:]...)
-			return rest, strings.TrimRight(strings.Join(kept, "\n"), "\n")
+			body := strings.TrimRight(strings.Join(kept, "\n"), "\n")
+			if strings.TrimSpace(body) == "" {
+				// SUMMARY was the only content line; keep the full text as the
+				// ntfy body so the notification is not blank.
+				return rest, text
+			}
+			return rest, body
 		}
 	}
 	// Fallback: first non-empty, non-heading, non-SUMMARY line.
