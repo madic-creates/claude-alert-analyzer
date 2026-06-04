@@ -54,6 +54,35 @@ func TestCooldown_ExpiredEntriesEvictedWithinSweepBudget(t *testing.T) {
 	}
 }
 
+// TestCooldown_ExactlyMaxSweepPerCall_AllSwept verifies the upper boundary of
+// the sweep cap: when the map holds exactly maxSweepPerCall expired entries, a
+// single checkAndSetLocked call sweeps all of them. The loop condition is
+// "checked >= maxSweepPerCall → break", so entries at indices 0…N-1 are all
+// processed before the break fires. TestCooldown_ExpiredEntriesEvictedWithinSweepBudget
+// covers N-1 and TestCooldown_SweepBudgetBounded covers 2N; this test closes
+// the gap at exactly N.
+func TestCooldown_ExactlyMaxSweepPerCall_AllSwept(t *testing.T) {
+	entries := make(map[string]cooldownEntry)
+	ttl := time.Millisecond
+	t0 := time.Now()
+
+	for i := 0; i < maxSweepPerCall; i++ {
+		entries[fmt.Sprintf("fp-%d", i)] = cooldownEntry{setAt: t0, ttl: ttl}
+	}
+
+	// Advance past TTL so all maxSweepPerCall entries are expired.
+	now := t0.Add(10 * time.Millisecond)
+	checkAndSetLocked(entries, "trigger", 5*time.Second, now)
+
+	// All maxSweepPerCall entries fit within a single sweep, so only "trigger"
+	// should remain.
+	if len(entries) != 1 {
+		t.Errorf("expected 1 remaining entry (only 'trigger'), got %d; "+
+			"all %d expired entries must be swept at the exact cap boundary",
+			len(entries), maxSweepPerCall)
+	}
+}
+
 // TestCooldown_SweepBudgetBounded verifies that checkAndSetLocked examines at
 // most maxSweepPerCall entries per call. With 2×maxSweepPerCall expired entries
 // in the map, a single call must not sweep all of them — some must remain until
