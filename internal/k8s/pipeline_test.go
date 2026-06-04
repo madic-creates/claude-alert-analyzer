@@ -646,6 +646,95 @@ func TestProcessAlert_FailureBodyRedactsErrorMessage(t *testing.T) {
 	}
 }
 
+// TestProcessAlert_FailureTitleSanitizesTitle verifies that embedded control
+// characters in alert.Title do not appear in the notification title for failed
+// analyses ("Analysis FAILED: <title>"). TestProcessAlert_FailureBodySanitizesTitle
+// already guards the body; this companion test pins the title field so that any
+// regression in the SanitizeAlertField extraction point is caught regardless of
+// which PublishAll argument carries the tainted string.
+func TestProcessAlert_FailureTitleSanitizesTitle(t *testing.T) {
+	pub := &mockPublisher{}
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
+	mock := &mockToolRunnerAnalyzer{wantErr: fmt.Errorf("api error")}
+
+	deps := PipelineDeps{
+		Analyzer:      mock,
+		ToolRunner:    mock,
+		KubectlRunner: &fakeKubectlRunner{},
+		Prom:          &fakePromQLQuerier{},
+		Publishers:    []shared.Publisher{pub},
+		Cooldown:      shared.NewCooldownManager(),
+		Metrics:       metrics,
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 0},
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "fp-title-ctrl-fail",
+		Title:       "HighCPU\n## Injected Section",
+		Severity:    "warning",
+		Fields:      map[string]string{},
+	}
+	ProcessAlert(context.Background(), deps, alert)
+
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
+	}
+	// The newline must be stripped — a raw "\n" in an HTTP title header is
+	// invalid (RFC 7230 §3.2.6). SanitizeAlertField at extraction (alertname :=
+	// shared.SanitizeAlertField(alert.Title)) protects all downstream uses.
+	if strings.ContainsRune(pub.calls[0].title, '\n') {
+		t.Errorf("newline from alert.Title leaked into failure notification title: %q", pub.calls[0].title)
+	}
+	if !strings.Contains(pub.calls[0].title, "HighCPU") {
+		t.Errorf("sanitized title should still appear in notification title, got: %q", pub.calls[0].title)
+	}
+}
+
+// TestProcessAlert_SuccessTitleSanitizesTitle verifies that embedded control
+// characters in alert.Title do not appear in the notification title for
+// successful analyses ("Analysis: <title>"). Mirrors
+// TestProcessAlert_FailureTitleSanitizesTitle for the success path.
+func TestProcessAlert_SuccessTitleSanitizesTitle(t *testing.T) {
+	pub := &mockPublisher{}
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
+	mock := &mockToolRunnerAnalyzer{wantText: "root cause: OOM"}
+
+	deps := PipelineDeps{
+		Analyzer:      mock,
+		ToolRunner:    mock,
+		KubectlRunner: &fakeKubectlRunner{},
+		Prom:          &fakePromQLQuerier{},
+		Publishers:    []shared.Publisher{pub},
+		Cooldown:      shared.NewCooldownManager(),
+		Metrics:       metrics,
+		Policy:        &shared.AnalysisPolicy{DefaultModel: "test-model", DefaultMaxRounds: 0},
+		GatherContext: func(ctx context.Context, alert shared.AlertPayload) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+	}
+
+	alert := shared.AlertPayload{
+		Fingerprint: "fp-success-ctrl",
+		Title:       "HighCPU\n## Injected Section",
+		Severity:    "critical",
+		Fields:      map[string]string{},
+	}
+	ProcessAlert(context.Background(), deps, alert)
+
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 publish call, got %d", len(pub.calls))
+	}
+	if strings.Contains(pub.calls[0].title, "\n") {
+		t.Errorf("newline from alert.Title leaked into success notification title: %q", pub.calls[0].title)
+	}
+	if !strings.Contains(pub.calls[0].title, "HighCPU") {
+		t.Errorf("sanitized title should appear in success notification title, got: %q", pub.calls[0].title)
+	}
+}
+
 // TestProcessAlert_PromptSanitizesNamespace verifies that embedded control
 // characters in the label:namespace field are stripped from the user prompt
 // passed to the analyzer. alertname and namespace are sanitized at extraction
