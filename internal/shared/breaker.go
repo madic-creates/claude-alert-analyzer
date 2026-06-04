@@ -163,6 +163,14 @@ func (b *CircuitBreaker) recordResult(p *Permit, err error) {
 		// Done(err) would similarly extend the open period by overwriting
 		// openedAt. Drop the late result on the floor instead.
 		if !b.halfOpenInFlight {
+			// Watchdog already fired and re-opened the breaker for this probe.
+			// Log at Debug so operators can determine whether the slow probe
+			// eventually succeeded (probeErr=nil) or failed — useful for
+			// diagnosing whether the analysis pipeline is just slow or broken.
+			// The watchdog already emitted slog.Warn when it fired; this is the
+			// matching signal for when the late result finally arrives.
+			slog.Debug("circuit breaker: dropping late probe result after watchdog re-opened",
+				"probeErr", err, "lateBy", b.now().Sub(b.openedAt))
 			return
 		}
 		b.halfOpenInFlight = false

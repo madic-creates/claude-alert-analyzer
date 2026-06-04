@@ -549,6 +549,67 @@ func TestCircuitBreaker_ProbeWatchdogLogsWarn(t *testing.T) {
 	}
 }
 
+// TestCircuitBreaker_LateProbeDropLogsDebug verifies that when a slow probe's
+// Done() is called after the probe-watchdog has already fired and re-opened the
+// breaker, a slog.Debug is emitted with the probe outcome (probeErr) and how
+// long after the watchdog the late result arrived (lateBy). This lets operators
+// diagnose whether the analysis pipeline is slow-but-healthy (probeErr=nil) or
+// genuinely broken (probeErr=non-nil) when the watchdog fires.
+func TestCircuitBreaker_LateProbeDropLogsDebug(t *testing.T) {
+	var buf bytes.Buffer
+	handler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	old := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	clk := &fakeClock{t: time.Unix(0, 0)}
+	b := NewCircuitBreaker(1, 10*time.Second, 5*time.Second, clk.Now)
+
+	// Open the breaker.
+	p, _ := b.Acquire()
+	p.Done(errors.New("fail"))
+	clk.advance(11 * time.Second)
+
+	// Obtain a probe permit.
+	probe, _ := b.Acquire()
+	if !probe.IsProbe() {
+		t.Fatal("expected probe permit")
+	}
+
+	// Fire the watchdog by advancing past maxProbeDuration and calling Acquire.
+	clk.advance(6 * time.Second)
+	if _, err := b.Acquire(); !errors.Is(err, ErrCircuitOpen) {
+		t.Fatalf("watchdog Acquire: err=%v, want ErrCircuitOpen", err)
+	}
+
+	// The slow probe finally returns nil (success) after the watchdog fired.
+	probe.Done(nil)
+
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		if json.Unmarshal([]byte(line), &rec) != nil {
+			continue
+		}
+		if rec["msg"] != "circuit breaker: dropping late probe result after watchdog re-opened" {
+			continue
+		}
+		found = true
+		if _, ok := rec["probeErr"]; !ok {
+			t.Errorf("slog record missing probeErr field; record: %s", line)
+		}
+		if _, ok := rec["lateBy"]; !ok {
+			t.Errorf("slog record missing lateBy field; record: %s", line)
+		}
+	}
+	if !found {
+		t.Errorf("no late-probe-drop slog debug found; log output:\n%s", buf.String())
+	}
+}
+
 // TestCircuitBreaker_ThresholdOpenLogsWarn verifies that when consecutive
 // failures reach the threshold and the breaker opens, a slog.Warn is emitted
 // naming the threshold and failure count. Parallel to the probe-watchdog warn
