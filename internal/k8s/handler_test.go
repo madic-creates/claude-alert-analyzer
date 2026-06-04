@@ -739,6 +739,72 @@ func TestHandler_PopulatesSeverityLevel(t *testing.T) {
 	}
 }
 
+// TestHandler_PopulatesSeverityLevel_Warning verifies that an Alertmanager
+// alert with severity label "warning" maps to SeverityWarning in
+// AlertPayload.SeverityLevel. "warning" is the most common production label
+// for threshold alerts (disk fill, CPU throttle, memory pressure); if
+// SeverityFromAlertmanager returned the wrong Severity, all warning-severity
+// k8s alerts would silently use the wrong model and tool-loop budget via
+// policy.ModelFor / policy.MaxRoundsFor. The existing test covers only the
+// "critical" path, leaving the warning path — the most common case —
+// completely untested for the routing field.
+func TestHandler_PopulatesSeverityLevel_Warning(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	var captured shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		captured = ap
+		return true
+	}, nil, nil, shared.NewNopHistoryStore())
+
+	alert := Alert{
+		Fingerprint: "fp-warning",
+		Status:      "firing",
+		Labels:      map[string]string{"alertname": "DiskAlmostFull", "severity": "warning"},
+		Annotations: map[string]string{},
+		StartsAt:    time.Now(),
+	}
+	rr := postWebhook(t, handler, "test-secret", makeWebhook([]Alert{alert}))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if captured.SeverityLevel != shared.SeverityWarning {
+		t.Errorf("expected SeverityWarning, got %v", captured.SeverityLevel)
+	}
+}
+
+// TestHandler_PopulatesSeverityLevel_Info verifies that an Alertmanager alert
+// with severity label "info" maps to SeverityInfo in AlertPayload.SeverityLevel.
+// SeverityInfo is distinct from SeverityWarning and lets operators configure
+// MAX_AGENT_ROUNDS_INFO=0 to skip agentic analysis for low-priority informational
+// alerts, reducing costs. A regression returning SeverityWarning for "info" labels
+// would silently trigger full tool-loop analysis on every info-level alert without
+// any config-time error.
+func TestHandler_PopulatesSeverityLevel_Info(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	var captured shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		captured = ap
+		return true
+	}, nil, nil, shared.NewNopHistoryStore())
+
+	alert := Alert{
+		Fingerprint: "fp-info",
+		Status:      "firing",
+		Labels:      map[string]string{"alertname": "InfoAlert", "severity": "info"},
+		Annotations: map[string]string{},
+		StartsAt:    time.Now(),
+	}
+	rr := postWebhook(t, handler, "test-secret", makeWebhook([]Alert{alert}))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if captured.SeverityLevel != shared.SeverityInfo {
+		t.Errorf("expected SeverityInfo, got %v", captured.SeverityLevel)
+	}
+}
+
 // TestHandleWebhook_InvalidFingerprintIncrementsMetric verifies that alerts
 // dropped for an empty or oversized fingerprint increment the
 // AlertsInvalidFingerprint counter so operators can detect malformed payloads
