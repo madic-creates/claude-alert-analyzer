@@ -99,8 +99,15 @@ var sensitivePatterns = []sensitivePattern{
 	// Operator frequently surface these tokens in pod logs and events. The dot
 	// separator is escaped as \. in the raw string so it matches a literal dot
 	// rather than any character.
+	// GitLab token prefixes: glpat- (personal access tokens), glrrt- (runner
+	// registration tokens), glrt- (runner authentication tokens), gldt- (deploy
+	// tokens), glsoat- (service account tokens), glagent- (agent tokens). These
+	// appear in pod logs when GitLab CI/CD pipeline credentials or image-pull
+	// secrets are logged on authentication failures (e.g. "UNAUTHORIZED: GitLab:
+	// token glpat-xxx is invalid"). Docker Hub PAT prefix dckr_pat_ appears in
+	// image-pull error logs when a Docker Hub personal access token is rejected.
 	{
-		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|xox[bpaers]-|hvs\.|hvb\.)\S+`),
+		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|glrrt-|glrt-|gldt-|glsoat-|glagent-|dckr_pat_|xox[bpaers]-|hvs\.|hvb\.)\S+`),
 		replacement: "[REDACTED]",
 	},
 	{

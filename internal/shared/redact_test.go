@@ -1138,6 +1138,123 @@ func TestRedactSecrets_VaultTokens(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_GitLabTokens verifies that all GitLab token prefix variants
+// are redacted. These tokens surface in Kubernetes pod logs when CI/CD pipeline
+// credentials or image-pull secrets are rejected by the GitLab API or registry
+// (e.g. "UNAUTHORIZED: token glpat-xxx is invalid"). Without redaction they
+// reach Claude's context in plain text.
+//
+// Token values are built from two separate string literals so that static secret
+// scanners do not flag the test source as containing real credentials.
+func TestRedactSecrets_GitLabTokens(t *testing.T) {
+	// Each fake token is constructed by concatenating a prefix constant with a
+	// suffix so that no complete token literal appears in the source.
+	patTok := "glpat-" + "TestTokenAbcDef1"
+	rrtTok := "glrrt-" + "TestTokenAbcDef2"
+	rtTok := "glrt-" + "TestTokenAbcDef3"
+	dtTok := "gldt-" + "TestTokenAbcDef4"
+	soatTok := "glsoat-" + "TestTokenAbcDef5"
+	agentTok := "glagent-" + "TestTokenAbcDef6"
+
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "personal access token in auth error",
+			input: "UNAUTHORIZED: GitLab: token " + patTok + " is invalid or has expired",
+			leak:  patTok,
+		},
+		{
+			name:  "personal access token in env assignment",
+			input: "CI_JOB_TOKEN=" + patTok,
+			leak:  patTok,
+		},
+		{
+			name:  "runner registration token in log",
+			input: "runner registration failed: token=" + rrtTok,
+			leak:  rrtTok,
+		},
+		{
+			name:  "runner authentication token standalone",
+			input: "authenticating runner with " + rtTok,
+			leak:  rtTok,
+		},
+		{
+			name:  "deploy token in image pull error",
+			input: "imagePullError: unauthorized: deploy token " + dtTok + " rejected",
+			leak:  dtTok,
+		},
+		{
+			name:  "service account token in JSON error",
+			input: `{"error":"forbidden","token":"` + soatTok + `"}`,
+			leak:  soatTok,
+		},
+		{
+			name:  "agent token in connection log",
+			input: "gitlab-agent: connection failed, token=" + agentTok,
+			leak:  agentTok,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("GitLab token leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
+// TestRedactSecrets_DockerHubPAT verifies that Docker Hub personal access
+// tokens (dckr_pat_ prefix) are redacted. These tokens appear in Kubernetes
+// imagePullErrors when a Docker Hub PAT is rejected by the registry API
+// (e.g. "unauthorized: incorrect username or password … token=dckr_pat_xxx").
+// Without redaction the token reaches Claude's context unredacted.
+//
+// Token values are built from two separate string literals so that static secret
+// scanners do not flag the test source as containing real credentials.
+func TestRedactSecrets_DockerHubPAT(t *testing.T) {
+	tok1 := "dckr_pat_" + "TestDockerPat1"
+	tok2 := "dckr_pat_" + "TestDockerPat2"
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "PAT in image pull error",
+			input: "unauthorized: incorrect username or password — token " + tok1,
+			leak:  tok1,
+		},
+		{
+			name:  "PAT in env assignment",
+			input: "DOCKER_TOKEN=" + tok2,
+			leak:  tok2,
+		},
+		{
+			name:  "PAT in JSON credentials field",
+			input: `{"auths":{"registry-1.docker.io":{"auth":"` + tok1 + `"}}}`,
+			leak:  tok1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("Docker Hub PAT leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
 func TestRedactSecrets_NoFalsePositive(t *testing.T) {
 	input := "CPU load is 4.5 at 12:00"
 	result := RedactSecrets(input)
