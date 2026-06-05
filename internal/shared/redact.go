@@ -145,8 +145,15 @@ var sensitivePatterns = []sensitivePattern{
 	// in Node.js pod logs and CI/CD pipeline logs when npm registry authentication
 	// fails (e.g. "npm ERR! code E401 … token npm_xxx is invalid") or when an
 	// .npmrc file with an embedded token is printed in a build error trace.
+	// HuggingFace access tokens (hf_) are ~36-character alphanumeric strings
+	// issued by huggingface.co for model repository and Inference API access.
+	// They appear in ML serving pod logs when a model download or Inference API
+	// call fails authentication (e.g. "authentication failed for token hf_QNT…").
+	// The keyword=value pattern above does not catch bare occurrences like
+	// "token hf_xxx" because its separator requires '=' or ':' — a plain space
+	// before the token value is not matched. This prefix pattern fills that gap.
 	{
-		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|glrrt-|glrt-|gldt-|glsoat-|glagent-|dckr_pat_|SG\.|npm_|xox[bpaers]-|hvs\.|hvb\.)\S+`),
+		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|glrrt-|glrt-|gldt-|glsoat-|glagent-|dckr_pat_|SG\.|npm_|hf_|xox[bpaers]-|hvs\.|hvb\.)\S+`),
 		replacement: "[REDACTED]",
 	},
 	{

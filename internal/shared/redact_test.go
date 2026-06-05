@@ -1357,6 +1357,47 @@ func TestRedactSecrets_NpmTokens(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_HuggingFaceTokens verifies that HuggingFace access tokens
+// (hf_ prefix) are redacted. Real tokens are ~36 alphanumeric characters.
+// Split literals prevent the test file itself from containing a plain token.
+func TestRedactSecrets_HuggingFaceTokens(t *testing.T) {
+	tok1 := "hf_" + "QNTkBAbJbQSwZtFkIbXkVJoVTgUBRMNlIC"
+	tok2 := "hf_" + "XtRzMnOpQrStuVwXyZaBcDeFgHiJkLmNoP"
+
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "bare token in auth failure log",
+			input: "authentication failed for token " + tok1,
+			leak:  tok1,
+		},
+		{
+			name:  "token in env assignment",
+			input: "HF_TOKEN=" + tok2,
+			leak:  tok2,
+		},
+		{
+			name:  "token in Python traceback",
+			input: "huggingface_hub.utils._headers.LocalTokenNotFoundError: Token " + tok1 + " not valid",
+			leak:  tok1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("HuggingFace token leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
 func TestRedactSecrets_NoFalsePositive(t *testing.T) {
 	input := "CPU load is 4.5 at 12:00"
 	result := RedactSecrets(input)
