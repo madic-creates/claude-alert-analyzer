@@ -1552,6 +1552,55 @@ func TestRedactSecrets_DigitalOceanTokens(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_HTTPSCredentialURLs verifies that credential-bearing
+// HTTP/HTTPS URLs are fully redacted. Go's net/http library includes the full
+// URL in transport-layer error messages; the username portion would otherwise
+// survive the email-pattern fallback which only redacts the password component.
+func TestRedactSecrets_HTTPSCredentialURLs(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "net/http dial error with HTTPS credentials",
+			input: `dial tcp: lookup https://svcacct:hunter2@monitoring.corp.example.com: no such host`,
+			leak:  "hunter2",
+		},
+		{
+			name:  "username also not exposed via net/http error",
+			input: `dial tcp: lookup https://svcacct:hunter2@monitoring.corp.example.com: no such host`,
+			leak:  "svcacct",
+		},
+		{
+			name:  "HTTP URL in env assignment",
+			input: "WEBHOOK_URL=http://admin:topsecret@internal.alertmanager.corp:9093/hooks/alert",
+			leak:  "topsecret",
+		},
+		{
+			name:  "HTTPS URL without credentials is not redacted",
+			input: "connecting to https://api.example.com/v1/alerts",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if tc.leak != "" {
+				if strings.Contains(result, tc.leak) {
+					t.Errorf("HTTP/HTTPS credential leaked:\n  input:  %s\n  output: %s", tc.input, result)
+				}
+				if !strings.Contains(result, "[REDACTED]") {
+					t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+				}
+			} else {
+				if result != tc.input {
+					t.Errorf("false positive: %q was unexpectedly changed to %q", tc.input, result)
+				}
+			}
+		})
+	}
+}
+
 // TestRedactSecrets_ClickHouseURLs verifies that credential-bearing ClickHouse
 // connection URLs are redacted. The ClickHouse Go driver v2 uses
 // clickhouse://user:password@host:9000/database for the native TCP protocol.

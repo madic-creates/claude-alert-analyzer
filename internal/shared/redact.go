@@ -122,8 +122,19 @@ var sensitivePatterns = []sensitivePattern{
 	// full credential URL is included in the error message. Neither clickhouse nor
 	// any typical env var name (CLICKHOUSE_URL, CLICKHOUSE_DSN) appears in the
 	// keyword=value list, so without this entry the credentials reach Claude.
+	// HTTP/HTTPS (https?://) credential-bearing URLs appear when a webhook receiver,
+	// Prometheus remote_write endpoint, or internal API client logs a connection
+	// failure that includes the full request URL. Go's net/http library includes the
+	// full URL in transport-layer error messages — e.g. "dial tcp: lookup
+	// https://svcacct:hunter2@monitoring.corp.example.com: no such host" — exposing
+	// both username and password. The existing email pattern (pattern 10) catches the
+	// password component (matching "hunter2@monitoring.corp.example.com") but leaves
+	// the username unredacted, producing partial output like "https://svcacct:[REDACTED]"
+	// that still reveals the service account identity. Adding https? replaces the entire
+	// credential-bearing URL as a unit. Plain URLs without credentials (e.g.
+	// "https://api.example.com") are not affected — the pattern requires user:pass@.
 	{
-		re:          regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?|smtps?|ldaps?|nats|sqlserver|mssql|clickhouse)://[^:\s/]*:[^@\s]+@\S+`),
+		re:          regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?|smtps?|ldaps?|nats|sqlserver|mssql|clickhouse|https?)://[^:\s/]*:[^@\s]+@\S+`),
 		replacement: "[REDACTED]",
 	},
 	// Stripe secret keys (sk_live_/sk_test_) and restricted keys
