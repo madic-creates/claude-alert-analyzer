@@ -120,7 +120,6 @@ func (p *PrometheusClient) query(ctx context.Context, queryStr string) (string, 
 	// sending all of them consumes unnecessary tokens without improving the
 	// root-cause analysis. The limit mirrors the maxServiceLines cap in the
 	// CheckMK context gatherer.
-	const maxPromResultLines = 50
 
 	var lines []string
 	for _, r := range result.Data.Result {
@@ -381,6 +380,11 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 
 	return strings.Join(sections, "\n")
 }
+
+// maxPromResultLines caps the number of Prometheus time-series lines injected
+// into the Claude prompt. A busy cluster can return hundreds of series (one per
+// pod); the cap mirrors the maxServiceLines limit in the CheckMK context gatherer.
+const maxPromResultLines = 50
 
 // maxEvents is the maximum number of warning events returned to Claude.
 // The API is over-fetched by 5× (maxEvents*5) then sorted by recency so the

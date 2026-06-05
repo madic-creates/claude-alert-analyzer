@@ -2693,6 +2693,40 @@ func TestQuery_ResultsAreCappedAt50Lines(t *testing.T) {
 	}
 }
 
+// TestQuery_ResultsExactlyAtLimitNoTruncation closes the mutation gap for the
+// `if total > maxPromResultLines` guard (context.go). The guard uses `>`, so
+// exactly maxPromResultLines (50) results must be accepted without truncation.
+// The existing TestQuery_ResultsAreCappedAt50Lines only tests 60 results
+// (above the limit); a `> → >=` mutation changes behaviour at exactly 50 but
+// goes undetected without an at-boundary test that asserts no truncation.
+func TestQuery_ResultsExactlyAtLimitNoTruncation(t *testing.T) {
+	// Build exactly maxPromResultLines = 50 results — at the boundary.
+	results := make([]PromResult, maxPromResultLines)
+	for i := range results {
+		results[i] = PromResult{
+			Metric: map[string]string{"pod": fmt.Sprintf("pod-%02d", i)},
+			Value:  [2]interface{}{1700000000, "1"},
+		}
+	}
+	srv := makePromServer(t, results)
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	alert := makeAlertWithLabels(map[string]string{})
+	result := prom.GetMetrics(context.Background(), alert)
+
+	if strings.Contains(result, "truncated") {
+		t.Errorf("unexpected truncation marker for exactly %d results (at boundary): %q",
+			maxPromResultLines, result)
+	}
+	// The last result must be present to confirm nothing was dropped.
+	last := fmt.Sprintf("pod-%02d", maxPromResultLines-1)
+	if !strings.Contains(result, last) {
+		t.Errorf("result %q missing from output; expected all %d results present",
+			last, maxPromResultLines)
+	}
+}
+
 // TestGatherContext_PrometheusResultPreferredWhenTimeoutRaces verifies that when
 // the Prometheus goroutine produces a result at the same instant the context
 // deadline expires, GatherContext returns the goroutine's result rather than the
