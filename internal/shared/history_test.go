@@ -500,6 +500,24 @@ func TestParseSummary(t *testing.T) {
 			wantSummary: strings.Repeat("ä", 200),
 			wantBody:    "text",
 		},
+		{
+			// ParseSummary uses `> 200` to guard truncation; exactly 200 runes must
+			// pass through unchanged. A > → >= mutation would silently truncate a
+			// 200-rune SUMMARY to 199 runes without any existing test catching it.
+			name:        "SUMMARY line exactly 200 runes is not truncated",
+			input:       "text\nSUMMARY: " + strings.Repeat("x", 200),
+			wantSummary: strings.Repeat("x", 200),
+			wantBody:    "text",
+		},
+		{
+			// Same boundary for the fallback (no SUMMARY line) path, which has its
+			// own independent `> 200` guard. A > → >= mutation there would also
+			// silently truncate a 200-rune first line without any test catching it.
+			name:        "no SUMMARY fallback exactly 200 runes is not truncated",
+			input:       strings.Repeat("x", 200),
+			wantSummary: strings.Repeat("x", 200),
+			wantBody:    strings.Repeat("x", 200),
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
