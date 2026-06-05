@@ -514,6 +514,41 @@ func TestRedactSecrets_SMTPAndLDAPURLs(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_NATSURLs verifies that credential-bearing NATS connection
+// URLs are fully redacted. NATS is widely used in Kubernetes microservice
+// architectures; authentication failures emit the full nats://user:pass@host URL.
+func TestRedactSecrets_NATSURLs(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "standard NATS URL with credentials in error log",
+			input: "failed to connect to nats://svcuser:s3cr3tpass@nats-cluster.internal:4222 Authorization violation",
+			want:  "failed to connect to [REDACTED] Authorization violation",
+		},
+		{
+			name:  "NATS URL in env assignment",
+			input: "NATS_URL=nats://svcuser:s3cr3tpass@nats-cluster.internal:4222",
+			want:  "NATS_URL=[REDACTED]",
+		},
+		{
+			name:  "NATS URL without credentials is not redacted",
+			input: "connecting to nats://nats-cluster.internal:4222",
+			want:  "connecting to nats://nats-cluster.internal:4222",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := RedactSecrets(tc.input)
+			if got != tc.want {
+				t.Errorf("RedactSecrets(%q)\n  got:  %s\n  want: %s", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRedactSecrets_EmailAddress(t *testing.T) {
 	cases := []struct {
 		name  string

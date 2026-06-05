@@ -98,8 +98,15 @@ var sensitivePatterns = []sensitivePattern{
 	// same scheme://user:pass@host structure and are similarly covered by
 	// replacing the full URL rather than relying on the email pattern to save the
 	// password component.
+	// NATS (nats://) is a cloud-native messaging system widely used in Kubernetes
+	// microservice architectures. When authentication fails, NATS client libraries
+	// log the full connection URL including credentials (e.g. "nats: connect to
+	// [nats://user:secret@nats-cluster:4222]: Authorization violation"). The
+	// keyword=value pattern does not catch bare NATS URLs because the scheme name
+	// (NATS_URL) is not in its keyword list; the email-fallback cannot help either
+	// because the host portion often lacks a letter-only TLD.
 	{
-		re:          regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?|smtps?|ldaps?)://[^:\s/]*:[^@\s]+@\S+`),
+		re:          regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?|smtps?|ldaps?|nats)://[^:\s/]*:[^@\s]+@\S+`),
 		replacement: "[REDACTED]",
 	},
 	// Stripe secret keys (sk_live_/sk_test_) and restricted keys
