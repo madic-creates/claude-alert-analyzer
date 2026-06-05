@@ -675,6 +675,43 @@ func TestCircuitBreaker_NilNowDefaultsToTimeNow(t *testing.T) {
 	p.Done(nil) // success should not panic
 }
 
+// TestCircuitBreaker_ProbeWatchdogFiresAtExactBoundary verifies the exact
+// boundary of the probe-watchdog guard: when the elapsed probe time equals
+// maxProbeDuration exactly, the watchdog must fire. Both Acquire() and State()
+// use `>= maxProbeDuration`, so elapsed == maxProbeDuration is the critical
+// in-bounds case. A mutation of >= to > would leave the probe in-flight at the
+// boundary; the existing tests only check at 4s (below, half-open) and 6s
+// (above, open) for maxProbeDuration=5s, so neither catches the mutation.
+func TestCircuitBreaker_ProbeWatchdogFiresAtExactBoundary(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(0, 0)}
+	const maxProbeDuration = 5 * time.Second
+	b := NewCircuitBreaker(1, 10*time.Second, maxProbeDuration, clk.Now)
+
+	// Trip the breaker.
+	p, _ := b.Acquire()
+	p.Done(errors.New("fail"))
+
+	// Advance past openDuration so a probe is issued. probeStartedAt = t=11s.
+	clk.advance(11 * time.Second)
+	probe, err := b.Acquire()
+	if err != nil || !probe.IsProbe() {
+		t.Fatalf("expected probe permit: err=%v isProbe=%v", err, probe.IsProbe())
+	}
+
+	// Advance exactly maxProbeDuration so elapsed == maxProbeDuration.
+	clk.advance(maxProbeDuration)
+
+	// State() must report open (1) at the boundary without Acquire() having fired.
+	if got := b.State(); got != 1 {
+		t.Fatalf("State() at elapsed==maxProbeDuration: got %d, want 1 (open)", got)
+	}
+
+	// Acquire() must fire the watchdog and return ErrCircuitOpen.
+	if _, err := b.Acquire(); !errors.Is(err, ErrCircuitOpen) {
+		t.Fatalf("Acquire() at elapsed==maxProbeDuration: got err=%v, want ErrCircuitOpen", err)
+	}
+}
+
 // TestCircuitBreaker_Acquire_InvalidState covers the default branch in
 // Acquire()'s switch statement. breakerState is a private iota type with
 // exactly three valid values; the default case is a safety guard against
