@@ -113,8 +113,17 @@ var sensitivePatterns = []sensitivePattern{
 	// keyword=value keyword list (the env var is typically DATABASE_URL or
 	// DB_CONNECTION_STRING, both absent from the list), so without this URL
 	// pattern the full credential-bearing URL would reach the Claude API unredacted.
+	// ClickHouse (clickhouse://) is a column-oriented analytics database widely used
+	// as an observability data store (Signoz, Quickwit, Infra backends). The
+	// official ClickHouse Go driver v2 (github.com/ClickHouse/clickhouse-go) uses
+	// clickhouse://user:password@host:9000/database for the native TCP protocol.
+	// When authentication fails — e.g. "exception: Code: 516. DB::Exception:
+	// clickhouse://svcuser:s3cr3t@clickhouse:9000/ops: Authentication failed" — the
+	// full credential URL is included in the error message. Neither clickhouse nor
+	// any typical env var name (CLICKHOUSE_URL, CLICKHOUSE_DSN) appears in the
+	// keyword=value list, so without this entry the credentials reach Claude.
 	{
-		re:          regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?|smtps?|ldaps?|nats|sqlserver|mssql)://[^:\s/]*:[^@\s]+@\S+`),
+		re:          regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?|smtps?|ldaps?|nats|sqlserver|mssql|clickhouse)://[^:\s/]*:[^@\s]+@\S+`),
 		replacement: "[REDACTED]",
 	},
 	// Stripe secret keys (sk_live_/sk_test_) and restricted keys

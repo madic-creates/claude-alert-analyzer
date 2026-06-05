@@ -1552,6 +1552,50 @@ func TestRedactSecrets_DigitalOceanTokens(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_ClickHouseURLs verifies that credential-bearing ClickHouse
+// connection URLs are redacted. The ClickHouse Go driver v2 uses
+// clickhouse://user:password@host:9000/database for the native TCP protocol.
+// Authentication failures log the full URL, exposing credentials in pod logs.
+func TestRedactSecrets_ClickHouseURLs(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "ClickHouse auth failure in error log",
+			input: `exception: Code: 516. DB::Exception: clickhouse://svcuser:s3cr3t@clickhouse:9000/ops: Authentication failed: password is incorrect`,
+			leak:  "s3cr3t",
+		},
+		{
+			name:  "ClickHouse URL in env assignment",
+			input: "CLICKHOUSE_URL=clickhouse://admin:hunter2@analytics.internal:9000/metrics",
+			leak:  "hunter2",
+		},
+		{
+			name:  "ClickHouse URL without credentials is not redacted",
+			input: "connecting to clickhouse://clickhouse:9000/default",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if tc.leak != "" {
+				if strings.Contains(result, tc.leak) {
+					t.Errorf("ClickHouse credential leaked:\n  input:  %s\n  output: %s", tc.input, result)
+				}
+				if !strings.Contains(result, "[REDACTED]") {
+					t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+				}
+			} else {
+				if result != tc.input {
+					t.Errorf("false positive: %q was unexpectedly changed to %q", tc.input, result)
+				}
+			}
+		})
+	}
+}
+
 func TestRedactSecrets_NoFalsePositive(t *testing.T) {
 	input := "CPU load is 4.5 at 12:00"
 	result := RedactSecrets(input)
