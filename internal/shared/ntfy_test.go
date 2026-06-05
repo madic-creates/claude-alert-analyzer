@@ -138,6 +138,33 @@ func TestNtfyPublisher_Publish_TruncatesLongTitleUTF8(t *testing.T) {
 	}
 }
 
+// TestNtfyPublisher_Publish_ExactLengthTitleNotTruncated verifies the exact
+// boundary of the title-truncation guard: a title of exactly maxNtfyTitleBytes
+// bytes must be sent unchanged, without a "..." suffix. The guard is
+// `if len(title) > maxNtfyTitleBytes`, so the at-boundary case is in-bounds.
+// A mutation of '>' to '>=' would incorrectly truncate an exact-length title;
+// the existing over-length tests (2× the limit) would not catch that mutation.
+func TestNtfyPublisher_Publish_ExactLengthTitleNotTruncated(t *testing.T) {
+	var gotTitle string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTitle = r.Header.Get("Title")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	p := &NtfyPublisher{HTTP: srv.Client(), URL: srv.URL, Topic: "alerts"}
+	exactTitle := strings.Repeat("A", maxNtfyTitleBytes) // exactly 250 ASCII bytes
+	if err := p.Publish(context.Background(), exactTitle, "default", "body"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(gotTitle) != maxNtfyTitleBytes {
+		t.Errorf("exact-length title sent as %d bytes, want %d", len(gotTitle), maxNtfyTitleBytes)
+	}
+	if strings.HasSuffix(gotTitle, "...") {
+		t.Errorf("exact-length title was incorrectly truncated ('...' suffix present): %q", gotTitle[max(0, len(gotTitle)-10):])
+	}
+}
+
 // TestNtfyPublisher_Publish_ShortTitleUnchanged verifies that titles within
 // the limit are not modified.
 func TestNtfyPublisher_Publish_ShortTitleUnchanged(t *testing.T) {
