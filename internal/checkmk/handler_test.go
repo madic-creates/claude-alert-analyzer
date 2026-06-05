@@ -945,6 +945,84 @@ func TestCheckmkHandleWebhook_RecoveryClearsDowntimeCancelledCooldown(t *testing
 	}
 }
 
+// TestCheckmkHandleWebhook_RecoveryClearsFlappingStopCooldown verifies that a
+// RECOVERY notification clears cooldown entries set by FLAPPINGSTOP notifications.
+// CheckMK sends FLAPPINGSTOP when a flapping service settles to a steady state;
+// without clearing this fingerprint, the next FLAPPINGSTOP within the TTL window
+// would be silently suppressed. FLAPPINGSTOP is distinct from FLAPPINGSTART and
+// both must be cleared independently in the recovery sweep.
+func TestCheckmkHandleWebhook_RecoveryClearsFlappingStopCooldown(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cfg.CooldownSeconds = 60 // long TTL so cooldown is still active on second attempt
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	}, nil, nil, shared.NewNopHistoryStore())
+
+	// FLAPPINGSTOP notification: queued and sets a cooldown keyed on "FLAPPINGSTOP".
+	stop := makeNotification("host1", "HTTP", "WARNING", "FLAPPINGSTOP")
+	postCheckmkWebhook(t, handler, "test-secret", stop)
+	if enqueued.Load() != 1 {
+		t.Fatalf("expected 1 enqueued after FLAPPINGSTOP, got %d", enqueued.Load())
+	}
+
+	// RECOVERY: must clear the FLAPPINGSTOP cooldown.
+	recovery := makeNotification("host1", "HTTP", "OK", "RECOVERY")
+	postCheckmkWebhook(t, handler, "test-secret", recovery)
+	if enqueued.Load() != 1 {
+		t.Errorf("RECOVERY should not be enqueued, still expect 1, got %d", enqueued.Load())
+	}
+
+	// Second FLAPPINGSTOP within original TTL window: must be enqueued because
+	// RECOVERY cleared the FLAPPINGSTOP cooldown. Without "FLAPPINGSTOP" in the
+	// handler's sweep list this would be suppressed.
+	postCheckmkWebhook(t, handler, "test-secret", stop)
+	if enqueued.Load() != 2 {
+		t.Errorf("expected 2 enqueued after second FLAPPINGSTOP (cooldown cleared by RECOVERY), got %d", enqueued.Load())
+	}
+}
+
+// TestCheckmkHandleWebhook_RecoveryClearsDowntimeEndCooldown verifies that a
+// RECOVERY notification clears cooldown entries set by DOWNTIMEEND notifications.
+// CheckMK sends DOWNTIMEEND when a scheduled downtime window expires; without
+// clearing this fingerprint, the next DOWNTIMEEND within the TTL window would be
+// silently suppressed. DOWNTIMEEND is distinct from DOWNTIMESTART and both must
+// be cleared independently in the recovery sweep.
+func TestCheckmkHandleWebhook_RecoveryClearsDowntimeEndCooldown(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cfg.CooldownSeconds = 60 // long TTL so cooldown is still active on second attempt
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	}, nil, nil, shared.NewNopHistoryStore())
+
+	// DOWNTIMEEND notification: queued and sets a cooldown keyed on "DOWNTIMEEND".
+	dtEnd := makeNotification("host1", "Disk", "WARNING", "DOWNTIMEEND")
+	postCheckmkWebhook(t, handler, "test-secret", dtEnd)
+	if enqueued.Load() != 1 {
+		t.Fatalf("expected 1 enqueued after DOWNTIMEEND, got %d", enqueued.Load())
+	}
+
+	// RECOVERY: must clear the DOWNTIMEEND cooldown.
+	recovery := makeNotification("host1", "Disk", "OK", "RECOVERY")
+	postCheckmkWebhook(t, handler, "test-secret", recovery)
+	if enqueued.Load() != 1 {
+		t.Errorf("RECOVERY should not be enqueued, still expect 1, got %d", enqueued.Load())
+	}
+
+	// Second DOWNTIMEEND within original TTL window: must be enqueued because
+	// RECOVERY cleared the DOWNTIMEEND cooldown. Without "DOWNTIMEEND" in the
+	// handler's sweep list this would be suppressed.
+	postCheckmkWebhook(t, handler, "test-secret", dtEnd)
+	if enqueued.Load() != 2 {
+		t.Errorf("expected 2 enqueued after second DOWNTIMEEND (cooldown cleared by RECOVERY), got %d", enqueued.Load())
+	}
+}
+
 // TestFingerprint_NullByteInPartNoCollision verifies that a null byte embedded
 // inside a part value does not collide with the separator between two other parts.
 // With the old null-byte-separator scheme, fingerprint("a\x00","b") and
