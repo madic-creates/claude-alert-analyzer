@@ -72,6 +72,36 @@ var sensitivePatterns = []sensitivePattern{
 		re:          regexp.MustCompile(`(?i)(^|[^a-zA-Z])(password|passwd|secret|token|key|authorization|bearer)(\s*[=:]\s*)\S+`),
 		replacement: "${1}${2}${3}[REDACTED]",
 	},
+	// Credential-bearing connection URLs must come before the vendor prefix
+	// pattern AND before the generic email pattern. Running before vendor
+	// prefixes is required because some vendor tokens (e.g. SendGrid's SG.
+	// prefix) can appear as passwords inside credential URLs
+	// (e.g. smtps://apikey:SG.xxx@smtp.sendgrid.net). The vendor prefix
+	// pattern uses \S+ which greedily consumes SG.xxx@smtp.sendgrid.net
+	// (including the @ and hostname), preventing the URL pattern from ever
+	// seeing the full scheme://user:pass@host structure. Running the URL
+	// pattern first captures the entire credential URL as a unit, so the
+	// vendor prefix pattern has nothing left to partially consume.
+	// Running before the email pattern is required because the user:pass@host
+	// portion would otherwise be partially consumed by the email regex
+	// (matching pass@host), leaving the username unredacted. The username
+	// group uses * (zero-or-more) instead of + so that password-only URLs
+	// (e.g. redis://:secret@host) are also redacted.
+	// Redis commonly uses an empty username; when the host is an IP address the
+	// email-fallback cannot help because it requires a letter-only TLD.
+	//
+	// SMTP/SMTPS appear in application logs when email delivery fails (Django,
+	// Rails, Spring Boot). The existing email-fallback catches the password
+	// (matching password@host) but leaves the SMTP username unredacted; this
+	// pattern replaces the entire credential-bearing URL as a unit.
+	// LDAP/LDAPS bind DNs (cn=admin,dc=example,dc=com:password@host) follow the
+	// same scheme://user:pass@host structure and are similarly covered by
+	// replacing the full URL rather than relying on the email pattern to save the
+	// password component.
+	{
+		re:          regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?|smtps?|ldaps?)://[^:\s/]*:[^@\s]+@\S+`),
+		replacement: "[REDACTED]",
+	},
 	// Stripe secret keys (sk_live_/sk_test_) and restricted keys
 	// (rk_live_/rk_test_) use underscores as separators, so they do not match
 	// the sk- (hyphen) prefix above. They commonly appear in application error
@@ -106,8 +136,17 @@ var sensitivePatterns = []sensitivePattern{
 	// secrets are logged on authentication failures (e.g. "UNAUTHORIZED: GitLab:
 	// token glpat-xxx is invalid"). Docker Hub PAT prefix dckr_pat_ appears in
 	// image-pull error logs when a Docker Hub personal access token is rejected.
+	// SendGrid API keys (SG.) use a two-part dot-separated base64url format
+	// (SG.<22-char>.<43-char>) and appear in application pod logs when email
+	// delivery fails (Django EMAIL_BACKEND=sendgrid, Rails ActionMailer with
+	// sendgrid-ruby, Spring Boot with sendgrid-java) and the SendGrid API
+	// rejects the key (e.g. "SendGrid API error: 403 Forbidden — key SG.xxx").
+	// npm access tokens (npm_) are 36-character alphanumeric strings that appear
+	// in Node.js pod logs and CI/CD pipeline logs when npm registry authentication
+	// fails (e.g. "npm ERR! code E401 … token npm_xxx is invalid") or when an
+	// .npmrc file with an embedded token is printed in a build error trace.
 	{
-		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|glrrt-|glrt-|gldt-|glsoat-|glagent-|dckr_pat_|xox[bpaers]-|hvs\.|hvb\.)\S+`),
+		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|glrrt-|glrt-|gldt-|glsoat-|glagent-|dckr_pat_|SG\.|npm_|xox[bpaers]-|hvs\.|hvb\.)\S+`),
 		replacement: "[REDACTED]",
 	},
 	{
@@ -146,26 +185,6 @@ var sensitivePatterns = []sensitivePattern{
 	// cases where the token appears inline in log or diagnostic output.
 	{
 		re:          regexp.MustCompile(`(?i)(basic|bearer)\s+[A-Za-z0-9+/=._-]{20,}`),
-		replacement: "[REDACTED]",
-	},
-	// Credential-bearing connection URLs must come before the generic email
-	// pattern, because the user:pass@host portion would otherwise be partially
-	// consumed by the email regex (matching pass@host), leaving the username
-	// unredacted. The username group uses * (zero-or-more) instead of + so
-	// that password-only URLs (e.g. redis://:secret@host) are also redacted.
-	// Redis commonly uses an empty username; when the host is an IP address the
-	// email-fallback cannot help because it requires a letter-only TLD.
-	//
-	// SMTP/SMTPS appear in application logs when email delivery fails (Django,
-	// Rails, Spring Boot). The existing email-fallback catches the password
-	// (matching password@host) but leaves the SMTP username unredacted; this
-	// pattern replaces the entire credential-bearing URL as a unit.
-	// LDAP/LDAPS bind DNs (cn=admin,dc=example,dc=com:password@host) follow the
-	// same scheme://user:pass@host structure and are similarly covered by
-	// replacing the full URL rather than relying on the email pattern to save the
-	// password component.
-	{
-		re:          regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?|smtps?|ldaps?)://[^:\s/]*:[^@\s]+@\S+`),
 		replacement: "[REDACTED]",
 	},
 	// AWS access key IDs: AKIA prefix for long-term IAM user keys and ASIA

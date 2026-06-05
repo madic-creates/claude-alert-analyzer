@@ -1255,6 +1255,108 @@ func TestRedactSecrets_DockerHubPAT(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_SendGridTokens verifies that SendGrid API keys (SG. prefix)
+// are redacted when they appear bare in application pod logs. SendGrid keys use
+// a two-part dot-separated base64url format (SG.<part1>.<part2>) and appear in
+// logs when email delivery fails and the SendGrid API rejects the key. The
+// keyword=value pattern catches keys in env-var assignments (SENDGRID_API_KEY=…)
+// but not standalone occurrences without a keyword prefix; this vendor-prefix
+// pattern closes that gap.
+//
+// Token values are built from separate string literals so that static secret
+// scanners do not flag the test source as containing real credentials.
+func TestRedactSecrets_SendGridTokens(t *testing.T) {
+	// Build a representative two-part SendGrid API key from separate literals.
+	sgKey := "SG." + "TestSgApiKeyPart1ABCDE123" + "." + "TestSgApiKeyPart2XYZ789FghIjkLmnOpqRstUvwXyz"
+
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "bare key in email delivery error log",
+			input: "SendGrid API error: 403 Forbidden for key " + sgKey,
+			leak:  sgKey,
+		},
+		{
+			name:  "key in Django SMTP error",
+			input: "django.core.mail: SMTPAuthenticationError — token " + sgKey + " rejected",
+			leak:  sgKey,
+		},
+		{
+			name:  "key in JSON error response",
+			input: `{"errors":[{"message":"The provided authorization grant is invalid"}],"id":"` + sgKey + `"}`,
+			leak:  sgKey,
+		},
+		{
+			name:  "key in env assignment caught by vendor prefix",
+			input: "SENDGRID_API_KEY=" + sgKey,
+			leak:  sgKey,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("SendGrid API key leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
+// TestRedactSecrets_NpmTokens verifies that npm access tokens (npm_ prefix)
+// are redacted when they appear in Node.js pod logs and CI/CD pipeline logs.
+// npm tokens are 36-char alphanumeric strings with a distinctive npm_ prefix;
+// they appear on registry authentication failures (e.g. "npm ERR! E401 … token
+// npm_xxx is invalid") and in build-error traces that print an .npmrc file
+// containing an embedded token. The keyword=value pattern catches tokens in
+// explicit assignments (NPM_TOKEN=…) but not bare inline occurrences; this
+// vendor-prefix pattern closes that gap.
+//
+// Token values are built from separate string literals so that static secret
+// scanners do not flag the test source as containing real credentials.
+func TestRedactSecrets_NpmTokens(t *testing.T) {
+	tok1 := "npm_" + "TestNpmAccessToken123456789012345678"
+	tok2 := "npm_" + "AnotherNpmToken0987654321abcdefghij"
+
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "token in npm registry auth error",
+			input: "npm ERR! code E401\nnpm ERR! 401 Unauthorized - GET https://registry.npmjs.org — token " + tok1 + " is invalid",
+			leak:  tok1,
+		},
+		{
+			name:  "token in .npmrc trace",
+			input: "//registry.npmjs.org/:_authToken=" + tok2,
+			leak:  tok2,
+		},
+		{
+			name:  "token in env assignment",
+			input: "NPM_TOKEN=" + tok1,
+			leak:  tok1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("npm token leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
 func TestRedactSecrets_NoFalsePositive(t *testing.T) {
 	input := "CPU load is 4.5 at 12:00"
 	result := RedactSecrets(input)
