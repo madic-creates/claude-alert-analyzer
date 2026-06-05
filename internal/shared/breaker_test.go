@@ -712,6 +712,40 @@ func TestCircuitBreaker_ProbeWatchdogFiresAtExactBoundary(t *testing.T) {
 	}
 }
 
+// TestCircuitBreaker_OpenTransitionsAtExactDuration verifies the exact boundary
+// of the open-duration guard in Acquire(): when elapsed == openDuration exactly,
+// the condition `now.Sub(b.openedAt) < b.openDuration` is false and the breaker
+// transitions to half-open, issuing a probe permit. A < → <= mutation would keep
+// the breaker open at the boundary. The existing TestCircuitBreaker_OpenToHalfOpenAfterDuration
+// checks at 29s (below) and 31s (above) for openDuration=30s but never at exactly 30s,
+// so the mutation goes undetected without this test.
+func TestCircuitBreaker_OpenTransitionsAtExactDuration(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(0, 0)}
+	const openDuration = 30 * time.Second
+	b := NewCircuitBreaker(1, openDuration, time.Minute, clk.Now)
+
+	// Trip the breaker at t=0; openedAt=0.
+	p, _ := b.Acquire()
+	p.Done(errors.New("fail"))
+
+	// One nanosecond before the boundary: must remain open.
+	clk.advance(openDuration - time.Nanosecond)
+	if _, err := b.Acquire(); !errors.Is(err, ErrCircuitOpen) {
+		t.Fatalf("1ns before boundary: err=%v, want ErrCircuitOpen", err)
+	}
+
+	// Exactly at the boundary: elapsed == openDuration, `< openDuration` is false.
+	// Must transition to half-open and issue a probe permit.
+	clk.advance(time.Nanosecond)
+	probe, err := b.Acquire()
+	if err != nil {
+		t.Fatalf("at elapsed==openDuration: got err=%v, want probe permit", err)
+	}
+	if !probe.IsProbe() {
+		t.Fatal("at elapsed==openDuration: expected probe permit (< guard, not <=)")
+	}
+}
+
 // TestCircuitBreaker_Acquire_InvalidState covers the default branch in
 // Acquire()'s switch statement. breakerState is a private iota type with
 // exactly three valid values; the default case is a safety guard against
