@@ -1145,6 +1145,65 @@ func TestNewAPIClient_URLNormalization(t *testing.T) {
 	}
 }
 
+// TestGetHostServices_ExactServiceLimit verifies that exactly maxServiceLines services
+// are returned without truncation. The guard is `total > maxServiceLines` (strictly
+// greater than), so a list of exactly 100 services must NOT trigger the truncation path.
+// Paired with TestGetHostServices_TruncatesLargeServiceList (101+ → truncated), this
+// closes the mutation gap where `>` could silently become `>=` — a mutation that would
+// add a spurious "... [0 more services truncated]" marker and drop the 100th service
+// line from the output.
+func TestGetHostServices_ExactServiceLimit(t *testing.T) {
+	// Mirror the package-local constant from GetHostServices so refactors stay
+	// in sync without requiring it to be exported.
+	const limit = 100 // must equal maxServiceLines in context.go
+
+	type svcEntry struct {
+		Extensions struct {
+			Description string `json:"description"`
+			State       int    `json:"state"`
+			Output      string `json:"plugin_output"`
+		} `json:"extensions"`
+	}
+	var entries []svcEntry
+	for i := 0; i < limit; i++ {
+		e := svcEntry{}
+		e.Extensions.Description = fmt.Sprintf("Svc%03d", i)
+		e.Extensions.State = 0 // OK
+		e.Extensions.Output = "all good"
+		entries = append(entries, e)
+	}
+
+	body, err := json.Marshal(map[string]any{"value": entries})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(body) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	apiClient := &APIClient{HTTP: srv.Client(), URL: srv.URL + "/", User: "auto", Secret: "secret"}
+	result := apiClient.GetHostServices(context.Background(), "host1")
+
+	lines := strings.Split(strings.TrimRight(result, "\n"), "\n")
+
+	if len(lines) != limit {
+		t.Errorf("expected exactly %d lines for %d services (no truncation), got %d lines",
+			limit, limit, len(lines))
+	}
+	if strings.Contains(result, "truncated") {
+		t.Errorf("truncation marker must not appear when total == limit (%d); got:\n%s",
+			limit, result)
+	}
+	// The last service must be present — a >= mutation drops it behind the marker.
+	lastSvc := fmt.Sprintf("Svc%03d", limit-1)
+	if !strings.Contains(result, lastSvc) {
+		t.Errorf("last service %q must be present when total == limit; result:\n%s", lastSvc, result)
+	}
+}
+
 // TestGetHostServices_CritNotMisclassifiedByDescription is a regression test for
 // a bug where the old two-pass sort used strings.Contains(line, ": OK —") to
 // detect OK services. A CRIT service whose *description* contained the literal
