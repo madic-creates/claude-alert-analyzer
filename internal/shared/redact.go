@@ -105,8 +105,16 @@ var sensitivePatterns = []sensitivePattern{
 	// keyword=value pattern does not catch bare NATS URLs because the scheme name
 	// (NATS_URL) is not in its keyword list; the email-fallback cannot help either
 	// because the host portion often lacks a letter-only TLD.
+	// SQL Server (sqlserver://, mssql://) connection URLs appear in pod logs when
+	// an enterprise workload fails to connect to a Microsoft SQL Server instance.
+	// The go-mssqldb driver (github.com/microsoft/go-mssqldb) uses
+	// sqlserver://user:password@hostname:1433?database=dbname; older forks and the
+	// denisenkom driver also accept mssql://. Neither scheme name appears in the
+	// keyword=value keyword list (the env var is typically DATABASE_URL or
+	// DB_CONNECTION_STRING, both absent from the list), so without this URL
+	// pattern the full credential-bearing URL would reach the Claude API unredacted.
 	{
-		re:          regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?|smtps?|ldaps?|nats)://[^:\s/]*:[^@\s]+@\S+`),
+		re:          regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?|smtps?|ldaps?|nats|sqlserver|mssql)://[^:\s/]*:[^@\s]+@\S+`),
 		replacement: "[REDACTED]",
 	},
 	// Stripe secret keys (sk_live_/sk_test_) and restricted keys

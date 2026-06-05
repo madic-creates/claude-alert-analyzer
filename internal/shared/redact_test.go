@@ -549,6 +549,42 @@ func TestRedactSecrets_NATSURLs(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_SQLServerURLs verifies that credential-bearing Microsoft SQL
+// Server connection URLs are fully redacted. Enterprise Kubernetes workloads
+// frequently connect to SQL Server using go-mssqldb (sqlserver://) or older
+// drivers (mssql://); authentication failures emit the full URL with credentials.
+func TestRedactSecrets_SQLServerURLs(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "sqlserver:// URL with credentials in error log",
+			input: "mssql: Login error: sqlserver://svcaccount:P%40ssw0rd@sql.prod.corp:1433?database=appdb",
+			want:  "mssql: Login error: [REDACTED]",
+		},
+		{
+			name:  "mssql:// URL with credentials in env assignment",
+			input: "DATABASE_URL=mssql://svcaccount:P%40ssw0rd@sql.prod.corp:1433",
+			want:  "DATABASE_URL=[REDACTED]",
+		},
+		{
+			name:  "sqlserver URL without credentials is not redacted",
+			input: "connecting to sqlserver://sql.prod.corp:1433",
+			want:  "connecting to sqlserver://sql.prod.corp:1433",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := RedactSecrets(tc.input)
+			if got != tc.want {
+				t.Errorf("RedactSecrets(%q)\n  got:  %s\n  want: %s", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRedactSecrets_EmailAddress(t *testing.T) {
 	cases := []struct {
 		name  string
