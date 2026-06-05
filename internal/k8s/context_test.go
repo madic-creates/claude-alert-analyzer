@@ -482,6 +482,57 @@ func TestGetPodLogs_APILimitReachedFewFailures(t *testing.T) {
 	}
 }
 
+// TestGetPodLogs_NoAPILimitNoteOneBelowThreshold closes the mutation gap for
+// the `len(podList.Items) >= maxLogPods*3` guard (context.go). Paired with
+// TestGetPodLogs_APILimitReachedFewFailures (exactly maxLogPods*3 → note added),
+// this test uses maxLogPods*3-1 items (one below the threshold) and asserts the
+// note must NOT appear. A constant-shift mutation from maxLogPods*3 to
+// maxLogPods*3-1 changes behaviour only at exactly maxLogPods*3-1 items, which
+// was previously undetected.
+func TestGetPodLogs_NoAPILimitNoteOneBelowThreshold(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	// Return exactly maxLogPods*3-1 pods — one below the threshold that triggers
+	// the "more may exist" note. The server-side Limit was NOT reached, so we
+	// have full visibility and the note must not appear.
+	const oneBelowLimit = maxLogPods*3 - 1
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		items := make([]corev1.Pod, oneBelowLimit)
+		for i := range items {
+			if i == 0 {
+				// One failing pod so the output is non-empty.
+				items[i] = corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Name: "fail-pod-0", Namespace: "prod"},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
+					Status:     corev1.PodStatus{Phase: corev1.PodFailed},
+				}
+			} else {
+				// Remaining pods are healthy Running (filtered out by getPodLogs).
+				items[i] = corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("ok-pod-%d", i), Namespace: "prod"},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "main"}}},
+					Status: corev1.PodStatus{
+						Phase:             corev1.PodRunning,
+						ContainerStatuses: []corev1.ContainerStatus{{Ready: true}},
+					},
+				}
+			}
+		}
+		return true, &corev1.PodList{Items: items}, nil
+	})
+
+	cfg := Config{MaxLogBytes: 4096}
+	result := getPodLogs(context.Background(), cs, "prod", cfg)
+
+	if strings.Contains(result, "more may exist") {
+		t.Errorf("unexpected 'more may exist' note for %d total pods (one below maxLogPods*3=%d): %q",
+			oneBelowLimit, maxLogPods*3, result)
+	}
+	if !strings.Contains(result, "fail-pod-0") {
+		t.Errorf("expected log entry for the failing pod in output: %q", result)
+	}
+}
+
 // TestGetPodLogs_NoFalsePositiveNoteWhenAllFailingPodsShown verifies that the
 // "more may exist" note is NOT appended when the API returns all pods (fewer
 // than the server-side limit) and the number of failing pods is exactly
