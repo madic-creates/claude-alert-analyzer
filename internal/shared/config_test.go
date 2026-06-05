@@ -72,6 +72,36 @@ func TestParseIntEnv_BelowMin(t *testing.T) {
 	}
 }
 
+// TestParseIntEnv_ExactMin verifies that a value equal to min is accepted.
+// ParseIntEnv uses `v < min || v > max`; a < → <= mutation would reject v==min.
+// In production, MAX_AGENT_ROUNDS has min=1 so a value of exactly 1 (single
+// static round) must be valid; similarly GROUP_COOLDOWN_SECONDS has min=0.
+func TestParseIntEnv_ExactMin(t *testing.T) {
+	t.Setenv("TEST_INT", "0")
+	got, err := ParseIntEnv("TEST_INT", "10", 0, 100)
+	if err != nil {
+		t.Fatalf("unexpected error for v==min: %v", err)
+	}
+	if got != 0 {
+		t.Errorf("got %d, want 0 (exact min)", got)
+	}
+}
+
+// TestParseIntEnv_ExactMax verifies that a value equal to max is accepted.
+// ParseIntEnv uses `v < min || v > max`; a > → >= mutation would reject v==max.
+// In production, MAX_AGENT_ROUNDS has max=50 so a value of exactly 50 must be
+// valid; operators configure that when they want the maximum tool-loop budget.
+func TestParseIntEnv_ExactMax(t *testing.T) {
+	t.Setenv("TEST_INT", "100")
+	got, err := ParseIntEnv("TEST_INT", "10", 0, 100)
+	if err != nil {
+		t.Fatalf("unexpected error for v==max: %v", err)
+	}
+	if got != 100 {
+		t.Errorf("got %d, want 100 (exact max)", got)
+	}
+}
+
 func TestParseBoolEnv_Unset(t *testing.T) {
 	os.Unsetenv("TEST_BOOL_MISSING")
 	got, err := ParseBoolEnv("TEST_BOOL_MISSING", true)
