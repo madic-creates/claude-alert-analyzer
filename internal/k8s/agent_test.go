@@ -559,6 +559,15 @@ func TestParsePromQLInput(t *testing.T) {
 			wantErr: "control character",
 		},
 		{
+			// Exactly maxKubectlPromQLen bytes must be accepted. Paired with the
+			// "too long" case (4097 → rejected), this closes the mutation gap where
+			// '>' could silently become '>=' in the length guard — a mutation that
+			// would reject valid max-length queries with no test failure.
+			name:  "exactly at max length is accepted",
+			input: `{"query":"` + strings.Repeat("x", maxKubectlPromQLen) + `"}`,
+			want:  strings.Repeat("x", maxKubectlPromQLen),
+		},
+		{
 			name:    "too long",
 			input:   `{"query":"` + strings.Repeat("x", 4097) + `"}`,
 			wantErr: "exceeds maximum",
