@@ -1386,6 +1386,59 @@ func TestProcessAlert_StormModeAggregatesNotification(t *testing.T) {
 	}
 }
 
+// TestProcessAlert_StormModeSanitizesTitle verifies that the title passed to
+// StormNotify.Add() is the sanitized safeTitle rather than the raw alert.Title.
+// An embedded newline in alert.Title would otherwise appear as a separate line
+// in the aggregated notification body, injecting content into the operator view.
+func TestProcessAlert_StormModeSanitizesTitle(t *testing.T) {
+	cm := shared.NewCooldownManager()
+	storm := shared.NewStormDetector(1, time.Now)
+	storm.Record()
+	storm.Record() // count=2 > threshold=1 → IsDegraded() == true
+
+	an := &mockAnalyzer{result: "analysis text"}
+
+	stormPub := &pipelineFakePublisher{}
+	stormNotify := shared.NewNotifyAggregator([]shared.Publisher{stormPub}, time.Hour, "Storm: %d alerts", "3", nil)
+	defer stormNotify.Stop(context.Background())
+
+	deps := PipelineDeps{
+		Cooldown:     cm,
+		Metrics:      &shared.AlertMetrics{},
+		Policy:       &shared.AnalysisPolicy{DefaultModel: "x", DefaultMaxRounds: 0, Storm: storm},
+		SSHEnabled:   false,
+		ValidateHost: validateHostNoop,
+		GatherContext: func(_ context.Context, _ shared.AlertPayload, _ *HostInfo) shared.AnalysisContext {
+			return shared.AnalysisContext{}
+		},
+		Analyzer:    an,
+		ToolRunner:  &mockAnalyzer{},
+		Publishers:  []shared.Publisher{&pipelineFakePublisher{}},
+		StormNotify: stormNotify,
+	}
+	alert := shared.AlertPayload{
+		Fingerprint:   "fp1",
+		Title:         "CPU High\nInjected-sentinel",
+		SeverityLevel: shared.SeverityWarning,
+	}
+
+	ProcessAlert(context.Background(), deps, alert)
+
+	if err := stormNotify.Stop(context.Background()); err != nil {
+		t.Fatalf("StormNotify.Stop: %v", err)
+	}
+	if n := len(stormPub.calls); n != 1 {
+		t.Fatalf("storm aggregator should receive exactly 1 flush; got %d calls", n)
+	}
+	body := stormPub.calls[0].body
+	if strings.Contains(body, "\nInjected-sentinel") {
+		t.Errorf("storm notification body contains raw injected line: %q", body)
+	}
+	if !strings.Contains(body, "CPU High") {
+		t.Errorf("storm notification body should contain the base alert name: %q", body)
+	}
+}
+
 // TestProcessAlert_AnalyzerErrorOpensBreaker verifies that an analysis failure
 // is correctly reported through the permit so that the breaker's
 // consecFailures counter increments and the breaker eventually opens.
