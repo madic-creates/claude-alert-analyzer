@@ -1510,6 +1510,48 @@ func TestRedactSecrets_DatabricksTokens(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_DigitalOceanTokens verifies that DigitalOcean personal
+// access tokens (dop_v1_ prefix) are redacted. Real tokens are dop_v1_ followed
+// by 64 hex characters; they appear in DOKS pod logs when DOCR auth fails.
+// Split literals prevent the test file itself from containing a plain token.
+func TestRedactSecrets_DigitalOceanTokens(t *testing.T) {
+	tok1 := "dop_v1_" + "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+	tok2 := "dop_v1_" + "0f1e2d3c4b5a6978675645342312019f8e7d6c5b4a3928170605040302010009"
+
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "bare token in registry auth failure log",
+			input: "failed to authenticate with registry: token " + tok1 + " is invalid",
+			leak:  tok1,
+		},
+		{
+			name:  "token in env assignment",
+			input: "DIGITALOCEAN_TOKEN=" + tok2,
+			leak:  tok2,
+		},
+		{
+			name:  "token in Flux controller error log",
+			input: "flux: DigitalOcean API error: authentication failed token=" + tok1,
+			leak:  tok1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("DigitalOcean token leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
 func TestRedactSecrets_NoFalsePositive(t *testing.T) {
 	input := "CPU load is 4.5 at 12:00"
 	result := RedactSecrets(input)

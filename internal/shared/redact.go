@@ -174,8 +174,16 @@ var sensitivePatterns = []sensitivePattern{
 	// or "databricks.sdk: authentication failed with token dapi…"). Like hf_
 	// tokens, bare occurrences use a space separator and are not caught by the
 	// keyword=value pattern above.
+	// DigitalOcean personal access tokens (dop_v1_) are 64-character hex strings
+	// used to authenticate against the DigitalOcean API and the DigitalOcean
+	// Container Registry (DOCR). They appear in DOKS (DigitalOcean Kubernetes
+	// Service) pod logs when a registry pull fails (e.g. "failed to authenticate
+	// with registry: token dop_v1_xxx is invalid") or when a Flux/ArgoCD CD
+	// controller logs a DigitalOcean API call failure. Like hf_ and dapi tokens,
+	// bare occurrences use a space separator and are not caught by the
+	// keyword=value pattern above.
 	{
-		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|glrrt-|glrt-|gldt-|glsoat-|glagent-|dckr_pat_|SG\.|npm_|hf_|dapi|xox[bpaers]-|hvs\.|hvb\.)\S+`),
+		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|glrrt-|glrt-|gldt-|glsoat-|glagent-|dckr_pat_|SG\.|npm_|hf_|dapi|dop_v1_|xox[bpaers]-|hvs\.|hvb\.)\S+`),
 		replacement: "[REDACTED]",
 	},
 	{
