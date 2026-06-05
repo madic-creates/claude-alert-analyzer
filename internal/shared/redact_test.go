@@ -1398,6 +1398,47 @@ func TestRedactSecrets_HuggingFaceTokens(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_DatabricksTokens verifies that Databricks personal access
+// tokens (dapi prefix) are redacted. Real tokens are ~32 hex characters.
+// Split literals prevent the test file itself from containing a plain token.
+func TestRedactSecrets_DatabricksTokens(t *testing.T) {
+	tok1 := "dapi" + "3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b"
+	tok2 := "dapi" + "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "bare token in SDK auth failure log",
+			input: "databricks.sdk: authentication failed with token " + tok1,
+			leak:  tok1,
+		},
+		{
+			name:  "token in env assignment",
+			input: "DATABRICKS_TOKEN=" + tok2,
+			leak:  tok2,
+		},
+		{
+			name:  "token in REST API error log",
+			input: "Error: 403 Forbidden, token=" + tok1 + " is invalid",
+			leak:  tok1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("Databricks token leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
 func TestRedactSecrets_NoFalsePositive(t *testing.T) {
 	input := "CPU load is 4.5 at 12:00"
 	result := RedactSecrets(input)

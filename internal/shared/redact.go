@@ -152,8 +152,15 @@ var sensitivePatterns = []sensitivePattern{
 	// The keyword=value pattern above does not catch bare occurrences like
 	// "token hf_xxx" because its separator requires '=' or ':' — a plain space
 	// before the token value is not matched. This prefix pattern fills that gap.
+	// Databricks personal access tokens (dapi) are ~32-character hex strings
+	// used to authenticate against Databricks REST APIs (MLflow tracking, model
+	// serving, Feature Store, Unity Catalog). They appear in ML workload pod logs
+	// when a Databricks API call fails (e.g. "Error: 403 Forbidden, token=dapi…"
+	// or "databricks.sdk: authentication failed with token dapi…"). Like hf_
+	// tokens, bare occurrences use a space separator and are not caught by the
+	// keyword=value pattern above.
 	{
-		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|glrrt-|glrt-|gldt-|glsoat-|glagent-|dckr_pat_|SG\.|npm_|hf_|xox[bpaers]-|hvs\.|hvb\.)\S+`),
+		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|glrrt-|glrt-|gldt-|glsoat-|glagent-|dckr_pat_|SG\.|npm_|hf_|dapi|xox[bpaers]-|hvs\.|hvb\.)\S+`),
 		replacement: "[REDACTED]",
 	},
 	{
