@@ -3818,6 +3818,48 @@ func TestRunAgenticDiagnostics_PanicRecovery(t *testing.T) {
 	}
 }
 
+// TestRunAgenticDiagnostics_PanicMessageSanitized verifies that an embedded
+// newline in a panic value is stripped by wrappedHandleTool before the message
+// is returned as a tool result. Without sanitization, a panic string like
+// "msg\n## Section" could inject a fake Markdown header into the Claude
+// tool-result context — the same vector fixed for runAsync in Cycle 75.
+func TestRunAgenticDiagnostics_PanicMessageSanitized(t *testing.T) {
+	old := runSSHCommandFn
+	runSSHCommandFn = func(_ context.Context, _ *ssh.Client, _ []string, _ time.Duration) sshResult {
+		panic("tool panic\n## Injected Markdown Section")
+	}
+	t.Cleanup(func() { runSSHCommandFn = old })
+
+	metrics := &shared.AlertMetrics{Prom: shared.NewPrometheusMetricsForTest(shared.ProductCheckMK)}
+
+	runner := &driverToolLoopRunner{
+		driver: func(handleTool func(name string, input json.RawMessage) (string, error)) (string, error) {
+			result, err := handleTool("execute_command", json.RawMessage(`{"command":["df","-h"]}`))
+			if err != nil {
+				t.Errorf("wrappedHandleTool must swallow panic, got error: %v", err)
+			}
+			if strings.ContainsRune(result, '\n') {
+				t.Errorf("newline from panic value leaked into tool result: %q", result)
+			}
+			if !strings.Contains(result, "panicked") {
+				t.Errorf("expected panic-recovery sentinel in result, got: %q", result)
+			}
+			if !strings.Contains(result, "tool panic") {
+				t.Errorf("expected safe part of panic message in result, got: %q", result)
+			}
+			return "done", nil
+		},
+	}
+
+	_, err := RunAgenticDiagnostics(
+		context.Background(), Config{SSHDeniedCommands: DefaultDeniedCommands},
+		runner, nilDialer{}, metrics, shared.SeverityWarning, "host1", "10.0.0.1", "ctx", 10, "test-model",
+	)
+	if err != nil {
+		t.Fatalf("RunAgenticDiagnostics returned unexpected error: %v", err)
+	}
+}
+
 // TestRunAgenticDiagnostics_RejectedValidationMetricClassification verifies
 // that wrappedHandleTool records outcome="rejected_validation" when
 // parseCommandInput rejects the argv. handleTool returns the failure as

@@ -985,6 +985,10 @@ func parseCommandInput(input json.RawMessage) ([]string, error) {
 	return parsed.Command, nil
 }
 
+// runSSHCommandFn is the package-level binding used by the handleTool closure inside
+// RunAgenticDiagnostics. Tests may replace it to inject controlled panics or errors.
+var runSSHCommandFn = runSSHCommand
+
 // RunAgenticDiagnostics opens an SSH connection to the host and runs a Claude tool-use
 // loop where Claude freely chooses diagnostic commands. Returns the final analysis text.
 // verifiedIP is the IP address confirmed by CheckMK; the TCP connection is made directly
@@ -1046,7 +1050,7 @@ func RunAgenticDiagnostics(
 		logCmd := shellQuote(argv)
 		slog.Info("agentic SSH command", "hostname", hostname, "command", logCmd)
 
-		r := runSSHCommand(ctx, sshClient, argv, agentToolTimeout)
+		r := runSSHCommandFn(ctx, sshClient, argv, agentToolTimeout)
 		// Sanitize once before branching so all three outcome paths (transport
 		// error, non-zero exit, success) share the same pipeline and the
 		// post-sanitization emptiness check is consistent across branches.
