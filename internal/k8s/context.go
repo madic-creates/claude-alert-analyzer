@@ -382,6 +382,11 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 	return strings.Join(sections, "\n")
 }
 
+// maxEvents is the maximum number of warning events returned to Claude.
+// The API is over-fetched by 5× (maxEvents*5) then sorted by recency so the
+// most recent events are shown. Mirrors the package-level maxPods constant.
+const maxEvents = 20
+
 func getEvents(ctx context.Context, clientset kubernetes.Interface, namespace string) string {
 	// Fetch up to maxEvents*5 events from the API so that after sorting by
 	// recency we can present the most recent maxEvents to Claude. The Kubernetes
@@ -389,7 +394,6 @@ func getEvents(ctx context.Context, clientset kubernetes.Interface, namespace st
 	// over-fetching and sorting, a busy namespace (e.g. a CrashLoopBackOff pod
 	// generating rapid-fire events) would show only the oldest warnings, which
 	// are the least diagnostically useful.
-	const maxEvents = 20
 	eventList, err := clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
 		FieldSelector: "type!=Normal",
 		Limit:         maxEvents * 5,

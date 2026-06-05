@@ -1130,6 +1130,52 @@ func TestGetEvents_NoAPILimitNote(t *testing.T) {
 	}
 }
 
+// TestGetEvents_NoAPILimitNoteAtOneBelowLimit closes the mutation gap for the
+// `if len(eventList.Items) >= maxEvents*5` guard (context.go line 440). The
+// guard uses >=, so the threshold is 100 (maxEvents*5). Existing tests cover
+// exactly 100 (note added) and 5 (no note). A mutation that shifts the constant
+// from maxEvents*5 to maxEvents*5-1 would change the threshold to 99, causing
+// the note to appear for 99 events — but that mutation is invisible to the
+// 5-event test. This test uses exactly 99 events (maxEvents*5-1) and asserts
+// that the note must NOT appear, so any constant-shift mutation is caught.
+func TestGetEvents_NoAPILimitNoteAtOneBelowLimit(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	// Return exactly maxEvents*5-1 = 99 events — one below the threshold that
+	// triggers the "more may exist" note. The guard is `>= maxEvents*5` (100),
+	// so 99 events must not trigger the note.
+	const oneBelowLimit = maxEvents*5 - 1 // 99
+	cs.PrependReactor("list", "events", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		items := make([]corev1.Event, oneBelowLimit)
+		for i := range items {
+			items[i] = corev1.Event{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("evt-%03d", i),
+					Namespace: "medium",
+				},
+				Type:    corev1.EventTypeWarning,
+				Reason:  "BackOff",
+				Message: fmt.Sprintf("event %d", i),
+				InvolvedObject: corev1.ObjectReference{
+					Name: fmt.Sprintf("pod-%03d", i),
+				},
+				LastTimestamp: metav1.Time{Time: time.Now().Add(time.Duration(i) * time.Second)},
+			}
+		}
+		return true, &corev1.EventList{Items: items}, nil
+	})
+
+	alert := makeAlertWithLabels(map[string]string{"namespace": "medium"})
+	cfg := Config{MaxLogBytes: 4096}
+
+	events, _, _ := GetKubeContext(context.Background(), cs, alert, cfg)
+
+	if strings.Contains(events, "more may exist") {
+		t.Errorf("unexpected 'more may exist' note for %d events (one below maxEvents*5=%d): %q",
+			oneBelowLimit, maxEvents*5, events)
+	}
+}
+
 // ----- GetPrometheusMetrics tests -----
 
 func TestGetMetrics_NoNamespaceNoAlertname(t *testing.T) {
