@@ -150,3 +150,31 @@ func TestLimitedWriter_ConcurrentSafety(t *testing.T) {
 		t.Errorf("len(out)=%d, want %d", len(out), goroutines*len(chunk))
 	}
 }
+
+// TestLimitedWriter_ExactFitDoesNotSetTruncated verifies the exact boundary of
+// the partial-write guard: a write whose size equals the remaining capacity
+// (n == remaining) must NOT set the truncated flag. The guard is
+// `if n > lw.remaining`, so n == remaining is strictly in-bounds.
+// A mutation of '>' to '>=' would incorrectly mark the write as truncated.
+// All existing "no truncation" tests write well under the limit (e.g. 5 bytes
+// into a 10-byte buffer), so the mutation would pass them undetected.
+func TestLimitedWriter_ExactFitDoesNotSetTruncated(t *testing.T) {
+	lw := NewLimitedWriter(5)
+	n, err := lw.Write([]byte("hello")) // exactly 5 bytes == limit
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 5 {
+		t.Errorf("n = %d, want 5", n)
+	}
+	out, truncated := lw.Snapshot()
+	if out != "hello" {
+		t.Errorf("buf = %q, want \"hello\"", out)
+	}
+	if truncated {
+		t.Errorf("truncated = true for an exact-fit write (n == remaining); want false")
+	}
+	if rem := lw.Remaining(); rem != 0 {
+		t.Errorf("remaining = %d, want 0 after exact-fit write", rem)
+	}
+}
