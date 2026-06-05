@@ -1552,6 +1552,92 @@ func TestRedactSecrets_DigitalOceanTokens(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_GrafanaCloudTokens verifies that Grafana Cloud service
+// account tokens (glsa_ prefix) are redacted. These tokens authenticate
+// datasource connections and remote_write endpoints in Grafana Cloud; they
+// appear in pod logs when a Prometheus remote_write or Grafana Agent auth fails.
+// Split literals prevent the test file from containing a plain token.
+func TestRedactSecrets_GrafanaCloudTokens(t *testing.T) {
+	tok1 := "glsa_" + "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
+	tok2 := "glsa_" + "0f1e2d3c4b5a697867564534231201ab"
+
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "bare token in remote_write auth failure log",
+			input: "remote_write: authentication error: Bearer " + tok1,
+			leak:  tok1,
+		},
+		{
+			name:  "token in env assignment",
+			input: "GRAFANA_TOKEN=" + tok2,
+			leak:  tok2,
+		},
+		{
+			name:  "token in Grafana Agent error log",
+			input: "grafana-agent: metrics write failed, token " + tok1 + " rejected",
+			leak:  tok1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("Grafana Cloud token leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
+// TestRedactSecrets_PulumiTokens verifies that Pulumi access tokens (pul-
+// prefix) are redacted. These tokens authenticate with the Pulumi Cloud backend
+// for state management; they appear in CD pipeline pod logs when pulumi
+// up/destroy fails authentication. Split literals prevent the test file from
+// containing a plain token.
+func TestRedactSecrets_PulumiTokens(t *testing.T) {
+	tok1 := "pul-" + "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0"
+	tok2 := "pul-" + "z9y8x7w6v5u4t3s2r1q0p9o8n7m6l5k4j3i2h1g0f9e8d7c6b5a4"
+
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "bare token in Pulumi auth failure log",
+			input: "error: PULUMI_ACCESS_TOKEN " + tok1 + " is invalid",
+			leak:  tok1,
+		},
+		{
+			name:  "token in env assignment",
+			input: "PULUMI_ACCESS_TOKEN=" + tok2,
+			leak:  tok2,
+		},
+		{
+			name:  "token in ArgoCD application controller log",
+			input: "pulumi: backend authentication failed, token=" + tok1,
+			leak:  tok1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("Pulumi token leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
 // TestRedactSecrets_HTTPSCredentialURLs verifies that credential-bearing
 // HTTP/HTTPS URLs are fully redacted. Go's net/http library includes the full
 // URL in transport-layer error messages; the username portion would otherwise

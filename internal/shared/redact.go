@@ -202,8 +202,23 @@ var sensitivePatterns = []sensitivePattern{
 	// controller logs a DigitalOcean API call failure. Like hf_ and dapi tokens,
 	// bare occurrences use a space separator and are not caught by the
 	// keyword=value pattern above.
+	// Grafana Cloud service account tokens (glsa_) are ~40-character hex strings
+	// used to authenticate datasource connections, recording rules, and
+	// remote_write integrations with Grafana Cloud (Mimir, Loki, Tempo). They
+	// appear in pod logs when a Prometheus remote_write endpoint or Grafana Agent
+	// rejects the token (e.g. "remote_write: authentication error: Bearer
+	// glsa_xxx"). They share the gl* prefix family with GitLab tokens (glpat-,
+	// glagent-, etc.) but are issued by Grafana, not GitLab. The keyword=value
+	// pattern catches GRAFANA_TOKEN=... but bare space-separated occurrences are
+	// not matched by it — this prefix pattern fills that gap.
+	// Pulumi access tokens (pul-) are ~100-character base64url strings used to
+	// authenticate with the Pulumi Cloud backend for state management and secrets.
+	// They appear in Kubernetes CD pipeline pod logs when a pulumi up/destroy/
+	// preview fails to authenticate (e.g. "error: PULUMI_ACCESS_TOKEN pul-xxx is
+	// invalid"). The keyword=value pattern catches PULUMI_ACCESS_TOKEN=... but
+	// bare occurrences with a space separator are not matched by it.
 	{
-		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|glrrt-|glrt-|gldt-|glsoat-|glagent-|dckr_pat_|SG\.|npm_|hf_|dapi|dop_v1_|xox[bpaers]-|hvs\.|hvb\.)\S+`),
+		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|glrrt-|glrt-|gldt-|glsoat-|glagent-|glsa_|dckr_pat_|SG\.|npm_|hf_|dapi|dop_v1_|pul-|xox[bpaers]-|hvs\.|hvb\.)\S+`),
 		replacement: "[REDACTED]",
 	},
 	{
