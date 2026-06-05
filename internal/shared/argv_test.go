@@ -91,3 +91,41 @@ func TestValidateArgv_ExactLimits(t *testing.T) {
 		t.Fatalf("unexpected error at exact per-element limit: %v", err)
 	}
 }
+
+// TestValidateArgv_ExactElementCount verifies the exact boundary at
+// MaxArgvElements: exactly MaxArgvElements elements must be accepted. Paired
+// with TestValidateArgv_TooManyElements (MaxArgvElements+1 → rejected), this
+// closes the mutation gap where '>' could silently become '>=' in the count
+// guard — a mutation that would reject the maximum allowed count without
+// any test failure under the previous over-boundary-only coverage.
+func TestValidateArgv_ExactElementCount(t *testing.T) {
+	args := make([]string, MaxArgvElements)
+	for i := range args {
+		args[i] = "x"
+	}
+	if err := ValidateArgv(args); err != nil {
+		t.Fatalf("exactly MaxArgvElements (%d) elements should be accepted, got: %v", MaxArgvElements, err)
+	}
+}
+
+// TestValidateArgv_ExactTotalBytes verifies the exact boundary at
+// MaxTotalArgBytes: a command whose combined byte count equals MaxTotalArgBytes
+// must be accepted. Paired with TestValidateArgv_TotalByteCap (over the limit
+// → rejected), this closes the mutation gap where '>' could silently become
+// '>=' in the total-bytes guard — a mutation that would reject the maximum
+// allowed total without any test failure.
+func TestValidateArgv_ExactTotalBytes(t *testing.T) {
+	// Build an argv whose total byte count is exactly MaxTotalArgBytes.
+	// "cmd" = 3 bytes; fill the remainder with args capped at MaxArgLen each.
+	//   3 + 3*MaxArgLen + rem = MaxTotalArgBytes
+	//   rem = MaxTotalArgBytes - 3 - 3*MaxArgLen = 16384 - 3 - 12288 = 4093
+	// All three filler args (4096 bytes) and the remainder (4093 bytes) are
+	// within the per-element MaxArgLen limit (4096).
+	cmd := "cmd"
+	filler := strings.Repeat("A", MaxArgLen)
+	rem := MaxTotalArgBytes - len(cmd) - 3*MaxArgLen
+	args := []string{cmd, filler, filler, filler, strings.Repeat("B", rem)}
+	if err := ValidateArgv(args); err != nil {
+		t.Fatalf("total bytes == MaxTotalArgBytes (%d) should be accepted, got: %v", MaxTotalArgBytes, err)
+	}
+}
