@@ -382,6 +382,20 @@ func TestLoadHistoryConfigErrors(t *testing.T) {
 		}
 	})
 
+	// TestLoadHistoryConfig_ZeroTTLRejected closes the mutation gap for the
+	// `if ttl <= 0` guard. The existing "non-positive" sub-test only uses "-1h"
+	// (strictly negative); a `<= → <` mutation changes behaviour only at zero,
+	// allowing HISTORY_TTL=0s to pass validation. A zero TTL means every entry
+	// expires immediately on the next prune — effectively disabling history
+	// silently. This sub-test ensures exactly zero is also rejected.
+	t.Run("zero HISTORY_TTL rejected", func(t *testing.T) {
+		setAll(t)
+		t.Setenv("HISTORY_TTL", "0s")
+		if _, err := LoadHistoryConfig(); err == nil {
+			t.Error("expected error for HISTORY_TTL=0s (zero TTL silently disables history)")
+		}
+	})
+
 	t.Run("HISTORY_MAX_ENTRIES below min", func(t *testing.T) {
 		setAll(t)
 		t.Setenv("HISTORY_MAX_ENTRIES", "0")
