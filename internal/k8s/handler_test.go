@@ -712,6 +712,42 @@ func TestHandleWebhook_OversizedFingerprintSkipped(t *testing.T) {
 	}
 }
 
+// TestHandleWebhook_ExactMaxFingerprintAccepted verifies the exact boundary of
+// the fingerprint-length guard: an alert whose fingerprint is exactly
+// maxFingerprintLen bytes must be accepted and enqueued. Paired with
+// TestHandleWebhook_OversizedFingerprintSkipped (len > maxFingerprintLen →
+// skipped), this closes the mutation gap where `>` could become `>=` in the
+// guard `len(alert.Fingerprint) > maxFingerprintLen`, which would silently drop
+// valid 256-byte fingerprints and cause alerts to disappear without any metric.
+func TestHandleWebhook_ExactMaxFingerprintAccepted(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	var enqueued atomic.Int32
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		enqueued.Add(1)
+		return true
+	}, nil, nil, shared.NewNopHistoryStore())
+
+	exactFP := strings.Repeat("a", maxFingerprintLen)
+	alerts := []Alert{
+		{
+			Fingerprint: exactFP,
+			Status:      "firing",
+			Labels:      map[string]string{"alertname": "ExactFP", "severity": "warning"},
+			Annotations: map[string]string{},
+			StartsAt:    time.Now(),
+		},
+	}
+	rr := postWebhook(t, handler, "test-secret", makeWebhook(alerts))
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 for exact-length fingerprint, got %d", rr.Code)
+	}
+	if enqueued.Load() != 1 {
+		t.Errorf("expected 1 enqueued for exact-length fingerprint, got %d", enqueued.Load())
+	}
+}
+
 // TestHandler_PopulatesSeverityLevel verifies that AlertPayload.SeverityLevel
 // is populated from the alert labels via SeverityFromAlertmanager.
 func TestHandler_PopulatesSeverityLevel(t *testing.T) {
