@@ -1687,6 +1687,49 @@ func TestRedactSecrets_HTTPSCredentialURLs(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_AnthropicAPIKeysBareInLog verifies that Anthropic API keys
+// (sk-ant- prefix) and generic sk- keys appearing bare in log lines are
+// redacted by the vendor-prefix pattern. The keyword=value pattern does not
+// fire here: in "invalid key sk-ant-xxx" the separator between "key" and the
+// token value is a plain space — not '=' or ':' — so only the vendor-prefix
+// alternation catches the credential. If sk-ant- were accidentally dropped from
+// the alternation in redact.go, this project's own Claude API key could escape
+// into recursive Claude prompts and ntfy notifications unredacted.
+func TestRedactSecrets_AnthropicAPIKeysBareInLog(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "sk-ant- key in SDK authentication error",
+			input: "anthropic: authentication failed: invalid key sk-ant-api03-FakeAnthropicKey1234567890abcdef",
+			leak:  "sk-ant-api03-FakeAnthropicKey1234567890abcdef",
+		},
+		{
+			name:  "sk-ant- key in parenthesised log context without separator",
+			input: "[claude-client] POST /v1/messages: 401 Unauthorized (used sk-ant-api03-FakeKey12345)",
+			leak:  "sk-ant-api03-FakeKey12345",
+		},
+		{
+			name:  "sk- key in generic OpenAI-style API error",
+			input: "openai: rate limit exceeded for sk-FakeOpenAIKey1234567890abcdefghijklmnop",
+			leak:  "sk-FakeOpenAIKey1234567890abcdefghijklmnop",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("API key leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
 // TestRedactSecrets_ClickHouseURLs verifies that credential-bearing ClickHouse
 // connection URLs are redacted. The ClickHouse Go driver v2 uses
 // clickhouse://user:password@host:9000/database for the native TCP protocol.
