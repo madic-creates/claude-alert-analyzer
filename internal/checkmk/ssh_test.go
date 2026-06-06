@@ -249,6 +249,30 @@ func TestRunSSHCommand_Timeout(t *testing.T) {
 	}
 }
 
+// TestRunSSHCommand_Timeout_ErrorIncludesDuration verifies that the timeout
+// error message embeds the actual timeout duration. ssh.go formats the error
+// as fmt.Errorf("timeout after %v", timeout); a mutation dropping the timeout
+// arg (producing "timeout after %!v(MISSING)") or replacing the format with a
+// literal string would omit the duration and silently pass
+// TestRunSSHCommand_Timeout, which only checks for the word "timeout".
+// Operators rely on the duration to distinguish a 100ms dev timeout from a
+// 30s production timeout without reading source code.
+func TestRunSSHCommand_Timeout_ErrorIncludesDuration(t *testing.T) {
+	client := startTestSSHServer(t, func(_ string, _ ssh.Channel) {
+		time.Sleep(10 * time.Second)
+	})
+
+	const timeout = 50 * time.Millisecond
+	r := runSSHCommand(context.Background(), client, []string{"sleep", "100"}, timeout)
+	if r.err == nil {
+		t.Fatal("expected timeout error")
+	}
+	wantSubstr := timeout.String() // "50ms"
+	if !strings.Contains(r.err.Error(), wantSubstr) {
+		t.Errorf("timeout error %q does not contain duration %q", r.err, wantSubstr)
+	}
+}
+
 func TestShellQuote(t *testing.T) {
 	tests := []struct {
 		name string
