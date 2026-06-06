@@ -56,6 +56,36 @@ func TestLimitedTransport_OversizedBodyCapped(t *testing.T) {
 	}
 }
 
+// TestLimitedTransport_ExactBodySizeIsNotTruncated verifies the exact boundary
+// of the io.LimitReader cap: a response body of exactly MaxResponseBytes must be
+// returned in full. Paired with TestLimitedTransport_OversizedBodyCapped (body >
+// MaxResponseBytes → reads exactly MaxResponseBytes), this closes the mutation gap
+// where the limit guard could silently shift by one byte.
+func TestLimitedTransport_ExactBodySizeIsNotTruncated(t *testing.T) {
+	exact := make([]byte, MaxResponseBytes)
+	for i := range exact {
+		exact[i] = 'B'
+	}
+	inner := &mockRoundTripper{resp: newOKResponse(exact)}
+
+	lt := NewLimitedTransport(inner, nil)
+	req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
+
+	resp, err := lt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	read, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if int64(len(read)) != MaxResponseBytes {
+		t.Errorf("exact-size body: got %d bytes, want %d (no truncation at exact limit)", len(read), MaxResponseBytes)
+	}
+}
+
 func TestLimitedTransport_HistogramObservedAfterBodyClose(t *testing.T) {
 	hist := prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name: "test_after_close_seconds",
