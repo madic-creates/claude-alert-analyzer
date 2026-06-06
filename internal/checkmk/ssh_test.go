@@ -208,6 +208,31 @@ func TestRunSSHCommand_OutputTruncatedAtLimit(t *testing.T) {
 	}
 }
 
+// TestRunSSHCommand_ExactLimitNotTruncated verifies the exact boundary of the
+// LimitedWriter cap: when a remote command produces exactly maxSSHOutputBytes of
+// output, all bytes are returned and no truncation notice is appended. Paired
+// with TestRunSSHCommand_OutputTruncatedAtLimit (body > limit → truncation notice),
+// this closes the mutation gap where the limit guard in LimitedWriter could shift
+// by one byte and silently discard the last byte of on-the-wire output.
+func TestRunSSHCommand_ExactLimitNotTruncated(t *testing.T) {
+	exact := strings.Repeat("B", maxSSHOutputBytes)
+	client := startTestSSHServer(t, func(_ string, ch ssh.Channel) {
+		_, _ = io.WriteString(ch, exact)
+		sendExitStatus(ch, 0)
+	})
+
+	r := runSSHCommand(context.Background(), client, []string{"cat", "/exact/file"}, 5*time.Second)
+	if r.err != nil {
+		t.Fatalf("unexpected error: %v", r.err)
+	}
+	if len(r.output) != maxSSHOutputBytes {
+		t.Errorf("exact-limit output: got %d bytes, want %d (no truncation at exact limit)", len(r.output), maxSSHOutputBytes)
+	}
+	if strings.Contains(r.output, "[output truncated at") {
+		t.Error("exact-limit output must not contain truncation notice")
+	}
+}
+
 func TestRunSSHCommand_Timeout(t *testing.T) {
 	client := startTestSSHServer(t, func(_ string, _ ssh.Channel) {
 		// Simulate a slow command: hold the server-side channel open so
