@@ -880,3 +880,29 @@ func TestLoadConfig_SSHConfigOverridesArePreserved(t *testing.T) {
 		t.Errorf("SSHKnownHostsPath = %q, want %q", cfg.SSHKnownHostsPath, "/custom/known_hosts")
 	}
 }
+
+// TestLoadConfig_ExactBoundaries pins the inclusive endpoints of the ParseIntEnv
+// range guard for COOLDOWN_SECONDS [0, 86400]. The existing binary-run error test
+// TestMain_FailsWhenCooldownSecondsInvalid confirms that COOLDOWN_SECONDS=99999 is
+// rejected, but does not verify the exact valid endpoints. A mutation shifting the
+// guard from < to <= would silently reject COOLDOWN_SECONDS=0 (no-dedup mode); a
+// mutation shifting > to >= would silently reject COOLDOWN_SECONDS=86400 (day-long
+// dedup window). Mirrors TestLoadConfig_ExactBoundaries in cmd/k8s-analyzer.
+func TestLoadConfig_ExactBoundaries(t *testing.T) {
+	t.Run("COOLDOWN_SECONDS exact min (0)", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("COOLDOWN_SECONDS", "0")
+		cfg := loadConfig()
+		if cfg.CooldownSeconds != 0 {
+			t.Errorf("CooldownSeconds = %d, want 0 (exact min)", cfg.CooldownSeconds)
+		}
+	})
+	t.Run("COOLDOWN_SECONDS exact max (86400)", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("COOLDOWN_SECONDS", "86400")
+		cfg := loadConfig()
+		if cfg.CooldownSeconds != 86400 {
+			t.Errorf("CooldownSeconds = %d, want 86400 (exact max)", cfg.CooldownSeconds)
+		}
+	})
+}
