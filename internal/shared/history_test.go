@@ -938,3 +938,57 @@ func TestLookupScanErrorSkipsRow(t *testing.T) {
 		t.Errorf("Prior len = %d, want 0 (all scans failed)", len(view.Prior))
 	}
 }
+
+// TestEnqueueDropsWhenChannelFull verifies the default branch of enqueue():
+// when the write channel is at capacity, RecordHistoryDrop() is called instead
+// of blocking. This covers history.go:226 — the only path that calls
+// RecordHistoryDrop() — which is unreachable without a stuck writeLoop.
+// In production, a storm that fires alerts faster than the SQLite writer
+// can drain will eventually fill the 256-entry channel; the drop counter
+// lets operators observe that backpressure via the
+// alert_analyzer_history_drops_total metric.
+func TestEnqueueDropsWhenChannelFull(t *testing.T) {
+	prom := NewPrometheusMetricsForTest(ProductK8s)
+	s := newTestStore(t)
+	s.metrics = NewAlertMetrics(prom)
+
+	// Block the writeLoop goroutine inside handle() so it cannot drain s.ch.
+	// Once blocked, subsequent enqueue() calls that exceed historyWriteChanCap
+	// must take the default branch and increment HistoryDrops.
+	gate := make(chan struct{})
+	entered := make(chan struct{})
+	var once sync.Once
+	testHookBeforeHandleFn = func() {
+		once.Do(func() { close(entered) })
+		<-gate
+	}
+	t.Cleanup(func() {
+		testHookBeforeHandleFn = nil
+		select {
+		case <-gate:
+		default:
+			close(gate) // release the stuck writeLoop so the store can close cleanly
+		}
+	})
+
+	// Send one op to start the writeLoop; it consumes the op then blocks in handle().
+	s.RecordFire(context.Background(), "trigger", SeverityWarning)
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("writeLoop never entered handle(); hook not reached")
+	}
+
+	// Channel is now empty (trigger op was consumed). Fill it to capacity so the
+	// next enqueue has no room and must go to the default branch.
+	for i := 0; i < historyWriteChanCap; i++ {
+		s.RecordFire(context.Background(), fmt.Sprintf("fp-%d", i), SeverityWarning)
+	}
+
+	// One more enqueue — channel is full, must hit the default branch.
+	s.RecordFire(context.Background(), "overflow", SeverityWarning)
+
+	if got := testutil.ToFloat64(prom.HistoryDrops); got < 1 {
+		t.Errorf("HistoryDrops = %v, want >= 1 (drop when channel full)", got)
+	}
+}
