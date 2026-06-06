@@ -211,3 +211,37 @@ func TestParseDurationEnv(t *testing.T) {
 		t.Fatal("nonsense: want error, got nil")
 	}
 }
+
+// TestParseDurationEnv_ZeroIsDistinctFromDefault verifies that an explicit
+// "0s" returns 0 rather than the fallback. This pins the contract between
+// "unset/empty → use fallback" and "explicitly set to zero → return 0".
+// Callers that use 0 as a sentinel (e.g. KUBE_API_TIMEOUT=0 meaning
+// "use in-code default") rely on this distinction: if an operator explicitly
+// sets the env var to "0s", the function must return 0, not the fallback.
+func TestParseDurationEnv_ZeroIsDistinctFromDefault(t *testing.T) {
+	t.Setenv("TEST_DUR", "0s")
+	d, err := ParseDurationEnv("TEST_DUR", 6*time.Hour)
+	if err != nil {
+		t.Fatalf("unexpected error for '0s': %v", err)
+	}
+	if d != 0 {
+		t.Errorf("'0s' should return 0, got %v", d)
+	}
+}
+
+// TestParseDurationEnv_NegativeDurationIsValid verifies that ParseDurationEnv
+// accepts negative durations (e.g., "-1s") without returning an error.
+// Validation of sign is the caller's responsibility: loadConfig in both
+// analyzers explicitly rejects negative timeouts with a dedicated check after
+// calling ParseDurationEnv (e.g. `if kubeAPITimeout < 0 { … os.Exit(1) }`).
+// ParseDurationEnv must not pre-empt that check — it only parses.
+func TestParseDurationEnv_NegativeDurationIsValid(t *testing.T) {
+	t.Setenv("TEST_DUR", "-1s")
+	d, err := ParseDurationEnv("TEST_DUR", 30*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error for '-1s': %v", err)
+	}
+	if d >= 0 {
+		t.Errorf("'-1s' should return a negative duration, got %v", d)
+	}
+}
