@@ -488,3 +488,32 @@ func TestLoadPolicy_ExactBoundaries(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadPolicy_RejectsOutOfRangeGlobalRounds pins that MAX_AGENT_ROUNDS is
+// rejected for values outside [1,50]. This is distinct from the per-severity
+// override range [0,50]: per-severity overrides can be 0 (static-only for that
+// severity), but the global default cannot — MAX_AGENT_ROUNDS=0 would silently
+// disable agentic analysis for all alerts that don't have a per-severity override.
+// A mutation changing the lower bound from 1 to 0 in ParseIntEnv("MAX_AGENT_ROUNDS",
+// "10", 1, 50) would go undetected without this test.
+func TestLoadPolicy_RejectsOutOfRangeGlobalRounds(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+	}{
+		{"below min (0)", "0"},
+		{"above max (51)", "51"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("MAX_AGENT_ROUNDS", tc.value)
+			_, err := LoadPolicy(BaseConfig{ClaudeModel: "x"})
+			if err == nil {
+				t.Errorf("MAX_AGENT_ROUNDS=%s should be rejected, got nil error", tc.value)
+			}
+			if err != nil && !strings.Contains(err.Error(), "MAX_AGENT_ROUNDS") {
+				t.Errorf("error should mention MAX_AGENT_ROUNDS, got: %v", err)
+			}
+		})
+	}
+}
