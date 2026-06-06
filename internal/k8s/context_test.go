@@ -3182,6 +3182,38 @@ func TestGetPodStatus_InitContainerTerminatedReason(t *testing.T) {
 	}
 }
 
+// TestQuery_NonSuccessStatusWithNoErrorField verifies the fallback branch in
+// query() when the HTTP response is 200 OK but the JSON body carries a
+// non-"success" status with an empty error field. The Prometheus API contract
+// puts the failure detail in the "error" field; when that field is absent the
+// inner `if result.Error != ""` branch is skipped and query() falls through to
+// `fmt.Errorf("query error: status=%q", result.Status)`. Without this test, a
+// mutation that deleted the inner if-branch and always used the status-only path
+// would go undetected — every other non-success test (TestGetMetrics_ErrorStatus)
+// supplies a non-empty error field and exercises only the first branch.
+func TestQuery_NonSuccessStatusWithNoErrorField(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// 200 OK with non-"success" status and no error text — exercises the
+		// else-branch of `if result.Error != ""` inside `result.Status != "success"`.
+		fmt.Fprint(w, `{"status":"error"}`)
+	}))
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	_, err := prom.query(context.Background(), "up")
+	if err == nil {
+		t.Fatal("expected error for non-success status with no error field, got nil")
+	}
+	if !strings.Contains(err.Error(), `query error: status=`) {
+		t.Errorf("expected 'query error: status=' in error, got: %v", err)
+	}
+	// Must not include errorType text — error field is empty.
+	if strings.Contains(err.Error(), "bad_data") {
+		t.Errorf("unexpected errorType in status-only fallback error: %v", err)
+	}
+}
+
 // TestRunAsync_PanicMessageSanitized verifies that control characters embedded
 // in a panic value are stripped before the panic message is sent on the result
 // channel. A panic from a Prometheus or kube client could carry a crafted string
