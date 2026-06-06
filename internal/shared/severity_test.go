@@ -42,6 +42,15 @@ func TestSeverityFromCheckMK(t *testing.T) {
 		{"host_unreachable", "", "UNREACHABLE", SeverityCritical},
 		{"host_up", "", "UP", SeverityInfo},
 		{"empty_both_defaults_to_warning", "", "", SeverityWarning},
+		// The next three cases verify that a known serviceState takes precedence
+		// over a conflicting hostState. Removing any serviceState case from the
+		// first switch would fall through to the hostState switch and return an
+		// incorrect Severity — silently misrouting CheckMK alerts. The existing
+		// "service_ok_overrides_host_down" covers "OK"; these three close the gap
+		// for UNKNOWN, WARNING, and CRITICAL.
+		{"unknown_service_overrides_down_host", "UNKNOWN", "DOWN", SeverityUnknown},
+		{"warning_service_overrides_down_host", "WARNING", "DOWN", SeverityWarning},
+		{"critical_service_overrides_up_host", "CRITICAL", "UP", SeverityCritical},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
