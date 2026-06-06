@@ -1332,6 +1332,21 @@ func TestKubectlSubprocess_Exec_OutputTruncated(t *testing.T) {
 	}
 }
 
+// TestIsValidNamespace_ExactMaxLength verifies the exact 63-character boundary of
+// isValidNamespace. The regex `^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?$` allows names
+// of 1–63 characters (one leading char + up to 61 middle chars + one trailing char).
+// Exactly 63 characters must be accepted. Paired with the 64-char invalid case in
+// TestGetKubeContext_InvalidNamespace and TestIsValidNamespace, this closes the
+// mutation gap where {0,61} could be silently changed to {0,60}, making 63-char
+// namespaces be misidentified as invalid and producing "invalid namespace label"
+// sentinels instead of real Kubernetes context for a valid namespace.
+func TestIsValidNamespace_ExactMaxLength(t *testing.T) {
+	ns := strings.Repeat("a", 63) // exactly at the 63-char Kubernetes namespace limit
+	if !isValidNamespace(ns) {
+		t.Errorf("isValidNamespace(%q) = false; want true for a 63-char namespace at the exact limit", ns)
+	}
+}
+
 // TestKubectlSubprocess_Exec_ExactLimitNotTruncated verifies the exact boundary
 // of the limitedWriter cap in kubectlSubprocess.Exec: a subprocess that emits
 // exactly maxKubectlOutputBytes must be returned in full without a truncation
