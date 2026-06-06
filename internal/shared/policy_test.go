@@ -459,3 +459,32 @@ func TestAnalysisPolicy_NilReceiver(t *testing.T) {
 		t.Errorf("AllModels on nil policy = %v, want nil", got)
 	}
 }
+
+// TestLoadPolicy_ExactBoundaries pins the inclusive endpoints of the ParseIntEnv
+// range guards for the four policy integer parameters. The existing error-case
+// tests confirm that out-of-range values (e.g. 86401 for GROUP_COOLDOWN_SECONDS)
+// are rejected, but they do NOT verify the exact valid endpoints. A mutation
+// shifting a guard from < to <= or from > to >= would silently reject a valid
+// operator configuration with no test failure. These five sub-tests close that
+// gap — one per boundary that was previously untested.
+func TestLoadPolicy_ExactBoundaries(t *testing.T) {
+	cases := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{"max_agent_rounds exact min (1)", "MAX_AGENT_ROUNDS", "1"},
+		{"max_agent_rounds exact max (50)", "MAX_AGENT_ROUNDS", "50"},
+		{"group_cooldown_seconds exact max (86400)", "GROUP_COOLDOWN_SECONDS", "86400"},
+		{"storm_mode_threshold exact max (100000)", "STORM_MODE_THRESHOLD", "100000"},
+		{"per_severity_rounds exact max (50)", "MAX_AGENT_ROUNDS_CRITICAL", "50"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(tc.key, tc.value)
+			if _, err := LoadPolicy(BaseConfig{ClaudeModel: "x"}); err != nil {
+				t.Errorf("%s=%s should be accepted, got error: %v", tc.key, tc.value, err)
+			}
+		})
+	}
+}
