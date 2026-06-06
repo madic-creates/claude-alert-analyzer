@@ -546,6 +546,47 @@ func TestParseSummary(t *testing.T) {
 	}
 }
 
+// TestLoadHistoryConfig_ExactBoundaries pins the inclusive endpoints of the
+// ParseIntEnv range guard for HISTORY_MAX_ENTRIES. The error-case tests in
+// TestLoadHistoryConfigErrors confirm that 0 (below min) and 101 (above max)
+// are rejected. They do NOT verify the exact valid endpoints 1 and 100. A
+// mutation that shifts the internal ParseIntEnv min from 1 to 2, or the max
+// from 100 to 99, would silently reject a valid operator configuration with
+// no test failure. These two sub-tests close that gap.
+func TestLoadHistoryConfig_ExactBoundaries(t *testing.T) {
+	base := map[string]string{
+		"HISTORY_ENABLED":      "",
+		"HISTORY_DB_PATH":      "",
+		"HISTORY_TTL":          "",
+		"HISTORY_MAX_ENTRIES":  "",
+		"HISTORY_INJECT_PRIOR": "",
+	}
+	setAll := func(t *testing.T) {
+		t.Helper()
+		for k, v := range base {
+			t.Setenv(k, v)
+		}
+	}
+
+	cases := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{"max_entries exact min (1)", "HISTORY_MAX_ENTRIES", "1"},
+		{"max_entries exact max (100)", "HISTORY_MAX_ENTRIES", "100"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setAll(t)
+			t.Setenv(tc.key, tc.value)
+			if _, err := LoadHistoryConfig(); err != nil {
+				t.Errorf("%s=%s should be accepted, got error: %v", tc.key, tc.value, err)
+			}
+		})
+	}
+}
+
 // TestNewNopHistoryStoreDirectly calls NewNopHistoryStore (0% coverage because
 // callers are in other packages) and exercises all four interface methods.
 func TestNewNopHistoryStoreDirectly(t *testing.T) {
