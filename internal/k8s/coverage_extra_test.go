@@ -1331,3 +1331,34 @@ func TestKubectlSubprocess_Exec_OutputTruncated(t *testing.T) {
 			want, out[max(0, len(out)-200):])
 	}
 }
+
+// TestKubectlSubprocess_Exec_ExactLimitNotTruncated verifies the exact boundary
+// of the limitedWriter cap in kubectlSubprocess.Exec: a subprocess that emits
+// exactly maxKubectlOutputBytes must be returned in full without a truncation
+// suffix. Paired with TestKubectlSubprocess_Exec_OutputTruncated (output >
+// maxKubectlOutputBytes → truncated), this closes the mutation gap where the
+// `>` guard in limitedWriter could silently shift by one byte and either
+// over-truncate valid output or under-truncate oversized output.
+func TestKubectlSubprocess_Exec_ExactLimitNotTruncated(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not available:", err)
+	}
+	k := &kubectlSubprocess{
+		Path: sh,
+		Env:  []string{"HOME=" + os.Getenv("HOME")},
+	}
+	out, execErr := k.Exec(context.Background(),
+		[]string{"-c", fmt.Sprintf("head -c %d /dev/zero | tr '\\0' 'x'", maxKubectlOutputBytes)},
+		10*time.Second)
+	if execErr != nil {
+		t.Fatalf("unexpected error: %v", execErr)
+	}
+	if len(out) != maxKubectlOutputBytes {
+		t.Errorf("exact-limit output: got %d bytes, want %d (no truncation at exact limit)", len(out), maxKubectlOutputBytes)
+	}
+	notWant := fmt.Sprintf("[output truncated at %d bytes]", maxKubectlOutputBytes)
+	if strings.Contains(out, notWant) {
+		t.Error("exact-limit output must not contain truncation notice")
+	}
+}
