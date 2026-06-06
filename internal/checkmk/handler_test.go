@@ -565,6 +565,36 @@ func TestCheckmkHandleWebhook_BodyTooLarge_Returns413(t *testing.T) {
 	}
 }
 
+// TestCheckmkHandleWebhook_ExactBodySizeAccepted verifies the exact boundary of the
+// MaxBytesReader cap in HandleWebhook: a body of exactly maxWebhookBodyBytes must
+// be read in full and not trigger the 413 guard. Paired with
+// TestCheckmkHandleWebhook_BodyTooLarge_Returns413 (maxWebhookBodyBytes+1 → 413), this
+// closes the mutation gap where the limit could silently shift by one byte.
+func TestCheckmkHandleWebhook_ExactBodySizeAccepted(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cd := shared.NewCooldownManager()
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool { return true }, nil, nil, shared.NewNopHistoryStore())
+
+	// Build a valid CheckMK RECOVERY notification padded with trailing spaces to
+	// exactly maxWebhookBodyBytes bytes. json.Unmarshal accepts trailing whitespace,
+	// so the test exercises the MaxBytesReader cap rather than JSON parsing.
+	// RECOVERY is used because it returns 200 immediately without enqueueing.
+	base := `{"hostname":"h","notification_type":"RECOVERY"}`
+	body := base + strings.Repeat(" ", maxWebhookBodyBytes-len(base))
+	if len(body) != maxWebhookBodyBytes {
+		t.Fatalf("body length %d != maxWebhookBodyBytes %d", len(body), maxWebhookBodyBytes)
+	}
+
+	req := httptest.NewRequest("POST", "/webhook", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-secret")
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	if rr.Code == http.StatusRequestEntityTooLarge {
+		t.Errorf("body at exactly maxWebhookBodyBytes should not be rejected with 413")
+	}
+}
+
 func TestCheckmkHandleWebhook_HostDown_SeverityCritical(t *testing.T) {
 	// Host-level notification: ServiceState is empty, HostState is "DOWN".
 	// Must produce severity "critical", not the default "warning".
