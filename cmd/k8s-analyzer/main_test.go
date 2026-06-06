@@ -778,3 +778,45 @@ func TestLoadConfig_WebhookSecretIsPreserved(t *testing.T) {
 		t.Errorf("WebhookSecret = %q, want %q", cfg.WebhookSecret, "test-secret")
 	}
 }
+
+// TestLoadConfig_ExactBoundaries pins the inclusive endpoints of the ParseIntEnv
+// range guards for COOLDOWN_SECONDS and MAX_LOG_BYTES. The existing binary-run
+// error tests confirm that out-of-range values (COOLDOWN_SECONDS=99999,
+// MAX_LOG_BYTES=100) are rejected. They do not verify the exact valid endpoints.
+// A mutation shifting a guard from < to <= or from > to >= would silently
+// reject a valid operator configuration (e.g. COOLDOWN_SECONDS=0 to disable
+// dedup, or MAX_LOG_BYTES=256 for memory-constrained nodes) with no test failure.
+func TestLoadConfig_ExactBoundaries(t *testing.T) {
+	t.Run("COOLDOWN_SECONDS exact min (0)", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("COOLDOWN_SECONDS", "0")
+		cfg := loadConfig()
+		if cfg.CooldownSeconds != 0 {
+			t.Errorf("CooldownSeconds = %d, want 0 (exact min)", cfg.CooldownSeconds)
+		}
+	})
+	t.Run("COOLDOWN_SECONDS exact max (86400)", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("COOLDOWN_SECONDS", "86400")
+		cfg := loadConfig()
+		if cfg.CooldownSeconds != 86400 {
+			t.Errorf("CooldownSeconds = %d, want 86400 (exact max)", cfg.CooldownSeconds)
+		}
+	})
+	t.Run("MAX_LOG_BYTES exact min (256)", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("MAX_LOG_BYTES", "256")
+		cfg := loadConfig()
+		if cfg.MaxLogBytes != 256 {
+			t.Errorf("MaxLogBytes = %d, want 256 (exact min)", cfg.MaxLogBytes)
+		}
+	})
+	t.Run("MAX_LOG_BYTES exact max (1048576)", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("MAX_LOG_BYTES", "1048576")
+		cfg := loadConfig()
+		if cfg.MaxLogBytes != 1048576 {
+			t.Errorf("MaxLogBytes = %d, want 1048576 (exact max)", cfg.MaxLogBytes)
+		}
+	})
+}
