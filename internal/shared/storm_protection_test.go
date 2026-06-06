@@ -202,3 +202,35 @@ func TestLoadStormProtectionConfig_EnvVarErrors(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadStormProtectionConfig_ExactBoundaries pins the inclusive endpoints of
+// the ParseIntEnv range guards for the CIRCUIT_BREAKER_* integer parameters.
+//
+// The error-case tests (TestLoadStormProtectionConfig_EnvVarErrors) confirm that
+// out-of-range values (0, 3601, 101) are rejected. They do NOT verify the exact
+// valid endpoints: 1, 3600, 100. A mutation that shifts the internal
+// ParseIntEnv min from 1 to 2, or the max from 3600 to 3599, would silently
+// reject a valid operator configuration with no test failure. These five sub-tests
+// close that gap — one per boundary that was previously untested.
+func TestLoadStormProtectionConfig_ExactBoundaries(t *testing.T) {
+	cases := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{"open_seconds exact min (1)", "CIRCUIT_BREAKER_OPEN_SECONDS", "1"},
+		{"open_seconds exact max (3600)", "CIRCUIT_BREAKER_OPEN_SECONDS", "3600"},
+		{"probe_seconds exact min (1)", "CIRCUIT_BREAKER_MAX_PROBE_SECONDS", "1"},
+		{"probe_seconds exact max (3600)", "CIRCUIT_BREAKER_MAX_PROBE_SECONDS", "3600"},
+		{"threshold exact max (100)", "CIRCUIT_BREAKER_THRESHOLD", "100"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stormProtectionUnsetAll(t)
+			t.Setenv(tc.key, tc.value)
+			if _, err := LoadStormProtectionConfig(); err != nil {
+				t.Errorf("%s=%s should be accepted, got error: %v", tc.key, tc.value, err)
+			}
+		})
+	}
+}
