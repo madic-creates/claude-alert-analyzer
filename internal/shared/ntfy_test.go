@@ -240,6 +240,33 @@ func TestNtfyPublisher_Publish_TruncatesLargeBody(t *testing.T) {
 	}
 }
 
+// TestNtfyPublisher_Publish_ExactBodyLengthNotTruncated closes the mutation
+// gap paired with TestNtfyPublisher_Publish_TruncatesLargeBody. The body path
+// calls Truncate(body, maxNtfyBodyBytes); Truncate returns the string unchanged
+// when len(s) <= maxBytes. A body of exactly maxNtfyBodyBytes must be sent in
+// full — a mutation of <= to < in Truncate would truncate it, but the existing
+// over-length test (body = maxNtfyBodyBytes*2) would not catch that mutation.
+func TestNtfyPublisher_Publish_ExactBodyLengthNotTruncated(t *testing.T) {
+	var receivedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	p := &NtfyPublisher{HTTP: srv.Client(), URL: srv.URL, Topic: "alerts"}
+	exactBody := strings.Repeat("x", maxNtfyBodyBytes)
+	if err := p.Publish(context.Background(), "title", "default", exactBody); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(receivedBody) != maxNtfyBodyBytes {
+		t.Errorf("exact-length body sent as %d bytes, want %d (body must not be truncated at the exact limit)", len(receivedBody), maxNtfyBodyBytes)
+	}
+	if strings.Contains(string(receivedBody), "[truncated]") {
+		t.Errorf("exact-length body was incorrectly truncated (truncation marker present)")
+	}
+}
+
 func TestNtfyPublisher_Publish_ContextCancelled(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
