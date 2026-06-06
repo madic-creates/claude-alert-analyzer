@@ -101,6 +101,16 @@ func TestNotifyAggregator_NilWhenDisabled(t *testing.T) {
 	}
 }
 
+// TestNotifyAggregator_NilWhenIntervalNegative closes the mutation gap for the
+// interval <= 0 guard in NewNotifyAggregator. Paired with the interval==0 case
+// above: a mutation that changes <= to < would pass the zero test but fail here.
+func TestNotifyAggregator_NilWhenIntervalNegative(t *testing.T) {
+	pub := &aggFakePublisher{}
+	if a := NewNotifyAggregator([]Publisher{pub}, -time.Second, "x", "5", newDropsCounter()); a != nil {
+		t.Fatalf("expected nil for interval==-1s, got non-nil aggregator")
+	}
+}
+
 func TestNotifyAggregator_TickFlushesBuffer(t *testing.T) {
 	pub := &aggFakePublisher{}
 	a := NewNotifyAggregator([]Publisher{pub}, 50*time.Millisecond, "Storm: %d alerts", "4", newDropsCounter())
