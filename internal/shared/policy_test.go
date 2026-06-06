@@ -36,6 +36,29 @@ func TestAnalysisPolicy_ModelFor(t *testing.T) {
 	})
 }
 
+// TestAnalysisPolicy_ModelFor_EmptyOverrideFallsBackToDefault pins the
+// `ok && model != ""` guard in ModelFor. When a severity key exists in
+// ModelOverrides but maps to an empty string, ModelFor must fall back to
+// DefaultModel rather than returning "". Removing the `model != ""` check
+// would cause it to return "", silently sending every alert for that severity
+// to the Claude API with no model — a startup-time bug the operator cannot
+// easily diagnose. LoadPolicy never stores empty-string values in the map
+// (it checks `v != ""`), but the guard defends against direct struct
+// construction in tests and future callers.
+func TestAnalysisPolicy_ModelFor_EmptyOverrideFallsBackToDefault(t *testing.T) {
+	p := &AnalysisPolicy{
+		DefaultModel:   "claude-sonnet-4-6",
+		ModelOverrides: map[Severity]string{SeverityCritical: ""},
+	}
+	if got := p.ModelFor(SeverityCritical); got != "claude-sonnet-4-6" {
+		t.Errorf("empty-string override: ModelFor(Critical) = %q, want default %q", got, "claude-sonnet-4-6")
+	}
+	// Unaffected severity must still return default.
+	if got := p.ModelFor(SeverityWarning); got != "claude-sonnet-4-6" {
+		t.Errorf("no override: ModelFor(Warning) = %q, want default %q", got, "claude-sonnet-4-6")
+	}
+}
+
 func TestAnalysisPolicy_MaxRoundsFor(t *testing.T) {
 	t.Run("falls_back_to_default", func(t *testing.T) {
 		p := &AnalysisPolicy{DefaultMaxRounds: 10}
