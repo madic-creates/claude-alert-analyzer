@@ -840,6 +840,35 @@ func TestGatherContext_LongPluginOutputIncluded(t *testing.T) {
 		}
 	})
 
+	// TestGatherContext_LongPluginOutputExactLimit verifies that a long_plugin_output
+	// of exactly 4096 bytes is NOT truncated. The Truncate guard uses `len(s) <= maxBytes`
+	// so the exact limit must pass through unchanged. A mutation of 4096 → 4095 in
+	// context.go would cause this test to fail, catching the constant-value regression.
+	t.Run("exact limit is not truncated", func(t *testing.T) {
+		exact := strings.Repeat("B", 4096)
+		alert := shared.AlertPayload{
+			Fields: map[string]string{
+				"hostname":            "web01",
+				"host_address":        "10.0.0.1",
+				"service_description": "DiskCheck",
+				"service_state":       "WARNING",
+				"service_output":      "WARNING - disk usage high",
+				"notification_type":   "PROBLEM",
+				"perf_data":           "",
+				"long_plugin_output":  exact,
+			},
+		}
+		actx := GatherContext(context.Background(), apiClient, alert, nil)
+		prompt := actx.FormatForPrompt()
+
+		if strings.Contains(prompt, "[truncated]") {
+			t.Errorf("exact-4096-byte long_plugin_output must not be truncated, but got [truncated] marker")
+		}
+		if !strings.Contains(prompt, exact) {
+			t.Errorf("prompt does not contain the full 4096-byte long_plugin_output — content was truncated or dropped")
+		}
+	})
+
 	// TestGatherContext_LongPluginOutputTruncated verifies that a very large
 	// long_plugin_output is truncated before being embedded in the Claude prompt.
 	// Without truncation a verbose plugin (e.g. one that dumps a full directory
