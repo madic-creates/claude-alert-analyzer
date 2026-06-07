@@ -3658,6 +3658,38 @@ func TestDenyReason_EbtablesArptablesVariants(t *testing.T) {
 	}
 }
 
+// TestIsDenied_TypeVariantMinimalSuffix pins the len(cmd) > N boundary in each
+// TYPE-variant prefix check (mkfs.TYPE, nc.TYPE, iptables-TYPE, ip6tables-TYPE,
+// ebtables-TYPE, arptables-TYPE). Each guard uses a strict-greater comparison to
+// require at least one character after the delimiter. A mutation that raises the
+// constant by one (e.g. > 5 → > 6 for mkfs., > 3 → > 4 for nc.) would silently
+// allow a single-character-suffix variant to escape — and the versioned-variant
+// heuristic would not catch it, because TrimRight("mkfs.x", "0123456789.") ==
+// "mkfs.x" (no trailing digits or dots), so base == cmd and the heuristic skips.
+// These tests use the minimum valid input: exactly one character after the
+// delimiter. They pin the correct lower bound of each check independently.
+func TestIsDenied_TypeVariantMinimalSuffix(t *testing.T) {
+	cases := []struct {
+		cmd  string // prefix + one-char suffix, just above the > N threshold
+		desc string
+	}{
+		{"mkfs.x", "mkfs.TYPE: len=6, minimum that satisfies len > 5"},
+		{"nc.x", "nc.TYPE: len=4, minimum that satisfies len > 3"},
+		{"iptables-x", "iptables-TYPE: len=10, minimum that satisfies len > 9"},
+		{"ip6tables-x", "ip6tables-TYPE: len=11, minimum that satisfies len > 10"},
+		{"ebtables-x", "ebtables-TYPE: len=10, minimum that satisfies len > 9"},
+		{"arptables-x", "arptables-TYPE: len=11, minimum that satisfies len > 10"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.cmd, func(t *testing.T) {
+			if !isDenied(DefaultDeniedCommands, []string{tc.cmd}) {
+				t.Errorf("isDenied(%q) = false, want true (%s); a raised-threshold mutation would cause this", tc.cmd, tc.desc)
+			}
+		})
+	}
+}
+
 // TestRunAgenticDiagnostics_NonZeroExitMetricClassification verifies that when
 // a command exits with a non-zero status and produces output (the "[exited: ...]"
 // format), wrappedHandleTool correctly classifies the metric outcome as
