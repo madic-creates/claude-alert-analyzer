@@ -2123,6 +2123,110 @@ func TestRedactSecrets_SupabaseTokens(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_NewRelicTokens verifies that New Relic user API keys
+// (NRAK- prefix) are redacted. New Relic APM and Infrastructure agents are
+// widely deployed in enterprise Kubernetes environments. When an agent fails
+// to connect, the API key appears bare in pod logs (e.g. "authentication
+// failed with license key NRAK-xxx"). The keyword=value pattern catches
+// NEW_RELIC_API_KEY=... but bare space-separated occurrences are not caught
+// by it; this vendor-prefix entry closes that gap.
+//
+// Token values are built from separate string literals so that static secret
+// scanners do not flag the test source as containing real credentials.
+func TestRedactSecrets_NewRelicTokens(t *testing.T) {
+	token := "NRAK-" + "TestTokenAbcdef1234567890abcdef1234567890abcdef1234567890abcdef12345"
+
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "bare token in API authentication failure log",
+			input: "New Relic API error: 403 Forbidden for key " + token,
+			leak:  token,
+		},
+		{
+			name:  "token in env assignment caught by vendor prefix",
+			input: "NEW_RELIC_API_KEY=" + token,
+			leak:  token,
+		},
+		{
+			name:  "token in agent connect failure log",
+			input: "authentication failed with license key " + token,
+			leak:  token,
+		},
+		{
+			name:  "token in parenthesised context",
+			input: "retrying (key=" + token + ")",
+			leak:  token,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("New Relic token leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
+// TestRedactSecrets_FlyioTokens verifies that Fly.io personal access tokens
+// (fo1_ prefix) are redacted. Fly.io tokens are used by flyctl and services
+// that manage Fly.io apps programmatically. When authentication fails, the
+// token appears bare in pod logs (e.g. "flyctl: authentication failed with
+// token fo1_xxx"). The keyword=value pattern catches FLY_API_TOKEN=... but
+// bare space-separated occurrences are not caught by it; this vendor-prefix
+// entry closes that gap.
+//
+// Token values are built from separate string literals so that static secret
+// scanners do not flag the test source as containing real credentials.
+func TestRedactSecrets_FlyioTokens(t *testing.T) {
+	token := "fo1_" + "TestTokenAbcdef1234567890abcdef1234567890"
+
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "bare token in authentication failure log",
+			input: "flyctl: authentication failed with token " + token,
+			leak:  token,
+		},
+		{
+			name:  "token in env assignment caught by vendor prefix",
+			input: "FLY_API_TOKEN=" + token,
+			leak:  token,
+		},
+		{
+			name:  "token in API unauthorized error log",
+			input: "Fly.io: invalid access token " + token,
+			leak:  token,
+		},
+		{
+			name:  "token in JSON error response value",
+			input: `{"error":"unauthorized","token":"` + token + `"}`,
+			leak:  token,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("Fly.io token leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
 func TestSanitizeOutput(t *testing.T) {
 	tests := []struct {
 		name  string

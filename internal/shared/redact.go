@@ -241,8 +241,21 @@ var sensitivePatterns = []sensitivePattern{
 	// authenticate (e.g. "supabase: invalid access token sbp_xxx" or "Error 401:
 	// Unauthorized sbp_xxx"). The keyword=value pattern catches SUPABASE_ACCESS_TOKEN=...
 	// but bare space-separated occurrences are not matched by it.
+	// New Relic user API keys (NRAK-) authenticate against the New Relic
+	// platform (APM, Infrastructure, Distributed Tracing). They appear in pod
+	// logs when a New Relic agent fails to connect (e.g. "New Relic API error:
+	// 403 Forbidden for key NRAK-xxx" or "authentication failed with license key
+	// NRAK-xxx"). The keyword=value pattern catches NEW_RELIC_API_KEY=... but
+	// bare space-separated occurrences are not caught by it.
+	// Fly.io personal access tokens (fo1_) authenticate against the Fly.io
+	// platform API and are used by flyctl, the Fly.io GitHub Action, and
+	// services that manage Fly.io apps programmatically. They appear in pod logs
+	// and CI/CD pipeline logs when Fly.io API calls fail (e.g. "flyctl:
+	// authentication failed with token fo1_xxx" or "Fly.io: invalid access token
+	// fo1_xxx"). The keyword=value pattern catches FLY_API_TOKEN=... but bare
+	// space-separated occurrences are not caught by it.
 	{
-		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|glrrt-|glrt-|gldt-|glsoat-|glagent-|glsa_|dckr_pat_|SG\.|npm_|hf_|dapi|dop_v1_|pul-|tskey-|xox[bpaers]-|hvs\.|hvb\.|pscale_tkn_|sbp_)\S+`),
+		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|glrrt-|glrt-|gldt-|glsoat-|glagent-|glsa_|dckr_pat_|SG\.|npm_|hf_|dapi|dop_v1_|pul-|tskey-|xox[bpaers]-|hvs\.|hvb\.|pscale_tkn_|sbp_|NRAK-|fo1_)\S+`),
 		replacement: "[REDACTED]",
 	},
 	{
