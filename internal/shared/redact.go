@@ -217,8 +217,19 @@ var sensitivePatterns = []sensitivePattern{
 	// preview fails to authenticate (e.g. "error: PULUMI_ACCESS_TOKEN pul-xxx is
 	// invalid"). The keyword=value pattern catches PULUMI_ACCESS_TOKEN=... but
 	// bare occurrences with a space separator are not matched by it.
+	// Tailscale auth keys (tskey- prefix) authenticate nodes — including
+	// Kubernetes pods running the Tailscale sidecar via the Tailscale Operator or
+	// EgressServices/IngressServices resources — to a Tailscale network (tailnet).
+	// Key sub-types share the tskey- prefix: tskey-auth- (standard auth keys),
+	// tskey-ephemeral- (single-use keys that auto-expire when the node disconnects),
+	// and tskey-client- (OAuth client credentials). When a sidecar fails to
+	// authenticate — e.g. "invalid auth key tskey-auth-xxx" or "tailscale up:
+	// authentication failed: tskey-ephemeral-xxx" — the full key appears in the pod
+	// log that CheckMK or Kubernetes feeds into Claude's context. The keyword=value
+	// pattern catches TS_AUTHKEY=tskey-auth-... but bare space-separated occurrences
+	// are not matched by it.
 	{
-		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|glrrt-|glrt-|gldt-|glsoat-|glagent-|glsa_|dckr_pat_|SG\.|npm_|hf_|dapi|dop_v1_|pul-|xox[bpaers]-|hvs\.|hvb\.)\S+`),
+		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|glrrt-|glrt-|gldt-|glsoat-|glagent-|glsa_|dckr_pat_|SG\.|npm_|hf_|dapi|dop_v1_|pul-|tskey-|xox[bpaers]-|hvs\.|hvb\.)\S+`),
 		replacement: "[REDACTED]",
 	},
 	{

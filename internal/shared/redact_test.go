@@ -1955,6 +1955,68 @@ func TestSanitizeAlertField(t *testing.T) {
 
 // TestSanitizeOutput verifies that SanitizeOutput strips C0/C1/DEL control
 // characters while preserving newlines and tabs.
+// TestRedactSecrets_TailscaleAuthKeys verifies that Tailscale auth keys
+// (tskey- prefix) are redacted. Tailscale authenticates Kubernetes pods running
+// the Tailscale sidecar (via the Tailscale Operator) using auth keys whose
+// sub-types all share the tskey- prefix: tskey-auth- (standard keys),
+// tskey-ephemeral- (single-use keys that auto-expire on disconnect), and
+// tskey-client- (OAuth client credentials). When authentication fails — e.g.
+// "invalid auth key tskey-auth-xxx" logged by the tailscaled daemon — the full
+// key appears in the pod log fed to Claude. The keyword=value pattern catches
+// TS_AUTHKEY=tskey-auth-... but bare space-separated occurrences are not caught
+// by it; this vendor-prefix entry closes that gap.
+//
+// Token values are built from separate string literals so that static secret
+// scanners do not flag the test source as containing real credentials.
+func TestRedactSecrets_TailscaleAuthKeys(t *testing.T) {
+	authKey := "tskey-auth-" + "kTestAuthKey1234567890abcdefABCDEF01"
+	ephemeralKey := "tskey-ephemeral-" + "kTestEphemeral1234567890abcdefABCDEF"
+	clientKey := "tskey-client-" + "kTestClientKey1234567890abcdefABCDE"
+
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "auth key in tailscaled authentication failure log",
+			input: "tailscaled: invalid auth key " + authKey,
+			leak:  authKey,
+		},
+		{
+			name:  "auth key in env assignment caught by vendor prefix",
+			input: "TS_AUTHKEY=" + authKey,
+			leak:  authKey,
+		},
+		{
+			name:  "ephemeral key in sidecar init container log",
+			input: "tailscale up: authentication failed: " + ephemeralKey + " is not valid",
+			leak:  ephemeralKey,
+		},
+		{
+			name:  "client key in Operator error log",
+			input: "tailscale-operator: OAuth client authentication error, key=" + clientKey,
+			leak:  clientKey,
+		},
+		{
+			name:  "auth key in parenthesised pod event",
+			input: "[tailscale] failed to join tailnet (key=" + authKey + ")",
+			leak:  authKey,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("Tailscale key leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
 func TestSanitizeOutput(t *testing.T) {
 	tests := []struct {
 		name  string
