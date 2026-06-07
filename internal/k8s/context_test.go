@@ -2434,6 +2434,27 @@ func TestIsValidNamespace(t *testing.T) {
 	}
 }
 
+// TestIsValidNamespace_ExactLengthBoundary pins the {0,61} quantifier in the
+// validK8sName regex: a 63-char name (1+61+1) is the Kubernetes-spec maximum and
+// must be accepted; a 64-char name must be rejected. Without the 63-char valid
+// case, a mutation of the quantifier from {0,61} to {0,60} would silently reject
+// valid 63-char namespaces — causing namespace-scoped Prometheus queries to be
+// dropped and producing spurious "invalid namespace label" warnings in logs.
+// TestIsValidNamespace already covers 64-char as invalid; this test closes the
+// gap by also verifying that exactly 63 chars is accepted.
+func TestIsValidNamespace_ExactLengthBoundary(t *testing.T) {
+	// 63 chars = Kubernetes-spec maximum (1 leading + 61 middle + 1 trailing).
+	ns63 := strings.Repeat("a", 63)
+	if !isValidNamespace(ns63) {
+		t.Errorf("isValidNamespace(%q) = false, want true (63 chars is the Kubernetes max)", ns63)
+	}
+	// 64 chars: one over the limit — must be rejected.
+	ns64 := strings.Repeat("a", 64)
+	if isValidNamespace(ns64) {
+		t.Errorf("isValidNamespace(%q) = true, want false (64 chars exceeds Kubernetes 63-char max)", ns64)
+	}
+}
+
 // TestGetMetrics_MaliciousNamespaceDroppedFromQuery verifies that an alert namespace
 // containing PromQL special characters does not get interpolated into queries.
 // A valid Prometheus server records the queries it receives; if the malicious string
