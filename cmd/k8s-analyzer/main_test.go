@@ -764,6 +764,34 @@ func TestLoadConfig_TimeoutsArePreserved(t *testing.T) {
 	})
 }
 
+// TestLoadConfig_ExplicitZeroTimeoutsAccepted verifies that explicitly setting
+// KUBE_API_TIMEOUT=0s or PROM_TIMEOUT=0s is accepted and stored as 0. Zero is
+// the sentinel meaning "use context.go's hardcoded default (30s)"; operators
+// who explicitly configure 0s must get that behaviour. A < → <= mutation in
+// the `if timeout < 0` guard would silently reject the zero sentinel, causing
+// every context-gathering goroutine to receive an already-expired context and
+// fail at runtime without any config-time error.
+func TestLoadConfig_ExplicitZeroTimeoutsAccepted(t *testing.T) {
+	t.Run("KUBE_API_TIMEOUT=0s accepted as in-code-default sentinel", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("KUBE_API_TIMEOUT", "0s")
+
+		cfg := loadConfig()
+		if cfg.KubeAPITimeout != 0 {
+			t.Errorf("KubeAPITimeout = %v, want 0 for explicit 0s (in-code-default sentinel)", cfg.KubeAPITimeout)
+		}
+	})
+	t.Run("PROM_TIMEOUT=0s accepted as in-code-default sentinel", func(t *testing.T) {
+		setLoadConfigEnv(t)
+		t.Setenv("PROM_TIMEOUT", "0s")
+
+		cfg := loadConfig()
+		if cfg.PromTimeout != 0 {
+			t.Errorf("PromTimeout = %v, want 0 for explicit 0s (in-code-default sentinel)", cfg.PromTimeout)
+		}
+	})
+}
+
 // TestLoadConfig_WebhookSecretIsPreserved verifies that WEBHOOK_SECRET is
 // stored in Config.WebhookSecret. The field is required (binary refuses to
 // start without it), but no direct-call test verified that a valid value
