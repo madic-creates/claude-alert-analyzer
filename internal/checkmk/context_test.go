@@ -344,6 +344,26 @@ func TestGatherContext_HostContextSanitized(t *testing.T) {
 		}
 	})
 
+	// TestGatherContext_HostContextSanitized_ExactLimit pins the exact upper
+	// boundary of maxAIContextBytes (2048). The guard is len(s) > 2048, so
+	// exactly 2048 bytes must pass through unchanged. A > → >= mutation would
+	// silently truncate valid 2048-byte contexts with no existing test catching
+	// it. Paired with "truncates over 2048 bytes" (2100 → truncated), this
+	// closes the mutation gap on both sides of the operator.
+	t.Run("exactly 2048 bytes is not truncated", func(t *testing.T) {
+		exact := strings.Repeat("A", 2048)
+		hostInfo := &HostInfo{AIContext: exact}
+		actx := GatherContext(context.Background(), apiClient, alert, hostInfo)
+		content := actx.Sections[0].Content
+		if len(content) != 2048 {
+			t.Errorf("exact-limit ai_context: got %d bytes, want 2048 (no truncation at exact limit)", len(content))
+		}
+		if strings.Contains(content, "[truncated]") {
+			t.Errorf("truncation marker must not appear when len == maxAIContextBytes (2048); suffix: %q",
+				content[len(content)-20:])
+		}
+	})
+
 	t.Run("truncation preserves valid UTF-8", func(t *testing.T) {
 		// Place a 4-byte emoji right at the truncation boundary
 		emoji := "🚀" // 4 bytes
