@@ -228,8 +228,21 @@ var sensitivePatterns = []sensitivePattern{
 	// log that CheckMK or Kubernetes feeds into Claude's context. The keyword=value
 	// pattern catches TS_AUTHKEY=tskey-auth-... but bare space-separated occurrences
 	// are not matched by it.
+	// PlanetScale personal access tokens (pscale_tkn_) authenticate against the
+	// PlanetScale database-as-a-service API (MySQL-compatible). They appear in
+	// Kubernetes workload logs when a PlanetScale-backed application fails to
+	// authenticate (e.g. "pscale: authentication failed: token pscale_tkn_xxx is
+	// invalid" or "dial error: PlanetScale: unauthorized pscale_tkn_xxx"). The
+	// keyword=value pattern catches PLANETSCALE_TOKEN=... but bare space-separated
+	// occurrences are not matched by it.
+	// Supabase personal access tokens (sbp_) authenticate against the Supabase
+	// management API (PostgreSQL-compatible). They appear in Kubernetes workload
+	// logs when a Supabase-backed application or a Supabase CLI pod fails to
+	// authenticate (e.g. "supabase: invalid access token sbp_xxx" or "Error 401:
+	// Unauthorized sbp_xxx"). The keyword=value pattern catches SUPABASE_ACCESS_TOKEN=...
+	// but bare space-separated occurrences are not matched by it.
 	{
-		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|glrrt-|glrt-|gldt-|glsoat-|glagent-|glsa_|dckr_pat_|SG\.|npm_|hf_|dapi|dop_v1_|pul-|tskey-|xox[bpaers]-|hvs\.|hvb\.)\S+`),
+		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|glrrt-|glrt-|gldt-|glsoat-|glagent-|glsa_|dckr_pat_|SG\.|npm_|hf_|dapi|dop_v1_|pul-|tskey-|xox[bpaers]-|hvs\.|hvb\.|pscale_tkn_|sbp_)\S+`),
 		replacement: "[REDACTED]",
 	},
 	{

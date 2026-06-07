@@ -2017,6 +2017,112 @@ func TestRedactSecrets_TailscaleAuthKeys(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_PlanetScaleTokens verifies that PlanetScale personal access
+// tokens (pscale_tkn_ prefix) are redacted. PlanetScale is a MySQL-compatible
+// database-as-a-service widely used with Kubernetes workloads. When a
+// PlanetScale-backed application or PlanetScale CLI pod fails to authenticate,
+// the token appears bare in the pod log fed to Claude (e.g. "authentication
+// failed: token pscale_tkn_xxx is invalid"). The keyword=value pattern catches
+// PLANETSCALE_TOKEN=... but bare space-separated occurrences are not caught by
+// it; this vendor-prefix entry closes that gap.
+//
+// Token values are built from separate string literals so that static secret
+// scanners do not flag the test source as containing real credentials.
+func TestRedactSecrets_PlanetScaleTokens(t *testing.T) {
+	token := "pscale_tkn_" + "TestTokenAbcdef1234567890abcdef1234567890"
+
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "bare token in authentication failure log",
+			input: "pscale: authentication failed: token " + token + " is invalid",
+			leak:  token,
+		},
+		{
+			name:  "token in env assignment caught by vendor prefix",
+			input: "PLANETSCALE_TOKEN=" + token,
+			leak:  token,
+		},
+		{
+			name:  "token in dial error log",
+			input: "dial error: PlanetScale: unauthorized " + token,
+			leak:  token,
+		},
+		{
+			name:  "token in parenthesised context",
+			input: "connect failed (token=" + token + ")",
+			leak:  token,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("PlanetScale token leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
+// TestRedactSecrets_SupabaseTokens verifies that Supabase personal access tokens
+// (sbp_ prefix) are redacted. Supabase is a PostgreSQL-compatible backend
+// platform widely used with Kubernetes workloads. When a Supabase-backed
+// application or Supabase CLI pod fails to authenticate, the token appears bare
+// in the pod log fed to Claude (e.g. "supabase: invalid access token sbp_xxx").
+// The keyword=value pattern catches SUPABASE_ACCESS_TOKEN=... but bare
+// space-separated occurrences are not caught by it; this vendor-prefix entry
+// closes that gap.
+//
+// Token values are built from separate string literals so that static secret
+// scanners do not flag the test source as containing real credentials.
+func TestRedactSecrets_SupabaseTokens(t *testing.T) {
+	token := "sbp_" + "TestTokenAbcdef1234567890abcdef12345678"
+
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "bare token in invalid access token log",
+			input: "supabase: invalid access token " + token,
+			leak:  token,
+		},
+		{
+			name:  "token in env assignment caught by vendor prefix",
+			input: "SUPABASE_ACCESS_TOKEN=" + token,
+			leak:  token,
+		},
+		{
+			name:  "token in HTTP 401 error log",
+			input: "Error 401: Unauthorized " + token,
+			leak:  token,
+		},
+		{
+			name:  "token in quoted JSON error value",
+			input: `{"error":"unauthorized","token":"` + token + `"}`,
+			leak:  token,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("Supabase token leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
 func TestSanitizeOutput(t *testing.T) {
 	tests := []struct {
 		name  string
