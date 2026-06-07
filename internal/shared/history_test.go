@@ -333,6 +333,9 @@ func TestHumanDuration(t *testing.T) {
 		{30 * time.Minute, "30m"},
 		{1 * time.Minute, "1m"},
 		{45 * time.Second, "1m"}, // rounds up to 1m
+		// Exactly 30s is the tie: Round rounds half away from zero → 1m, not 0m.
+		// A Round→Truncate mutation would yield "0m" for this input.
+		{30 * time.Second, "1m"},
 		{29 * time.Second, "0m"}, // rounds down to 0
 	}
 	for _, tc := range cases {
