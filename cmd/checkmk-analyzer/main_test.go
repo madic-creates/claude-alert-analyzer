@@ -579,6 +579,24 @@ func TestLoadConfig_CheckmkAPITimeoutIsPreserved(t *testing.T) {
 	})
 }
 
+// TestLoadConfig_ExplicitZeroTimeoutAccepted verifies that explicitly setting
+// CHECKMK_API_TIMEOUT=0s is accepted and stored as 0. Zero is the sentinel
+// meaning "use the internal 10s default in checkmk/context.go"; operators who
+// explicitly configure 0s must get that behaviour. A < → <= mutation in the
+// `if checkmkAPITimeout < 0` guard would silently reject the zero sentinel,
+// causing every CheckMK REST API call to receive an already-expired context
+// and fail at runtime without any config-time error. Mirrors
+// TestLoadConfig_ExplicitZeroTimeoutsAccepted in cmd/k8s-analyzer.
+func TestLoadConfig_ExplicitZeroTimeoutAccepted(t *testing.T) {
+	setLoadConfigEnv(t)
+	t.Setenv("CHECKMK_API_TIMEOUT", "0s")
+
+	cfg := loadConfig()
+	if cfg.CheckMKAPITimeout != 0 {
+		t.Errorf("CheckMKAPITimeout = %v, want 0 for explicit 0s (in-code-default sentinel)", cfg.CheckMKAPITimeout)
+	}
+}
+
 // TestLoadConfig_CheckMKCredentialsArePreserved verifies that CHECKMK_API_USER
 // and CHECKMK_API_SECRET are stored in the correct Config fields. The two
 // values are fetched by adjacent RequireEnv calls and then assigned to adjacent
