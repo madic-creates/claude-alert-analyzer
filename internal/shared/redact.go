@@ -133,8 +133,17 @@ var sensitivePatterns = []sensitivePattern{
 	// that still reveals the service account identity. Adding https? replaces the entire
 	// credential-bearing URL as a unit. Plain URLs without credentials (e.g.
 	// "https://api.example.com") are not affected — the pattern requires user:pass@.
+	// Neo4j (neo4j://, neo4j+s://) is a graph database used in Kubernetes for
+	// knowledge graphs and recommendation systems. The official Neo4j Go driver
+	// (github.com/neo4j/neo4j-go-driver) logs connection failures including the
+	// full bolt URI: "failed to connect: neo4j+s://user:secret@graph:7687".
+	// Bolt (bolt://, bolt+s://, bolt+ssc://) is the underlying wire protocol and
+	// appears in logs when connecting directly to a single Neo4j instance or when
+	// using lower-level tooling. Couchbase (couchbase://, couchbases://) connection
+	// strings appear in pod logs when the Couchbase Go SDK (github.com/couchbase/gocb)
+	// fails authentication: "failed to connect: couchbase://user:pass@cb.svc:8091".
 	{
-		re:          regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?|smtps?|ldaps?|nats|sqlserver|mssql|clickhouse|https?)://[^:\s/]*:[^@\s]+@\S+`),
+		re:          regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?|smtps?|ldaps?|nats|sqlserver|mssql|clickhouse|neo4j(?:\+s)?|bolt(?:\+s(?:sc)?)?|couchbases?|https?)://[^:\s/]*:[^@\s]+@\S+`),
 		replacement: "[REDACTED]",
 	},
 	// Stripe secret keys (sk_live_/sk_test_) and restricted keys

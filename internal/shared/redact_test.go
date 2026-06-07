@@ -415,6 +415,66 @@ func TestRedactSecrets_MongoDBURL(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_Neo4jBoltCouchbaseURLs verifies that Neo4j, Bolt, and
+// Couchbase credential-bearing connection URLs are fully redacted. Neo4j
+// (neo4j://, neo4j+s://) and Bolt (bolt://, bolt+s://, bolt+ssc://) appear in
+// pod logs when the Neo4j Go driver fails authentication. Couchbase (couchbase://,
+// couchbases://) appears when the Couchbase Go SDK logs connection failures.
+func TestRedactSecrets_Neo4jBoltCouchbaseURLs(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{
+			name:  "neo4j plain",
+			input: "error: failed to connect: neo4j://neo4juser:gr4php4ss@graph.svc:7687",
+			leak:  "gr4php4ss",
+		},
+		{
+			name:  "neo4j+s TLS",
+			input: "bolt dial failed: neo4j+s://svcaccount:tls_secret@graph.internal:7687/db",
+			leak:  "tls_secret",
+		},
+		{
+			name:  "bolt plain",
+			input: "bolt://reader:r34d3r_pass@neo4j-core-0.neo4j.svc:7687",
+			leak:  "r34d3r_pass",
+		},
+		{
+			name:  "bolt+s TLS",
+			input: "NEO4J_URI=bolt+s://admin:boltpass@neo4j.internal:7687",
+			leak:  "boltpass",
+		},
+		{
+			name:  "bolt+ssc self-signed",
+			input: "failed to handshake: bolt+ssc://writer:wrt_secret@neo4j:7687",
+			leak:  "wrt_secret",
+		},
+		{
+			name:  "couchbase plain",
+			input: "COUCHBASE_URL=couchbase://cbuser:bktpassword@couchbase.svc:8091",
+			leak:  "bktpassword",
+		},
+		{
+			name:  "couchbases TLS",
+			input: "connection refused: couchbases://admin:secure_cb_pw@couchbase.internal:18091",
+			leak:  "secure_cb_pw",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("credential leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output: %s", result)
+			}
+		})
+	}
+}
+
 // TestRedactSecrets_TLSSchemeVariants verifies that TLS variants of connection
 // URL schemes (amqps://, rediss://) are redacted like their non-TLS counterparts.
 // amqps is the standard TLS scheme for RabbitMQ/AMQP 0-9-1 and is commonly
