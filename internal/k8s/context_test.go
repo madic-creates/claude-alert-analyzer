@@ -3265,3 +3265,86 @@ func TestRunAsync_PanicMessageSanitized(t *testing.T) {
 		t.Errorf("expected safe part of panic message in result, got: %q", result)
 	}
 }
+
+// TestGetPodStatus_ExactMaxPodsTriggersNote pins the exact boundary of the
+// `if len(lines) >= maxPods` guard in getPodStatus. The guard uses >= so that
+// a namespace where the API returned its full page of maxPods pods (50) gets
+// the "more may exist" note — the page being full is evidence that the server
+// truncated the result. Existing tests cover maxPods+10 (note present) and
+// maxPods-1 (note absent), but neither catches a >= → > mutation: with exactly
+// maxPods pods, >= fires but > does not.
+func TestGetPodStatus_ExactMaxPodsTriggersNote(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	// Return exactly maxPods = 50 pods — the value that sits precisely on the
+	// >= boundary. The post-fetch backstop (len(items) > maxPods) does not fire
+	// (50 > 50 is false), so all 50 items become lines. Then len(lines) >= maxPods
+	// is 50 >= 50 = true, which must append the "more may exist" note.
+	items := make([]corev1.Pod, maxPods)
+	for i := range items {
+		items[i] = corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("pod-%03d", i),
+				Namespace: "ns",
+			},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		}
+	}
+	cs.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.PodList{Items: items}, nil
+	})
+
+	pods := getPodStatus(context.Background(), cs, "ns")
+
+	if !strings.Contains(pods, "more may exist") {
+		t.Errorf("expected 'more may exist' note for exactly maxPods (%d) pods; got: %q", maxPods, pods)
+	}
+	lines := strings.Split(strings.TrimRight(pods, "\n"), "\n")
+	// maxPods pod lines + 1 truncation marker = maxPods+1 total lines.
+	if len(lines) != maxPods+1 {
+		t.Errorf("expected %d lines (maxPods pod lines + note), got %d", maxPods+1, len(lines))
+	}
+}
+
+// TestGetEvents_ExactMaxEventsNotTruncated pins the exact boundary of the
+// `if len(items) > maxEvents` post-fetch trim in getEvents. The guard uses >
+// so that exactly maxEvents (20) events are returned without truncation. A
+// > → >= mutation would trim 20 events to 19, silently discarding the oldest
+// of the sorted results. Existing tests cover 30 events (trimmed to 20) and 5
+// events (untouched), but neither detects the mutation at exactly 20.
+func TestGetEvents_ExactMaxEventsNotTruncated(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+
+	// Return exactly maxEvents = 20 events — the value that sits precisely on
+	// the > boundary. len(items) > maxEvents is 20 > 20 = false, so all 20
+	// events must appear in the output.
+	cs.PrependReactor("list", "events", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		items := make([]corev1.Event, maxEvents)
+		for i := range items {
+			items[i] = corev1.Event{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("evt-%02d", i),
+					Namespace: "ns",
+				},
+				Type:    corev1.EventTypeWarning,
+				Reason:  "BackOff",
+				Message: fmt.Sprintf("event %d", i),
+				InvolvedObject: corev1.ObjectReference{
+					Name: fmt.Sprintf("pod-%02d", i),
+				},
+				LastTimestamp: metav1.Time{Time: time.Now().Add(time.Duration(i) * time.Second)},
+			}
+		}
+		return true, &corev1.EventList{Items: items}, nil
+	})
+
+	alert := makeAlertWithLabels(map[string]string{"namespace": "ns"})
+	cfg := Config{MaxLogBytes: 4096}
+	events, _, _ := GetKubeContext(context.Background(), cs, alert, cfg)
+
+	lines := strings.Split(strings.TrimRight(events, "\n"), "\n")
+	if len(lines) != maxEvents {
+		t.Errorf("expected exactly maxEvents (%d) event lines, got %d; a > → >= mutation truncates to %d",
+			maxEvents, len(lines), maxEvents-1)
+	}
+}
