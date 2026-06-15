@@ -3,7 +3,7 @@
 # Tiny stage that only fetches kubectl. No Go toolchain — Go binaries are
 # expected to already be built and present in the build context as
 # `./k8s-analyzer` and `./checkmk-analyzer` (linux/amd64, CGO_ENABLED=0).
-FROM alpine:3.23 AS kubectl-fetcher
+FROM alpine:3.24 AS kubectl-fetcher
 RUN apk add --no-cache ca-certificates curl
 ARG KUBECTL_VERSION=v1.36.0
 ARG KUBECTL_SHA256=123d8c8844f46b1244c547fffb3c17180c0c26dac9890589fe7e67763298748e
@@ -24,7 +24,7 @@ EXPOSE 8080
 ENTRYPOINT ["/k8s-analyzer"]
 
 # CheckMK analyzer: Alpine (needs openssh-client)
-FROM alpine:3.23 AS checkmk-analyzer
+FROM alpine:3.24 AS checkmk-analyzer
 RUN apk add --no-cache ca-certificates openssh-client && rm -rf /var/cache/apk/*
 COPY checkmk-analyzer /checkmk-analyzer
 USER 65534:65534
