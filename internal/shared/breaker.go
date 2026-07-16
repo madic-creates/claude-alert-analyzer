@@ -33,14 +33,20 @@ type CircuitBreaker struct {
 	openedAt         time.Time
 	probeStartedAt   time.Time
 	halfOpenInFlight bool
+	// probeGen identifies the current probe cycle. Incremented each time a
+	// probe permit is issued; the permit carries a copy. recordResult only
+	// accepts a probe result whose generation matches, so a stale permit
+	// from a watchdog-expired cycle cannot decide a newer cycle's outcome.
+	probeGen uint64
 }
 
 // Permit is a call-token returned by Acquire(). Done(err) must be called
 // exactly once per non-nil Permit (idempotent: extra calls are no-ops).
 type Permit struct {
-	breaker *CircuitBreaker
-	isProbe bool
-	used    bool
+	breaker  *CircuitBreaker
+	isProbe  bool
+	probeGen uint64
+	used     bool
 }
 
 // IsProbe returns true for the single half-open probe permit.
@@ -138,8 +144,9 @@ func (b *CircuitBreaker) Acquire() (*Permit, error) {
 			return nil, ErrCircuitOpen
 		}
 		b.halfOpenInFlight = true
+		b.probeGen++
 		b.probeStartedAt = now
-		return &Permit{breaker: b, isProbe: true}, nil
+		return &Permit{breaker: b, isProbe: true, probeGen: b.probeGen}, nil
 	default:
 		return nil, ErrCircuitOpen
 	}
@@ -154,15 +161,20 @@ func (b *CircuitBreaker) recordResult(p *Permit, err error) {
 	p.used = true
 
 	if p.isProbe {
-		// If halfOpenInFlight is already false the probe-watchdog (in Acquire)
-		// has already fired for this probe — it cleared the flag, transitioned
-		// the breaker to open, and treated the probe as failed. A late Done()
-		// call here must NOT override that decision: otherwise a slow probe
-		// that eventually returns nil could re-close a breaker the watchdog
-		// just re-opened, silently defeating the safety mechanism. A late
-		// Done(err) would similarly extend the open period by overwriting
-		// openedAt. Drop the late result on the floor instead.
-		if !b.halfOpenInFlight {
+		// Only the current probe cycle may decide the outcome. Two stale
+		// cases are dropped here:
+		//   - halfOpenInFlight is false: the probe-watchdog (in Acquire) has
+		//     already fired for this probe — it cleared the flag, transitioned
+		//     the breaker to open, and treated the probe as failed.
+		//   - probeGen mismatch: the watchdog fired AND a newer probe cycle
+		//     has since started (halfOpenInFlight is true again, but for the
+		//     newer permit). Without the generation check the stale result
+		//     would decide the newer cycle and the newer probe's real result
+		//     would then be dropped as "late" (issue #50).
+		// A late Done(nil) must not re-close a breaker the watchdog just
+		// re-opened, and a late Done(err) must not extend the open period by
+		// overwriting openedAt. Drop the stale result on the floor instead.
+		if !b.halfOpenInFlight || p.probeGen != b.probeGen {
 			// Watchdog already fired and re-opened the breaker for this probe.
 			// Log at Debug so operators can determine whether the slow probe
 			// eventually succeeded (probeErr=nil) or failed — useful for
@@ -189,7 +201,11 @@ func (b *CircuitBreaker) recordResult(p *Permit, err error) {
 		return
 	}
 	b.consecFailures++
-	if b.consecFailures >= b.threshold {
+	// Only transition while closed: non-probe permits are issued in closed
+	// state only, so if the breaker has since opened (or entered half-open
+	// with a probe in flight) this result is stale — transitioning here
+	// would stomp openedAt or leave halfOpenInFlight=true with state=open.
+	if b.consecFailures >= b.threshold && b.state == breakerClosed {
 		b.state = breakerOpen
 		b.openedAt = b.now()
 		slog.Warn("circuit breaker: opened after consecutive failures",

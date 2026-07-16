@@ -746,6 +746,139 @@ func TestCircuitBreaker_OpenTransitionsAtExactDuration(t *testing.T) {
 	}
 }
 
+// TestCircuitBreaker_StaleProbeCannotDecideNewerProbeCycle reproduces the
+// race from issue #50: a probe permit is held across a watchdog expiry and a
+// subsequent new probe cycle. Because recordResult identified "the current
+// probe" solely via the halfOpenInFlight boolean, the stale permit's Done()
+// passed the guard (the flag is true — for the *newer* probe) and decided the
+// newer cycle's outcome, while the newer probe's real result was then dropped
+// as "late". Permits must carry a probe-cycle identity so stale results are
+// dropped regardless of a newer probe being in flight.
+func TestCircuitBreaker_StaleProbeCannotDecideNewerProbeCycle(t *testing.T) {
+	// Shared sequence: trip breaker at t=0, probe1 at t=11s, watchdog fires
+	// at t=17s (probe age 6s > maxProbeDuration 5s), probe2 at t=28s
+	// (open period 10s after watchdog's openedAt=17s has elapsed).
+	setup := func(t *testing.T) (*fakeClock, *CircuitBreaker, *Permit, *Permit) {
+		t.Helper()
+		clk := &fakeClock{t: time.Unix(0, 0)}
+		b := NewCircuitBreaker(1, 10*time.Second, 5*time.Second, clk.Now)
+
+		p, _ := b.Acquire()
+		p.Done(errors.New("fail")) // open, openedAt=0
+
+		clk.advance(11 * time.Second)
+		probe1, err := b.Acquire()
+		if err != nil || !probe1.IsProbe() {
+			t.Fatalf("probe1 Acquire: err=%v probe=%v", err, probe1.IsProbe())
+		}
+
+		// probe1 hangs. Watchdog fires on the next Acquire past the deadline.
+		clk.advance(6 * time.Second)
+		if _, err := b.Acquire(); !errors.Is(err, ErrCircuitOpen) {
+			t.Fatalf("watchdog Acquire: err=%v, want ErrCircuitOpen", err)
+		}
+
+		// Open period elapses; a new probe cycle starts.
+		clk.advance(11 * time.Second)
+		probe2, err := b.Acquire()
+		if err != nil || !probe2.IsProbe() {
+			t.Fatalf("probe2 Acquire: err=%v probe=%v", err, probe2.IsProbe())
+		}
+		return clk, b, probe1, probe2
+	}
+
+	t.Run("stale_success_does_not_close_breaker", func(t *testing.T) {
+		clk, b, probe1, probe2 := setup(t)
+		_ = clk
+
+		// probe1's pipeline finally finishes. The watchdog already deemed it
+		// stuck; its result must be dropped, not close the breaker.
+		probe1.Done(nil)
+
+		if got := b.State(); got != 2 {
+			t.Fatalf("State after stale probe success = %d, want 2 (half-open, probe2 pending)", got)
+		}
+		if _, err := b.Acquire(); !errors.Is(err, ErrCircuitOpen) {
+			t.Fatalf("Acquire while probe2 in flight: err=%v, want ErrCircuitOpen", err)
+		}
+
+		// probe2's real failure must still be honored: breaker re-opens.
+		probe2.Done(errors.New("probe2 failed"))
+		if got := b.State(); got != 1 {
+			t.Fatalf("State after probe2 failure = %d, want 1 (open)", got)
+		}
+	})
+
+	t.Run("stale_failure_does_not_void_newer_probe", func(t *testing.T) {
+		_, b, probe1, probe2 := setup(t)
+
+		// Stale failure must be dropped — not re-open with a fresh openedAt.
+		probe1.Done(errors.New("stale probe failed late"))
+
+		if got := b.State(); got != 2 {
+			t.Fatalf("State after stale probe failure = %d, want 2 (half-open, probe2 pending)", got)
+		}
+
+		// probe2's real success must still close the breaker.
+		probe2.Done(nil)
+		next, err := b.Acquire()
+		if err != nil {
+			t.Fatalf("Acquire after probe2 success: err=%v, want closed breaker", err)
+		}
+		if next.IsProbe() {
+			t.Fatal("Acquire after probe2 success: got probe permit, want normal permit")
+		}
+	})
+}
+
+// TestCircuitBreaker_StaleNonProbeFailureDoesNotReopenDuringProbe covers the
+// third scenario from issue #50: a non-probe permit acquired while closed is
+// held long enough for the breaker to open and enter a new half-open probe
+// cycle. Its late Done(err) pushed consecFailures past the threshold and
+// unconditionally set state=open, leaving halfOpenInFlight=true with
+// state=open and stomping the in-flight probe's openedAt. The threshold-open
+// transition must only fire while the breaker is closed.
+func TestCircuitBreaker_StaleNonProbeFailureDoesNotReopenDuringProbe(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(0, 0)}
+	b := NewCircuitBreaker(2, 10*time.Second, time.Minute, clk.Now)
+
+	// A long-running analysis acquires while closed and hangs.
+	stale, err := b.Acquire()
+	if err != nil || stale.IsProbe() {
+		t.Fatalf("stale Acquire: err=%v probe=%v", err, stale.IsProbe())
+	}
+
+	// Two quick failures trip the threshold; breaker opens at t=0.
+	for i := 0; i < 2; i++ {
+		p, _ := b.Acquire()
+		p.Done(errors.New("fail"))
+	}
+
+	// Open period elapses; a probe cycle starts.
+	clk.advance(11 * time.Second)
+	probe, err := b.Acquire()
+	if err != nil || !probe.IsProbe() {
+		t.Fatalf("probe Acquire: err=%v probe=%v", err, probe.IsProbe())
+	}
+
+	// The hung non-probe call finally fails. It must not transition the
+	// half-open breaker to open (state corruption: open + probe in flight).
+	stale.Done(errors.New("stale non-probe failure"))
+	if got := b.State(); got != 2 {
+		t.Fatalf("State after stale non-probe failure = %d, want 2 (half-open)", got)
+	}
+
+	// The probe's success must still close the breaker.
+	probe.Done(nil)
+	next, err := b.Acquire()
+	if err != nil {
+		t.Fatalf("Acquire after probe success: err=%v, want closed breaker", err)
+	}
+	if next.IsProbe() {
+		t.Fatal("Acquire after probe success: got probe permit, want normal permit")
+	}
+}
+
 // TestCircuitBreaker_Acquire_InvalidState covers the default branch in
 // Acquire()'s switch statement. breakerState is a private iota type with
 // exactly three valid values; the default case is a safety guard against
