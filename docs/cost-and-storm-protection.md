@@ -320,6 +320,9 @@ Set `STORM_MODE_THRESHOLD=50` (alerts/5min, suggested). When the sliding
   operator policy via `GROUP_COOLDOWN_SECONDS`).
 - Aggregated ntfy via the shared `NotifyAggregator`: one summary per
   `STORM_MODE_NOTIFY_INTERVAL` (default 60s) instead of N per-alert messages.
+  Failed analyses are collapsed into the same summary, marked with an
+  `(analysis failed)` suffix on their line — so an upstream API outage
+  during a storm cannot flood ntfy with per-alert "Analysis FAILED" pushes.
 
 Gauge: `alert_analyzer_storm_mode_active` (0/1, plus the constant `product`
 label) — page operators on `1` for >5min.

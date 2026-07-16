@@ -202,7 +202,13 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	if analysisErr != nil {
 		slog.Error("analysis failed", "alertname", alertname, "error", analysisErr)
 		deps.Metrics.RecordClaudeAPIError()
-		if notifyErr := shared.PublishAll(ctx, deps.Publishers,
+		// During a storm, collapse failure notifications through the aggregator
+		// just like successes. Without this, an upstream Claude/OpenRouter outage
+		// during an alert storm would emit one "Analysis FAILED" push per queued
+		// alert — exactly the flood the aggregator exists to prevent (issue #51).
+		if stormMode && deps.StormNotify != nil {
+			deps.StormNotify.Add(fmt.Sprintf("%s (analysis failed)", alertname))
+		} else if notifyErr := shared.PublishAll(ctx, deps.Publishers,
 			fmt.Sprintf("Analysis FAILED: %s", alertname), "5",
 			fmt.Sprintf("**Analysis failed** for %s: %s\n\nManual investigation needed.", alertname, shared.SanitizeAlertField(shared.RedactSecrets(analysisErr.Error())))); notifyErr != nil {
 			slog.Warn("failed to publish failure notification", "alertname", alertname, "error", notifyErr)
@@ -212,7 +218,9 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
 	if analysis == "" {
 		analysisErr = errors.New("empty analysis")
 		slog.Warn("analysis returned empty result, treating as failure", "alertname", alertname)
-		if notifyErr := shared.PublishAll(ctx, deps.Publishers,
+		if stormMode && deps.StormNotify != nil {
+			deps.StormNotify.Add(fmt.Sprintf("%s (analysis failed)", alertname))
+		} else if notifyErr := shared.PublishAll(ctx, deps.Publishers,
 			fmt.Sprintf("Analysis FAILED: %s", alertname), "5",
 			fmt.Sprintf("**Analysis produced empty result** for %s.\n\nManual investigation needed.", alertname)); notifyErr != nil {
 			slog.Warn("failed to publish failure notification", "alertname", alertname, "error", notifyErr)
