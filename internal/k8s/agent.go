@@ -174,6 +174,15 @@ var deniedKubectlGlobalFlags = map[string]bool{
 	"--username":                 true,
 	"--tls-server-name":          true,
 	"--cache-dir":                true,
+	// --profile/--profile-output are not identity flags but are a write-to-disk
+	// vector: "kubectl get pods --profile=cpu --profile-output=/path" makes
+	// kubectl write a pprof file to an attacker-chosen path after the command
+	// runs (disk-fill, or clobber of a process-writable file). Neither is needed
+	// for read-only diagnostics, so both are denied. --profile-output is the
+	// dangerous half; --profile is denied too since it is inert without it and
+	// has no diagnostic use here.
+	"--profile":        true,
+	"--profile-output": true,
 }
 
 // validateKubectlFlags rejects any argv element that names a denied global flag,

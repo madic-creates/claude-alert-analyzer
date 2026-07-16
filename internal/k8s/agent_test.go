@@ -1698,6 +1698,10 @@ func TestValidateKubectlFlags(t *testing.T) {
 		{"deny -s=value short-dash-equals form", []string{"get", "pods", "-s=https://attacker.com"}, true},
 		// Path 4: POSIX attached value: -s<value> with no = separator
 		{"deny -s attached POSIX form", []string{"get", "pods", "-shttps://attacker.com"}, true},
+		// Profiling flags: write a pprof file to an attacker-chosen path.
+		{"deny --profile", []string{"get", "pods", "--profile", "cpu"}, true},
+		{"deny --profile=cpu", []string{"get", "pods", "--profile=cpu"}, true},
+		{"deny --profile-output=path", []string{"get", "pods", "--profile-output=/root/.kube/config"}, true},
 		// Happy paths: allowed flags must not be rejected
 		{"allow clean get pods", []string{"get", "pods"}, false},
 		{"allow -n namespace (not a denied flag)", []string{"get", "pods", "-n", "kube-system"}, false},
