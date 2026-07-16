@@ -14,7 +14,7 @@ Environment-variable reference for both analyzers.
 | `PORT` | `8080` | HTTP listen port for `/health` and `/webhook` |
 | `METRICS_PORT` | `9101` | Port for the Prometheus `/metrics` endpoint |
 | `COOLDOWN_SECONDS` | `300` | Seconds before re-analyzing the same alert |
-| `NTFY_PUBLISH_URL` | `https://ntfy.example.com` | ntfy server URL |
+| `NTFY_PUBLISH_URL` | *(unset)* | ntfy server URL. When unset, ntfy publishing is disabled (a startup warning is logged and analyses are only logged) |
 | `NTFY_PUBLISH_TOPIC` | *(varies per analyzer)* | ntfy topic name |
 | `NTFY_PUBLISH_TOKEN` | *(empty)* | ntfy auth token (optional) |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |

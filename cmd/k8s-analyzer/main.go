@@ -168,12 +168,15 @@ func main() {
 	claudeClient := shared.NewClaudeClient(cfg.BaseConfig(), transport).WithPrometheusMetrics(metrics)
 	promClient := k8s.NewPrometheusClient(cfg.PrometheusURL)
 	cooldownMgr := shared.NewCooldownManager()
-	publishers := []shared.Publisher{
-		shared.NewNtfyPublisher(
-			shared.EnvOrDefault("NTFY_PUBLISH_URL", "https://ntfy.example.com"),
+	var publishers []shared.Publisher
+	if ntfyURL := os.Getenv("NTFY_PUBLISH_URL"); ntfyURL != "" {
+		publishers = append(publishers, shared.NewNtfyPublisher(
+			ntfyURL,
 			shared.EnvOrDefault("NTFY_PUBLISH_TOPIC", "kubernetes-analysis"),
 			os.Getenv("NTFY_PUBLISH_TOKEN"),
-		),
+		))
+	} else {
+		slog.Warn("NTFY_PUBLISH_URL not set — ntfy publishing disabled; analyses are only logged")
 	}
 
 	sp := spCfg.Build(publishers, metrics)
