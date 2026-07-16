@@ -73,4 +73,4 @@ To pin a specific build, reference the `vX.Y.Z` tag in your deployment manifest.
 ## Maintenance
 
 - **Dependency updates** — Renovate runs daily against Go modules, Docker base images, GitHub Actions, and pre-commit hook versions. Patch and minor updates automerge; major updates require manual approval. See [renovate.md](renovate.md).
-- **GHCR image cleanup** — A weekly workflow prunes old tags (keeps the newest `KEEP_TAGGED`, default 10, and deletes all untagged/dangling manifests). See [cleanup-ghcr.md](cleanup-ghcr.md).
+- **GHCR image cleanup** — A weekly workflow prunes old versions (semver tags are kept forever; sha-tagged/untagged versions keep the newest `KEEP_TAGGED`, default 10; manifest children of kept versions are never deleted). See [cleanup-ghcr.md](cleanup-ghcr.md).

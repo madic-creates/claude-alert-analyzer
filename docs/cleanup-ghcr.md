@@ -30,9 +30,9 @@ For each package:
 
 | Category | Action |
 |----------|--------|
-| Tagged versions — newest `KEEP_TAGGED` (default **10**) | Kept |
-| Tagged versions — older than the top `KEEP_TAGGED` | Deleted |
-| Untagged versions (dangling manifests) | Deleted, always |
+| Semver-tagged versions (`v0.2.6`, `0.2.6`, `0.2`) | Kept, always |
+| Other versions (sha-tagged, `latest`-only, untagged) — newest `KEEP_TAGGED` (default **10**) | Kept |
+| Other versions beyond `KEEP_TAGGED` | Deleted — unless shielded as a manifest child (below) |
 
 Because versions are sorted by `created_at` (newest first) and `latest` always
 points to the most recent push, `latest` is guaranteed to be part of the kept
@@ -40,6 +40,21 @@ top-N — it is never deleted by accident.
 
 `KEEP_TAGGED` is set inline in the workflow `env:` block. Bump it to retain
 more history, lower it to prune more aggressively.
+
+### Manifest children of kept versions are shielded
+
+Images pushed before `provenance: false` was set in `build.yaml` are OCI image
+*indexes*: the tagged version is only a pointer to child manifests (the actual
+platform image and a provenance attestation), and GHCR lists those children as
+separate **untagged** versions. Deleting a child makes its still-kept parent
+unpullable (`manifest unknown`).
+
+Before deleting anything, the workflow therefore resolves the children of
+every kept version via the registry manifest API and removes them from the
+deletion set. If any manifest fetch fails, the run aborts without deleting —
+an incomplete child set must never cause a release to be broken. Orphaned
+children of *deleted* parents are picked up by a later run once nothing
+shields them anymore.
 
 ## Dry run
 

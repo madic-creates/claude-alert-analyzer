@@ -181,6 +181,11 @@ jobs:
           context: .
           target: k8s-analyzer
           push: true
+          # Without this, buildx wraps the single-arch image in an OCI index
+          # plus an untagged provenance-attestation manifest. Those untagged
+          # children confuse the GHCR cleanup workflow's retention logic and
+          # add nothing for a plain single-platform image.
+          provenance: false
           tags: ${{ steps.meta-k8s.outputs.tags }}
           labels: ${{ steps.meta-k8s.outputs.labels }}
           cache-from: type=gha,scope=alert-analyzer
@@ -205,6 +210,9 @@ jobs:
           context: .
           target: checkmk-analyzer
           push: true
+          # See the k8s-analyzer push step: keep the pushed artifact a plain
+          # manifest instead of an index with untagged attestation children.
+          provenance: false
           tags: ${{ steps.meta-checkmk.outputs.tags }}
           labels: ${{ steps.meta-checkmk.outputs.labels }}
           cache-from: type=gha,scope=alert-analyzer

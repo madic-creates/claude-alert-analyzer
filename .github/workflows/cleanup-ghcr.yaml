@@ -39,8 +39,14 @@ jobs:
           set -euo pipefail
 
           echo "### $PACKAGE"
-          gh api --paginate "/users/$OWNER/packages/container/$PACKAGE/versions" \
-            --jq '[.[] | {id, created_at, tags: (.metadata.container.tags // [])}] | sort_by(.created_at) | reverse' \
+          # NOTE: no --jq together with --paginate here. --jq runs the filter
+          # per page, so sort_by/retention would apply per 30-item page instead
+          # of globally. Emit raw pages (one JSON array each) and merge them
+          # with jq -s 'add' before any retention math.
+          gh api --paginate "/users/$OWNER/packages/container/$PACKAGE/versions?per_page=100" \
+            | jq -s 'add
+                | map({id, digest: .name, created_at, tags: (.metadata.container.tags // [])})
+                | sort_by(.created_at) | reverse' \
             > versions.json
 
           total=$(jq 'length' versions.json)
@@ -50,13 +56,43 @@ jobs:
           # Date-shaped tags like 2026.5.8 also match — accepted false-positive
           # toward retention. Unprotected versions (sha-tagged, untagged,
           # latest-only) follow KEEP_TAGGED.
-          jq -r --argjson keep "$KEEP_TAGGED" '
+          jq --argjson keep "$KEEP_TAGGED" '
             def semver_protected:
               any(.tags[]?; test("^(v?[0-9]+\\.[0-9]+\\.[0-9]+|[0-9]+\\.[0-9]+)$"));
-            [ .[] | select(semver_protected | not) ] as $candidates
-            | ($candidates[$keep:] // [])
-            | .[] | "\(.id)\t\(.created_at)\t\(.tags | join(","))"
-          ' versions.json > to_delete.tsv
+            map(select(semver_protected)) as $protected
+            | map(select(semver_protected | not)) as $unprotected
+            | { keep: ($protected + $unprotected[:$keep]),
+                candidates: ($unprotected[$keep:] // []) }
+          ' versions.json > partition.json
+
+          # Images pushed before provenance was disabled in build.yaml are OCI
+          # indexes whose platform/attestation children appear in GHCR as
+          # separate *untagged* versions. Deleting a child breaks `docker pull`
+          # of its still-kept parent ("manifest unknown"). Resolve the children
+          # of every kept version via the registry API and shield them from
+          # deletion. Any fetch failure aborts the run (set -e): deleting with
+          # an incomplete child set is worse than not deleting at all.
+          REG_TOKEN=$(curl -fsSL -u "x:$GH_TOKEN" \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:$OWNER/$PACKAGE:pull" \
+            | jq -r .token)
+
+          : > kept_children.txt
+          while read -r digest; do
+            curl -fsSL \
+              -H "Authorization: Bearer $REG_TOKEN" \
+              -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
+              "https://ghcr.io/v2/$OWNER/$PACKAGE/manifests/$digest" \
+              | jq -r '.manifests[]?.digest // empty' >> kept_children.txt
+            sleep 0.2
+          done < <(jq -r '.keep[].digest' partition.json)
+          echo "Child manifests shielded from deletion: $(wc -l < kept_children.txt | tr -d ' ')"
+
+          jq -r --rawfile children kept_children.txt '
+            ($children | split("\n") | map(select(length > 0))) as $shielded
+            | .candidates[]
+            | select(.digest | IN($shielded[]) | not)
+            | "\(.id)\t\(.created_at)\t\(.tags | join(","))"
+          ' partition.json > to_delete.tsv
 
           count=$(wc -l < to_delete.tsv | tr -d ' ')
           echo "Would delete $count versions:"
