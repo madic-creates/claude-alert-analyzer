@@ -181,7 +181,12 @@ func newSQLiteHistoryStore(cfg HistoryConfig, product Product, metrics *AlertMet
 			return nil, fmt.Errorf("history: create db dir %q: %w", dir, err)
 		}
 	}
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(DELETE)&_pragma=busy_timeout(2000)&_pragma=temp_store(MEMORY)", cfg.DBPath)
+	// SQLite parses the file: DSN as a URI: ? starts the query string, #
+	// starts the fragment, and %xx sequences in the path are decoded. Escape
+	// those metacharacters so the configured path is opened verbatim and the
+	// pragmas survive (% first, so the other escapes aren't double-encoded).
+	escapedPath := strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23").Replace(cfg.DBPath)
+	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(DELETE)&_pragma=busy_timeout(2000)&_pragma=temp_store(MEMORY)", escapedPath)
 	sqlOpenFn := sql.Open
 	if testHookSQLOpenFn != nil {
 		sqlOpenFn = testHookSQLOpenFn

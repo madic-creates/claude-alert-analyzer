@@ -1036,3 +1036,40 @@ func TestEnqueueDropsWhenChannelFull(t *testing.T) {
 		t.Errorf("HistoryDrops = %v, want >= 1 (drop when channel full)", got)
 	}
 }
+
+// TestNewSQLiteHistoryStore_SpecialCharPaths verifies that a DBPath containing
+// SQLite-URI metacharacters (?, #, %) opens the database at exactly that path
+// with the connection pragmas intact. Without escaping, the URI parser splits
+// the DSN at the first ? or # and percent-decodes the rest, silently opening a
+// different file and dropping the busy_timeout/journal_mode pragmas.
+func TestNewSQLiteHistoryStore_SpecialCharPaths(t *testing.T) {
+	for _, name := range []string{"his?tory.db", "his#tory.db", "his%2Ftory.db", "his tory.db"} {
+		t.Run(name, func(t *testing.T) {
+			cfg := HistoryConfig{
+				Enabled:    true,
+				DBPath:     filepath.Join(t.TempDir(), name),
+				TTL:        6 * time.Hour,
+				MaxEntries: 5,
+			}
+			s, err := newSQLiteHistoryStore(cfg, ProductK8s, NewAlertMetrics(nil))
+			if err != nil {
+				t.Fatalf("newSQLiteHistoryStore: %v", err)
+			}
+			defer s.Close()
+
+			s.RecordFire(context.Background(), "fp", SeverityWarning)
+			s.flush()
+
+			if _, err := os.Stat(cfg.DBPath); err != nil {
+				t.Errorf("db file not at configured path: %v", err)
+			}
+			var busyTimeout int
+			if err := s.db.QueryRow("PRAGMA busy_timeout").Scan(&busyTimeout); err != nil {
+				t.Fatalf("PRAGMA busy_timeout: %v", err)
+			}
+			if busyTimeout != 2000 {
+				t.Errorf("busy_timeout = %d, want 2000 (pragma dropped from DSN)", busyTimeout)
+			}
+		})
+	}
+}
