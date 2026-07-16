@@ -1,4 +1,4 @@
-.PHONY: binaries images k8s-image checkmk-image clean
+.PHONY: binaries k8s-analyzer checkmk-analyzer images k8s-image checkmk-image clean
 
 GO        ?= go
 GOFLAGS   ?= -trimpath -ldflags=-s\ -w
