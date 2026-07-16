@@ -28,6 +28,20 @@ Two independent analyzers share a common library but run as separate binaries:
 
 Both deduplicate repeat alerts (configurable cooldown) and process work concurrently (5 workers, queue depth 20). All diagnostic output is passed through a secret-redaction filter before leaving the analyzer.
 
+## Opt-in features
+
+Several features ship **disabled by default** and only activate when explicitly configured:
+
+| Feature | Default | Enable via |
+|---------|---------|------------|
+| Alert history (recurrence detection, prior-analysis context) | Off | `HISTORY_ENABLED=true` + writable volume |
+| Severity-based model routing / agent-round budgets | Off | `CLAUDE_MODEL_<SEVERITY>`, `MAX_AGENT_ROUNDS_<SEVERITY>` |
+| Group cooldown | Off | `GROUP_COOLDOWN_SECONDS` |
+| Storm mode (degrade to static analysis under alert floods) | Off | `STORM_MODE_THRESHOLD` |
+| Circuit breaker (stop calling a failing Claude API) | Off | `CIRCUIT_BREAKER_THRESHOLD` |
+
+Out of the box you get the core pipeline: webhook → diagnostics → analysis → ntfy, with per-alert cooldown deduplication and prompt caching. See [`docs/configuration.md`](docs/configuration.md) for the full reference and [`docs/cost-and-storm-protection.md`](docs/cost-and-storm-protection.md) for rollout guidance on the cost/storm features.
+
 ## Quick start (Docker — CheckMK)
 
 The fastest way to try the **checkmk-analyzer**. For Kubernetes, see [`docs/install-k8s.md`](docs/install-k8s.md).
@@ -82,7 +96,7 @@ ghcr.io/madic-creates/claude-alert-checkmk-analyzer:latest
 **Install**
 
 - [`docs/install-k8s.md`](docs/install-k8s.md) — Kubernetes deployment (Kustomize manifests, Alertmanager wiring, RBAC)
-- [`docs/install-checkmk.md`](docs/install-checkmk.md) — CheckMK deployment (Docker / Compose, notification script, rules, optional `ai_context` host attribute)
+- [`docs/install-checkmk.md`](docs/install-checkmk.md) — CheckMK deployment (Docker / Compose / Kubernetes, notification script, rules, optional `ai_context` host attribute)
 
 **Operations**
 

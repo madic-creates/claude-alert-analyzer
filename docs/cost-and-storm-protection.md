@@ -125,6 +125,35 @@ MAX_AGENT_ROUNDS_INFO=0
 Risk: warning alerts get a one-shot analysis without follow-up tool calls.
 Watch the analysis quality on a sample of warnings before fully committing.
 
+### Applying a recipe on Kubernetes (Kustomize patch)
+
+The example Deployments in [`deploy/k8s-analyzer/`](../deploy/k8s-analyzer/)
+and [`deploy/checkmk-analyzer/`](../deploy/checkmk-analyzer/) load their
+environment from a Secret via `envFrom`. The routing variables are not
+secrets, so the cleanest way to apply a recipe is a Kustomize patch that adds
+plain `env` entries (container `env` takes precedence over `envFrom`):
+
+```yaml
+# kustomization.yaml
+patches:
+  - target:
+      kind: Deployment
+      name: claude-alert-checkmk-analyzer   # or claude-alert-kubernetes-analyzer
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env
+        value:
+          - { name: CLAUDE_MODEL,          value: claude-opus-4-7 }
+          - { name: CLAUDE_MODEL_WARNING,  value: claude-haiku-4-5 }
+          - { name: CLAUDE_MODEL_INFO,     value: claude-haiku-4-5 }
+          - { name: MAX_AGENT_ROUNDS,      value: "10" }
+          - { name: MAX_AGENT_ROUNDS_INFO, value: "0" }
+```
+
+This keeps the tuning visible in version control while credentials stay in
+the Secret. Alternatively, add the same variables to the env Secret itself
+(`secret.example.yaml`) — functionally identical, just less visible.
+
 ## Metrics & dashboards
 
 A single token counter on `:METRICS_PORT/metrics` covers all four cost

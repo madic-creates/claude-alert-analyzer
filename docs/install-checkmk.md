@@ -82,6 +82,29 @@ services:
 
 Start with `docker compose up -d`. See [`configuration.md`](configuration.md) for the full environment-variable reference.
 
+### Example — Kubernetes (Kustomize)
+
+Example manifests (Deployment, Service, history PVC, Secret template, Kustomization) live in [`deploy/checkmk-analyzer/`](../deploy/checkmk-analyzer/). The Deployment expects two Secrets:
+
+- `claude-alert-checkmk-analyzer-env` — environment variables (`WEBHOOK_SECRET`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, `CHECKMK_API_USER`, `CHECKMK_API_SECRET`, plus any optional config)
+- `claude-alert-checkmk-analyzer-ssh` — SSH key material, mounted at `/ssh` (`id_ed25519` + `known_hosts`)
+
+To deploy:
+
+```bash
+# 1. Fill in secrets (env vars + SSH key material)
+cp deploy/checkmk-analyzer/secret.example.yaml deploy/checkmk-analyzer/secret.yaml
+$EDITOR deploy/checkmk-analyzer/secret.yaml
+# then add `- secret.yaml` to the resources in deploy/checkmk-analyzer/kustomization.yaml
+
+# 2. Apply
+kubectl apply -k deploy/checkmk-analyzer/
+```
+
+The manifests target namespace `monitoring` and apply the same hardening as the Docker examples above (non-root UID 65534, read-only root FS, all capabilities dropped, `RuntimeDefault` seccomp). The Deployment uses `strategy: Recreate` and a single replica — the optional alert history is SQLite-backed (single writer) and stored on the `claude-alert-checkmk-analyzer-history` PVC mounted at `/var/lib/analyzer`. Review the manifests before applying — in particular `CHECKMK_API_URL`, ntfy settings, and resource limits.
+
+Unlike the k8s-analyzer, the checkmk-analyzer needs no ServiceAccount or RBAC — it talks only to the CheckMK REST API and to monitored hosts via SSH. It can run in any cluster (or none); it does not need to run inside the cluster it monitors.
+
 ## 2. Install the notification script
 
 The script at [`deploy/scripts/claude-analyzer-notify.sh`](../deploy/scripts/claude-analyzer-notify.sh) bridges CheckMK notifications to the analyzer webhook:
