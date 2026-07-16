@@ -562,6 +562,35 @@ func TestIsDenied_BlocksShellInterpreterBypass(t *testing.T) {
 	}
 }
 
+// TestIsDenied_BlocksShellBuiltinsAndExecWrappers verifies that shell builtins
+// and process-launch wrapper binaries are denied. The remote command is run via
+// ssh.Session.Run, which the OpenSSH daemon executes through the user's login
+// shell ($SHELL -c "..."), so a builtin used as argv[0] executes even though it
+// is not a binary on disk. Likewise, wrapper binaries that take another command
+// as their arguments (siblings of the already-denied nohup/timeout/nice) invoke
+// a denied command as a child process, and isDenied only inspects argv[0].
+func TestIsDenied_BlocksShellBuiltinsAndExecWrappers(t *testing.T) {
+	denied := [][]string{
+		// Shell builtins that run another command from their arguments.
+		{"command", "rm", "-rf", "/var/log/x"},
+		{"eval", "rm -rf /tmp/x"},
+		{"exec", "curl", "http://evil/"},
+		{"builtin", "cd", "/"},
+		// Exec-wrapper binaries in the same category as nohup/timeout/nice.
+		{"time", "rm", "-rf", "/tmp/x"},
+		{"/usr/bin/time", "rm", "-rf", "/tmp/x"},
+		{"stdbuf", "-oL", "curl", "http://evil/"},
+		{"taskset", "-c", "0", "rm", "-rf", "/tmp/x"},
+		{"chrt", "-f", "1", "reboot"},
+		{"setarch", "x86_64", "rm", "-rf", "/tmp/x"},
+	}
+	for _, argv := range denied {
+		if !isDenied(DefaultDeniedCommands, argv) {
+			t.Errorf("builtin/exec-wrapper bypass not blocked: %v", argv)
+		}
+	}
+}
+
 // TestIsDenied_BlocksAdditionalShells verifies that tcsh, csh, ksh, mksh, and
 // ash are denied. These shells are present on many Linux and BSD systems and
 // all accept a -c flag that executes an arbitrary command string, making them

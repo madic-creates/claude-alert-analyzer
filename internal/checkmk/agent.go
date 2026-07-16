@@ -79,7 +79,7 @@ SUMMARY: <one concise sentence naming the single most likely root cause>`
 var sshTool = anthropic.ToolUnionParam{
 	OfTool: &anthropic.ToolParam{
 		Name:        "execute_command",
-		Description: anthropic.String("Execute a diagnostic command on the remote host via SSH. The command is passed as an argv array (not interpreted by a shell). Only read-only commands are allowed."),
+		Description: anthropic.String("Execute a read-only diagnostic command on the remote host via SSH. Provide the command as an argv array; it is safely quoted before being sent to the remote login shell, so shell metacharacters in arguments are treated as literal text and are not interpreted. Only read-only commands are allowed."),
 		InputSchema: anthropic.ToolInputSchemaParam{
 			Properties: map[string]any{
 				"command": map[string]any{
@@ -286,6 +286,19 @@ var DefaultDeniedCommands = map[string]bool{
 	"script":  true,
 	"nsenter": true, "unshare": true, "chroot": true,
 	"expect": true,
+	// time/stdbuf/taskset/chrt/setarch are additional exec wrappers: each runs
+	// the command given in its trailing arguments as a child process, so
+	// "stdbuf -oL curl ..." or "taskset -c 0 rm -rf /" invokes a denied command
+	// while isDenied only inspects argv[0]. "time" also covers /usr/bin/time
+	// (GNU time) via filepath.Base normalization.
+	"time": true, "stdbuf": true, "taskset": true, "chrt": true, "setarch": true,
+	// Shell builtins: the remote command is executed via ssh.Session.Run, which
+	// the OpenSSH daemon runs through the user's login shell ($SHELL -c "..."),
+	// so these builtins take effect even though they are not binaries on disk.
+	// command/eval/exec/builtin each run another command from their arguments
+	// (e.g. "command rm -rf /", "eval 'rm -rf /'", "exec curl http://evil/"),
+	// bypassing the denylist because only argv[0] is checked.
+	"command": true, "eval": true, "exec": true, "builtin": true,
 }
 
 var systemctlReadOnly = map[string]bool{
