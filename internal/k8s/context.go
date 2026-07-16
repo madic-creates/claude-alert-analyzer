@@ -326,6 +326,16 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 		return p.queryForPrompt(ctx, `ALERTS{alertstate="firing"}`)
 	})
 
+	// Always-on abnormal node conditions (issue #37). Node-level problems
+	// (NotReady, MemoryPressure, DiskPressure, PIDPressure) are frequently the
+	// actual root cause of namespace-scoped alerts, but the alertname switch
+	// above only surfaces them when the alertname happens to contain "node" or
+	// "pressure". The query is filtered to abnormal states so a healthy cluster
+	// returns the compact "(no data)" sentinel instead of one line per node.
+	nodeCondCh := runAsync("node conditions", func() string {
+		return p.queryForPrompt(ctx, abnormalNodeConditionsQuery)
+	})
+
 	var sections []string
 
 	if namespace != "" {
@@ -342,6 +352,16 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 		restartsCh := runAsync("restarts query", func() string {
 			return p.queryForPrompt(ctx, fmt.Sprintf(`sum(kube_pod_container_status_restarts_total{namespace="%s"}) by (pod)`, namespace))
 		})
+		// Recent rollout/scaling activity (issue #37): "a deploy just happened"
+		// is one of the most common alert explanations. changes() over the
+		// observed-generation gauges surfaces Deployment/StatefulSet rollouts;
+		// desired-replicas changes surface HPA (and manual) scaling. Workloads
+		// with no activity in the window drop out of the result entirely.
+		rolloutsCh := runAsync("rollout activity query", func() string {
+			return p.queryForPrompt(ctx, fmt.Sprintf(
+				`changes(kube_deployment_status_observed_generation{namespace="%s"}[%s]) > 0 or changes(kube_statefulset_status_observed_generation{namespace="%s"}[%s]) > 0 or changes(kube_horizontalpodautoscaler_status_desired_replicas{namespace="%s"}[%s]) > 0`,
+				namespace, rolloutLookback, namespace, rolloutLookback, namespace, rolloutLookback))
+		})
 
 		var alertnameCh <-chan string
 		if alertnameQueryStr != "" {
@@ -352,9 +372,11 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 
 		sections = append(sections,
 			"## Active Firing Alerts", <-firingCh,
+			"\n## Abnormal Node Conditions", <-nodeCondCh,
 			fmt.Sprintf("\n## CPU Usage (%s)", namespace), <-cpuCh,
 			fmt.Sprintf("\n## Memory Usage (%s)", namespace), <-memCh,
 			fmt.Sprintf("\n## Pod Restarts (%s)", namespace), <-restartsCh,
+			fmt.Sprintf("\n## Recent Rollouts/Scaling (%s, last %s)", namespace, rolloutLookback), <-rolloutsCh,
 		)
 		if alertnameCh != nil {
 			sections = append(sections, alertnameSectionName, <-alertnameCh)
@@ -372,7 +394,10 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 				return p.queryForPrompt(ctx, alertnameQueryStr)
 			})
 		}
-		sections = append(sections, "## Active Firing Alerts", <-firingCh)
+		sections = append(sections,
+			"## Active Firing Alerts", <-firingCh,
+			"\n## Abnormal Node Conditions", <-nodeCondCh,
+		)
 		if alertnameCh != nil {
 			sections = append(sections, alertnameSectionName, <-alertnameCh)
 		}
@@ -380,6 +405,19 @@ func (p *PrometheusClient) GetMetrics(ctx context.Context, alert Alert) string {
 
 	return strings.Join(sections, "\n")
 }
+
+// abnormalNodeConditionsQuery surfaces node-level problems on every alert:
+// nodes whose Ready condition is not "true" (NotReady or Unknown) plus any
+// active pressure condition. Filtering to abnormal states keeps the section
+// compact — a healthy cluster yields "(no data)" rather than one series per
+// node per condition.
+const abnormalNodeConditionsQuery = `kube_node_status_condition{condition="Ready",status!="true"} == 1 or kube_node_status_condition{condition=~"MemoryPressure|DiskPressure|PIDPressure",status="true"} == 1`
+
+// rolloutLookback is the PromQL range used to detect recent Deployment/
+// StatefulSet rollouts and HPA scaling in the alert namespace. 30 minutes
+// covers the typical "a deploy just happened" window while keeping the
+// changes() range query cheap.
+const rolloutLookback = "30m"
 
 // maxPromResultLines caps the number of Prometheus time-series lines injected
 // into the Claude prompt. A busy cluster can return hundreds of series (one per
@@ -390,6 +428,18 @@ const maxPromResultLines = 50
 // The API is over-fetched by 5× (maxEvents*5) then sorted by recency so the
 // most recent events are shown. Mirrors the package-level maxPods constant.
 const maxEvents = 20
+
+// eventTime returns the best available timestamp for an event. Kubernetes
+// 1.14+ populates EventTime (MicroTime) as the canonical field and may
+// leave LastTimestamp zero; older events only set LastTimestamp. Using
+// EventTime as a fallback ensures newer-style events are sorted correctly
+// and their timestamps are displayed rather than shown as an empty string.
+func eventTime(e corev1.Event) time.Time {
+	if !e.LastTimestamp.Time.IsZero() {
+		return e.LastTimestamp.Time
+	}
+	return e.EventTime.Time
+}
 
 func getEvents(ctx context.Context, clientset kubernetes.Interface, namespace string) string {
 	// Fetch up to maxEvents*5 events from the API so that after sorting by
@@ -406,17 +456,6 @@ func getEvents(ctx context.Context, clientset kubernetes.Interface, namespace st
 		return fmt.Sprintf("(failed: %s)", shared.SanitizeAlertField(err.Error()))
 	}
 	items := eventList.Items
-	// eventTime returns the best available timestamp for an event. Kubernetes
-	// 1.14+ populates EventTime (MicroTime) as the canonical field and may
-	// leave LastTimestamp zero; older events only set LastTimestamp. Using
-	// EventTime as a fallback ensures newer-style events are sorted correctly
-	// and their timestamps are displayed rather than shown as an empty string.
-	eventTime := func(e corev1.Event) time.Time {
-		if !e.LastTimestamp.Time.IsZero() {
-			return e.LastTimestamp.Time
-		}
-		return e.EventTime.Time
-	}
 	// Sort descending by recency so the most recent events come first.
 	sort.Slice(items, func(i, j int) bool {
 		return eventTime(items[i]).After(eventTime(items[j]))
@@ -449,6 +488,99 @@ func getEvents(ctx context.Context, clientset kubernetes.Interface, namespace st
 		lines = append(lines, fmt.Sprintf("... [%d events shown (sorted by recency); more may exist — API limit reached]", len(lines)))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// maxRolloutEvents is the maximum number of rollout/scaling events returned to
+// Claude. Like maxEvents, the API is over-fetched by 5× then sorted by recency
+// so the most recent events are shown.
+const maxRolloutEvents = 10
+
+// rolloutEventReasons is the curated set of Normal-event reasons that signal
+// deployment rollouts and scaling activity. getEvents filters type!=Normal, so
+// these events — often the actual explanation for an alert ("a deploy just
+// happened") — were previously invisible to the static prefetch (issue #37).
+// The set is deliberately small: reasons like Pulled/Created/Started fire for
+// every pod start and would drown the signal in routine noise.
+var rolloutEventReasons = map[string]bool{
+	"ScalingReplicaSet": true, // deployment controller resizing a ReplicaSet (rollout in progress)
+	"SuccessfulRescale": true, // HPA changed the replica count
+	"SuccessfulCreate":  true, // ReplicaSet/Job controller created a pod
+	"SuccessfulDelete":  true, // ReplicaSet/Job controller deleted a pod
+}
+
+func getRolloutEvents(ctx context.Context, clientset kubernetes.Interface, namespace string) string {
+	// Over-fetch like getEvents: the API returns events in etcd insertion order
+	// (oldest first), so without over-fetching and sorting, a busy namespace
+	// would show only the oldest — least useful — activity. The Go-side reason
+	// filter below additionally thins the result, so the over-fetch also
+	// compensates for non-rollout Normal events consuming Limit slots.
+	eventList, err := clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{
+		FieldSelector: "type=Normal",
+		Limit:         maxRolloutEvents * 5,
+	})
+	if err != nil {
+		return fmt.Sprintf("(failed: %s)", shared.SanitizeAlertField(err.Error()))
+	}
+	var items []corev1.Event
+	for _, e := range eventList.Items {
+		if rolloutEventReasons[e.Reason] {
+			items = append(items, e)
+		}
+	}
+	// Sort descending by recency so the most recent events come first.
+	sort.Slice(items, func(i, j int) bool {
+		return eventTime(items[i]).After(eventTime(items[j]))
+	})
+	if len(items) > maxRolloutEvents {
+		items = items[:maxRolloutEvents]
+	}
+	var lines []string
+	for _, e := range items {
+		ts := ""
+		if t := eventTime(e); !t.IsZero() {
+			ts = t.UTC().Format(time.RFC3339)
+		}
+		lines = append(lines, fmt.Sprintf("%s %s %s: %s",
+			ts,
+			shared.SanitizeAlertField(e.Reason),
+			shared.SanitizeAlertField(e.InvolvedObject.Name),
+			shared.SanitizeAlertField(shared.RedactSecrets(e.Message))))
+	}
+	if len(lines) == 0 {
+		return "(no recent rollout or scaling events)"
+	}
+	// When the API returned exactly maxRolloutEvents*5 events, the server-side
+	// Limit was reached and newer rollout events may exist beyond the fetch
+	// window. Mirrors the same incompleteness note in getEvents/getPodStatus.
+	if len(eventList.Items) >= maxRolloutEvents*5 {
+		lines = append(lines, fmt.Sprintf("... [%d events shown (sorted by recency); more may exist — API limit reached]", len(lines)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// GetRolloutEvents retrieves recent Normal events that indicate rollouts or
+// scaling activity in the alert namespace (issue #37). It is a sibling of
+// GetKubeContext rather than a fourth return value so the ~30 existing
+// GetKubeContext call sites stay untouched; it applies the same namespace
+// validation and API deadline.
+func GetRolloutEvents(ctx context.Context, clientset kubernetes.Interface, alert Alert, cfg Config) string {
+	namespace := alert.Labels["namespace"]
+	if namespace == "" {
+		return "(no namespace)"
+	}
+	if !isValidNamespace(namespace) {
+		slog.Warn("dropping rollout-event query: invalid namespace label", "namespace", namespace)
+		return "(invalid namespace label)"
+	}
+
+	timeout := cfg.KubeAPITimeout
+	if timeout == 0 {
+		timeout = defaultKubeAPITimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	return getRolloutEvents(ctx, clientset, namespace)
 }
 
 // maxPods is the maximum number of pods fetched per namespace for status reporting.
@@ -741,7 +873,15 @@ func GatherContext(ctx context.Context, prom PrometheusMetricsGetter, clientset 
 		return prom.GetMetrics(promCtx, alert)
 	})
 
+	// Rollout events run concurrently with GetKubeContext (which blocks on its
+	// own three goroutines) and the Prometheus goroutine above; GetRolloutEvents
+	// applies the same Kubernetes API deadline internally.
+	rolloutCh := runAsync("rollout events", func() string {
+		return GetRolloutEvents(ctx, clientset, alert, cfg)
+	})
+
 	events, podStatus, podLogs := GetKubeContext(ctx, clientset, alert, cfg)
+	rolloutEvents := <-rolloutCh
 
 	var promMetrics string
 	select {
@@ -763,6 +903,7 @@ func GatherContext(ctx context.Context, prom PrometheusMetricsGetter, clientset 
 		Sections: []shared.ContextSection{
 			{Name: "Prometheus Metrics", Content: promMetrics},
 			{Name: "Kubernetes Events", Content: events},
+			{Name: "Recent Rollout Events", Content: rolloutEvents},
 			{Name: "Pod Status", Content: podStatus},
 			{Name: "Pod Logs", Content: podLogs},
 		},

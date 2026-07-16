@@ -1384,7 +1384,10 @@ func TestGetMetrics_ProbeAlertname(t *testing.T) {
 		if !strings.Contains(result, "Container Readiness") {
 			t.Errorf("alert %q: expected Container Readiness section, got %q", name, result)
 		}
-		if name == "KubeNodeReadinessProbe" && strings.Contains(result, "Node Conditions") {
+		// Match the exact alertname-branch heading: the always-on
+		// "## Abnormal Node Conditions" section legitimately appears in every
+		// result, so a bare "Node Conditions" substring check would false-positive.
+		if name == "KubeNodeReadinessProbe" && strings.Contains(result, "## Node Conditions") {
 			t.Errorf("alert %q: must not route to node branch; got Node Conditions", name)
 		}
 	}
@@ -1977,7 +1980,7 @@ func TestGetMetrics_InvalidNamespaceDropsNamespacedQueries(t *testing.T) {
 
 // ----- GatherContext integration tests -----
 
-func TestGatherContext_ReturnsFourSections(t *testing.T) {
+func TestGatherContext_ReturnsFiveSections(t *testing.T) {
 	srv := makePromServer(t, []PromResult{})
 	defer srv.Close()
 
@@ -1993,10 +1996,10 @@ func TestGatherContext_ReturnsFourSections(t *testing.T) {
 
 	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
 	actx := GatherContext(context.Background(), prom, cs, alert, cfg)
-	if len(actx.Sections) != 4 {
-		t.Fatalf("expected 4 sections, got %d", len(actx.Sections))
+	if len(actx.Sections) != 5 {
+		t.Fatalf("expected 5 sections, got %d", len(actx.Sections))
 	}
-	wantNames := []string{"Prometheus Metrics", "Kubernetes Events", "Pod Status", "Pod Logs"}
+	wantNames := []string{"Prometheus Metrics", "Kubernetes Events", "Recent Rollout Events", "Pod Status", "Pod Logs"}
 	for i, name := range wantNames {
 		if actx.Sections[i].Name != name {
 			t.Errorf("section[%d]: expected %q, got %q", i, name, actx.Sections[i].Name)
@@ -2043,10 +2046,10 @@ func TestGatherContext_PrometheusUnreachable_StillReturnsKubeContext(t *testing.
 
 	prom := &PrometheusClient{HTTP: &http.Client{Timeout: time.Second}, URL: "http://127.0.0.1:1"}
 	actx := GatherContext(context.Background(), prom, cs, alert, cfg)
-	if len(actx.Sections) != 4 {
-		t.Fatalf("expected 4 sections even when Prometheus unreachable, got %d", len(actx.Sections))
+	if len(actx.Sections) != 5 {
+		t.Fatalf("expected 5 sections even when Prometheus unreachable, got %d", len(actx.Sections))
 	}
-	podSection := actx.Sections[2]
+	podSection := actx.Sections[3]
 	if !strings.Contains(podSection.Content, "mypod") {
 		t.Errorf("expected mypod in pod status section, got %q", podSection.Content)
 	}
@@ -2081,8 +2084,8 @@ func TestGatherContext_PrometheusTimeoutIsEnforced(t *testing.T) {
 	if elapsed > 3*time.Second {
 		t.Errorf("GatherContext blocked for %v; expected to complete quickly when PromTimeout is short", elapsed)
 	}
-	if len(actx.Sections) != 4 {
-		t.Fatalf("expected 4 sections, got %d", len(actx.Sections))
+	if len(actx.Sections) != 5 {
+		t.Fatalf("expected 5 sections, got %d", len(actx.Sections))
 	}
 	// Prometheus section must contain an error sentinel, not be empty.
 	promContent := actx.Sections[0].Content
@@ -2110,8 +2113,8 @@ func TestGatherContext_CancelledContext(t *testing.T) {
 	prom := &PrometheusClient{HTTP: slow.Client(), URL: slow.URL}
 	// Should not block / panic
 	actx := GatherContext(ctx, prom, cs, alert, cfg)
-	if len(actx.Sections) != 4 {
-		t.Fatalf("expected 4 sections, got %d", len(actx.Sections))
+	if len(actx.Sections) != 5 {
+		t.Fatalf("expected 5 sections, got %d", len(actx.Sections))
 	}
 }
 
@@ -2151,8 +2154,8 @@ func TestGatherContext_PrometheusPanic(t *testing.T) {
 		t.Fatal("GatherContext deadlocked after Prometheus goroutine panic")
 	}
 
-	if len(actx.Sections) != 4 {
-		t.Fatalf("expected 4 sections, got %d", len(actx.Sections))
+	if len(actx.Sections) != 5 {
+		t.Fatalf("expected 5 sections, got %d", len(actx.Sections))
 		return
 	}
 	promContent := actx.Sections[0].Content
@@ -2837,8 +2840,8 @@ func TestGatherContext_PrometheusResultPreferredWhenTimeoutRaces(t *testing.T) {
 	timeouts := 0
 	for i := range iterations {
 		actx := GatherContext(context.Background(), prom, cs, alert, cfg)
-		if len(actx.Sections) != 4 {
-			t.Fatalf("iteration %d: expected 4 sections, got %d", i, len(actx.Sections))
+		if len(actx.Sections) != 5 {
+			t.Fatalf("iteration %d: expected 5 sections, got %d", i, len(actx.Sections))
 			return
 		}
 		content := actx.Sections[0].Content
@@ -3347,4 +3350,223 @@ func TestGetEvents_ExactMaxEventsNotTruncated(t *testing.T) {
 		t.Errorf("expected exactly maxEvents (%d) event lines, got %d; a > → >= mutation truncates to %d",
 			maxEvents, len(lines), maxEvents-1)
 	}
+}
+
+// ----- issue #37: static prefetch of node conditions, rollout events, rollout metadata -----
+
+// TestGetMetrics_AbnormalNodeConditionsAlwaysIncluded verifies that the
+// abnormal-node-conditions section is present regardless of namespace or
+// alertname routing. Node-level problems (NotReady, MemoryPressure, ...) are
+// frequently the root cause of namespace-scoped alerts whose names carry no
+// node-related keyword, so the query must not depend on the alertname switch.
+func TestGetMetrics_AbnormalNodeConditionsAlwaysIncluded(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	for _, labels := range []map[string]string{
+		{},
+		{"alertname": "HighRequestLatency", "namespace": "prod"},
+	} {
+		result := prom.GetMetrics(context.Background(), makeAlertWithLabels(labels))
+		if !strings.Contains(result, "Abnormal Node Conditions") {
+			t.Errorf("labels %v: expected Abnormal Node Conditions section, got %q", labels, result)
+		}
+	}
+}
+
+// TestGetMetrics_RecentRolloutsSectionWithNamespace verifies that a
+// namespace-scoped alert produces the rollout/scaling section and that the
+// underlying query covers Deployment and StatefulSet rollouts plus HPA
+// scaling, all scoped to the alert namespace.
+func TestGetMetrics_RecentRolloutsSectionWithNamespace(t *testing.T) {
+	var mu sync.Mutex
+	var capturedQueries []string
+	resp := PromQueryResponse{Status: "success"}
+	resp.Data.ResultType = "vector"
+	body, _ := json.Marshal(resp)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if q := r.URL.Query().Get("query"); q != "" {
+			mu.Lock()
+			capturedQueries = append(capturedQueries, q)
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(body)
+	}))
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	alert := makeAlertWithLabels(map[string]string{"alertname": "SomeAlert", "namespace": "production"})
+	result := prom.GetMetrics(context.Background(), alert)
+	if !strings.Contains(result, "Recent Rollouts/Scaling (production") {
+		t.Errorf("expected Recent Rollouts/Scaling section, got %q", result)
+	}
+
+	mu.Lock()
+	queries := capturedQueries
+	mu.Unlock()
+	for _, q := range queries {
+		if !strings.Contains(q, "kube_deployment_status_observed_generation") {
+			continue
+		}
+		for _, want := range []string{
+			`namespace="production"`,
+			"kube_statefulset_status_observed_generation",
+			"kube_horizontalpodautoscaler_status_desired_replicas",
+		} {
+			if !strings.Contains(q, want) {
+				t.Errorf("rollout query missing %q: %q", want, q)
+			}
+		}
+		return
+	}
+	t.Errorf("no rollout-activity query issued, got %v", queries)
+}
+
+// TestGetMetrics_NoRolloutsSectionWithoutNamespace verifies that alerts
+// without a namespace label (e.g. node-level alerts) skip the namespace-scoped
+// rollout query rather than issuing an unscoped cluster-wide changes() query.
+func TestGetMetrics_NoRolloutsSectionWithoutNamespace(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	result := prom.GetMetrics(context.Background(), makeAlertWithLabels(map[string]string{"alertname": "NodeDown"}))
+	if strings.Contains(result, "Recent Rollouts/Scaling") {
+		t.Errorf("expected no rollout section without namespace, got %q", result)
+	}
+}
+
+// makeRolloutEvent builds a Normal event fixture for GetRolloutEvents tests.
+func makeRolloutEvent(name, namespace, reason, object, message string, ts time.Time) *corev1.Event {
+	return &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Type:           corev1.EventTypeNormal,
+		Reason:         reason,
+		Message:        message,
+		InvolvedObject: corev1.ObjectReference{Name: object},
+		LastTimestamp:  metav1.NewTime(ts),
+	}
+}
+
+// TestGetRolloutEvents_ListsRolloutEvents verifies that curated rollout/scaling
+// reasons are listed newest-first while routine Normal events (Pulled, Created,
+// Started — one per pod start) are filtered out to keep the section focused.
+func TestGetRolloutEvents_ListsRolloutEvents(t *testing.T) {
+	base := time.Now().Add(-10 * time.Minute)
+	cs := fake.NewSimpleClientset(
+		makeRolloutEvent("ev-scale", "prod", "ScalingReplicaSet", "web", "Scaled up replica set web-abc to 3 from 1", base.Add(2*time.Minute)),
+		makeRolloutEvent("ev-hpa", "prod", "SuccessfulRescale", "web-hpa", "New size: 3; reason: cpu resource utilization", base.Add(1*time.Minute)),
+		makeRolloutEvent("ev-noise", "prod", "Pulled", "web-abc-xyz", "Container image already present", base.Add(3*time.Minute)),
+	)
+	alert := makeAlertWithLabels(map[string]string{"namespace": "prod"})
+
+	result := GetRolloutEvents(context.Background(), cs, alert, Config{})
+	if !strings.Contains(result, "ScalingReplicaSet") || !strings.Contains(result, "SuccessfulRescale") {
+		t.Fatalf("expected rollout reasons in result, got %q", result)
+	}
+	if strings.Contains(result, "Pulled") {
+		t.Errorf("expected routine Pulled event to be filtered out, got %q", result)
+	}
+	// Newest first: the ScalingReplicaSet event is more recent than the rescale.
+	if strings.Index(result, "ScalingReplicaSet") > strings.Index(result, "SuccessfulRescale") {
+		t.Errorf("expected events sorted newest-first, got %q", result)
+	}
+}
+
+func TestGetRolloutEvents_NoEvents(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	alert := makeAlertWithLabels(map[string]string{"namespace": "prod"})
+	result := GetRolloutEvents(context.Background(), cs, alert, Config{})
+	if result != "(no recent rollout or scaling events)" {
+		t.Errorf("expected empty sentinel, got %q", result)
+	}
+}
+
+func TestGetRolloutEvents_NoNamespace(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	alert := makeAlertWithLabels(map[string]string{})
+	if result := GetRolloutEvents(context.Background(), cs, alert, Config{}); result != "(no namespace)" {
+		t.Errorf("expected no-namespace sentinel, got %q", result)
+	}
+}
+
+func TestGetRolloutEvents_InvalidNamespace(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	alert := makeAlertWithLabels(map[string]string{"namespace": `default"}[5m]) or up{namespace="evil`})
+	if result := GetRolloutEvents(context.Background(), cs, alert, Config{}); result != "(invalid namespace label)" {
+		t.Errorf("expected invalid-namespace sentinel, got %q", result)
+	}
+}
+
+// TestGetRolloutEvents_MessageSanitized verifies that event messages pass
+// through SanitizeAlertField so embedded newlines cannot inject fake Markdown
+// sections into the Claude prompt — mirroring the getEvents sanitization.
+func TestGetRolloutEvents_MessageSanitized(t *testing.T) {
+	cs := fake.NewSimpleClientset(
+		makeRolloutEvent("ev-evil", "prod", "ScalingReplicaSet", "web",
+			"Scaled up\n## Injected Section\nevil content", time.Now()),
+	)
+	alert := makeAlertWithLabels(map[string]string{"namespace": "prod"})
+	result := GetRolloutEvents(context.Background(), cs, alert, Config{})
+	if strings.Contains(result, "\n## Injected Section") {
+		t.Errorf("expected newline-injected heading to be sanitized, got %q", result)
+	}
+	if !strings.Contains(result, "Scaled up") {
+		t.Errorf("expected sanitized message content to remain, got %q", result)
+	}
+}
+
+// TestGetRolloutEvents_CappedAtMax verifies the in-memory cap keeps the most
+// recent maxRolloutEvents entries and drops the oldest.
+func TestGetRolloutEvents_CappedAtMax(t *testing.T) {
+	base := time.Now().Add(-time.Hour)
+	var objs []runtime.Object
+	for i := 0; i < maxRolloutEvents+5; i++ {
+		objs = append(objs, makeRolloutEvent(
+			fmt.Sprintf("ev-%d", i), "prod", "ScalingReplicaSet",
+			fmt.Sprintf("web-%d", i), "Scaled up", base.Add(time.Duration(i)*time.Minute)))
+	}
+	cs := fake.NewSimpleClientset(objs...)
+	alert := makeAlertWithLabels(map[string]string{"namespace": "prod"})
+
+	result := GetRolloutEvents(context.Background(), cs, alert, Config{})
+	lines := strings.Split(result, "\n")
+	if len(lines) != maxRolloutEvents {
+		t.Fatalf("expected %d lines, got %d: %q", maxRolloutEvents, len(lines), result)
+	}
+	newest := fmt.Sprintf("web-%d", maxRolloutEvents+4)
+	if !strings.Contains(result, newest+":") {
+		t.Errorf("expected newest event %s in result, got %q", newest, result)
+	}
+	if strings.Contains(result, "web-0:") {
+		t.Errorf("expected oldest event web-0 to be dropped, got %q", result)
+	}
+}
+
+// TestGatherContext_RolloutEventsSectionContent verifies end-to-end that a
+// rollout event in the alert namespace lands in the Recent Rollout Events
+// section of the gathered context.
+func TestGatherContext_RolloutEventsSectionContent(t *testing.T) {
+	srv := makePromServer(t, []PromResult{})
+	defer srv.Close()
+
+	cs := fake.NewSimpleClientset(
+		makeRolloutEvent("ev-scale", "testns", "ScalingReplicaSet", "web", "Scaled up replica set", time.Now()),
+	)
+	alert := makeAlertWithLabels(map[string]string{"alertname": "TestAlert", "namespace": "testns"})
+	cfg := Config{MaxLogBytes: 4096}
+
+	prom := &PrometheusClient{HTTP: srv.Client(), URL: srv.URL}
+	actx := GatherContext(context.Background(), prom, cs, alert, cfg)
+	for _, s := range actx.Sections {
+		if s.Name == "Recent Rollout Events" {
+			if !strings.Contains(s.Content, "ScalingReplicaSet") {
+				t.Errorf("expected rollout event in section, got %q", s.Content)
+			}
+			return
+		}
+	}
+	t.Fatal("Recent Rollout Events section not found")
 }
