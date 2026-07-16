@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Two independent alert analyzer services that receive monitoring webhooks, gather diagnostic context, send the context to the Claude API for root-cause analysis, and publish the analysis to ntfy. Both share a common library but are separate binaries with separate Dockerfile targets.
 
-- **k8s-analyzer** — Receives Alertmanager webhooks, runs static prefetch (Prometheus metrics + Kubernetes events/pods/logs) plus an agentic Claude tool-loop (`kubectl_exec`, `promql_query`) for root-cause analysis.
+- **k8s-analyzer** — Receives Alertmanager webhooks, runs static prefetch (Prometheus metrics incl. abnormal node conditions and recent rollout/scaling activity + Kubernetes events/rollout events/pods/logs) plus an agentic Claude tool-loop (`kubectl_exec`, `promql_query`) for root-cause analysis.
 - **checkmk-analyzer** — Receives CheckMK notification webhooks, gathers CheckMK host services + SSH diagnostics, analyzes via Claude API
 
 ## Build & Test

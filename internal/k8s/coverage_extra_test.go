@@ -708,8 +708,8 @@ func TestGatherContext_PrometheusGetMetricsPanic(t *testing.T) {
 		t.Fatal("GatherContext deadlocked after GetMetrics panic")
 	}
 
-	if len(actx.Sections) != 4 {
-		t.Fatalf("expected 4 sections, got %d", len(actx.Sections))
+	if len(actx.Sections) != 5 {
+		t.Fatalf("expected 5 sections, got %d", len(actx.Sections))
 		return
 	}
 	promContent := actx.Sections[0].Content
