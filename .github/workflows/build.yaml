@@ -15,20 +15,23 @@ on:
       - ".semrelrc"
   workflow_dispatch:
 
-# Cancel an in-flight run for the same ref when a newer commit is pushed.
-# This guarantees the release job only ever runs on the current branch tip,
-# so go-semantic-release's "latest release" baseline is always an ancestor of
-# HEAD. Without this, two rapid pushes (e.g. back-to-back Renovate merges) race:
-# the older-commit run can release *after* the newer one, fail to find its
-# baseline, and re-analyze the entire history (bogus minor bump + bloated
-# changelog). The release-job staleness guard below is the second line of defence.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+# Concurrency is scoped per job, not workflow-wide. A workflow-level
+# cancel-in-progress would cancel an *executing* release job when a newer
+# commit lands; a cancel between "Publish Git tag + GitHub Release" and
+# "Upload binaries to GitHub Release" leaves a tag that permanently lacks
+# its binaries (the next run computes the *next* version and never heals it).
+#
+# Instead: test/lint/build cancel their own stale counterparts (see the
+# per-job concurrency blocks), while release serializes across runs
+# (cancel-in-progress: false) and relies on its staleness guard step to
+# skip releasing from a commit that is no longer the main tip. That guard
+# is what keeps go-semantic-release's "latest release" baseline an ancestor
+# of HEAD when two rapid pushes (e.g. back-to-back Renovate merges) race.
 
+# Default token scope for all jobs. Only the release job pushes to GHCR /
+# creates releases; it declares its own permissions block.
 permissions:
   contents: read
-  packages: write
 
 env:
   REGISTRY: ghcr.io/${{ github.repository_owner }}
@@ -36,6 +39,9 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-test
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
@@ -46,6 +52,9 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-lint
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
@@ -55,6 +64,9 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-build
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
