@@ -263,9 +263,18 @@ var sensitivePatterns = []sensitivePattern{
 	// authentication failed with token fo1_xxx" or "Fly.io: invalid access token
 	// fo1_xxx"). The keyword=value pattern catches FLY_API_TOKEN=... but bare
 	// space-separated occurrences are not caught by it.
+	// The leading (^|[^A-Za-z0-9._-]) guard (group 1) prevents these short vendor
+	// prefixes from matching inside an unrelated identifier or path. Without it,
+	// "sk-" matches inside "disk-full"/"task-force", "SG." inside "msg.go", and
+	// "dapi" inside "kube-apiserver-dapi-node1" or "/dev/sdapi1"; \S+ then swallows
+	// the rest of the word and destroys diagnostic context (routine terms in pod
+	// logs and plugin output) on its way to Claude. Mirrors the boundary guard on
+	// the keyword=value pattern above. The captured boundary character is preserved
+	// via ${1}; a token glued to a non-identifier boundary (space, =, :, ", /, etc.)
+	// or at start-of-line still redacts. The vendor prefix itself is group 2.
 	{
-		re:          regexp.MustCompile(`(?i)(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|glrrt-|glrt-|gldt-|glsoat-|glagent-|glsa_|dckr_pat_|SG\.|npm_|hf_|dapi|dop_v1_|pul-|tskey-|xox[bpaers]-|hvs\.|hvb\.|pscale_tkn_|sbp_|NRAK-|fo1_)\S+`),
-		replacement: "[REDACTED]",
+		re:          regexp.MustCompile(`(?i)(^|[^A-Za-z0-9._-])(sk-ant-|sk-|sk_live_|sk_test_|rk_live_|rk_test_|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|glrrt-|glrt-|gldt-|glsoat-|glagent-|glsa_|dckr_pat_|SG\.|npm_|hf_|dapi|dop_v1_|pul-|tskey-|xox[bpaers]-|hvs\.|hvb\.|pscale_tkn_|sbp_|NRAK-|fo1_)\S+`),
+		replacement: "${1}[REDACTED]",
 	},
 	{
 		re:          regexp.MustCompile(`(?i)-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----`),

@@ -1570,6 +1570,58 @@ func TestRedactSecrets_DatabricksTokens(t *testing.T) {
 	}
 }
 
+// TestRedactSecrets_VendorPrefixWordBoundary verifies that short vendor token
+// prefixes (sk-, SG., dapi, pul-, hf_, …) only trigger redaction at a genuine
+// token boundary and do not match mid-identifier or mid-path. These strings are
+// routine in Kubernetes pod logs and plugin output; before the boundary guard
+// was added the prefix pattern matched inside them and \S+ swallowed the rest
+// of the word, destroying diagnostic context handed to Claude.
+func TestRedactSecrets_VendorPrefixWordBoundary(t *testing.T) {
+	// Each input contains no secret and must survive RedactSecrets unchanged.
+	unchanged := []struct {
+		name  string
+		input string
+	}{
+		{"sk- inside hyphenated words", "task-force meeting at disk-full alert"},
+		{"SG. inside filename.method", "error msg.go:42 handler failed"},
+		{"dapi after a hyphen segment", "pod kube-apiserver-dapi-node1 crashed"},
+		{"dapi inside a device path", "disk /dev/sdapi1 full"},
+		{"pul- as a word after digits", "container pod9pul-x restarting"},
+	}
+	for _, tc := range unchanged {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if result != tc.input {
+				t.Errorf("non-secret text was redacted:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+		})
+	}
+
+	// Real tokens carrying these prefixes must still be redacted, including when
+	// glued to a preceding non-identifier boundary character.
+	redacted := []struct {
+		name  string
+		input string
+		leak  string
+	}{
+		{"sk-ant- at line start", "sk-ant-" + "api03abc123DEF456ghi789", "sk-ant-" + "api03abc123DEF456ghi789"},
+		{"hf_ after space", "auth failed: token hf_" + "QNTkBAbJbQSwZtFkIbXkVJoVTgUBRM", "hf_" + "QNTkBAbJbQSwZtFkIbXkVJoVTgUBRM"},
+		{"dapi after equals", "DATABRICKS_TOKEN=dapi" + "3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b", "dapi" + "3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b"},
+		{"pul- after space", "pulumi: token pul-" + "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5", "pul-" + "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5"},
+	}
+	for _, tc := range redacted {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RedactSecrets(tc.input)
+			if strings.Contains(result, tc.leak) {
+				t.Errorf("token leaked:\n  input:  %s\n  output: %s", tc.input, result)
+			}
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("expected [REDACTED] marker in output, got: %s", result)
+			}
+		})
+	}
+}
+
 // TestRedactSecrets_DigitalOceanTokens verifies that DigitalOcean personal
 // access tokens (dop_v1_ prefix) are redacted. Real tokens are dop_v1_ followed
 // by 64 hex characters; they appear in DOKS pod logs when DOCR auth fails.
