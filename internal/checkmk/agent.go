@@ -1103,21 +1103,11 @@ func RunAgenticDiagnostics(
 		return fmt.Sprintf("$ %s\n```\n%s\n```", logCmd, sanitized), nil
 	}
 
-	wrappedHandleTool := func(name string, input json.RawMessage) (result string, err error) {
+	// classifyHandleTool records the per-call metric and log line by
+	// classifying the tool result; panic recovery is layered on top via
+	// shared.RecoverToolPanics below.
+	classifyHandleTool := func(name string, input json.RawMessage) (string, error) {
 		start := time.Now()
-		// Recover from panics in handleTool so a buggy handler cannot kill the
-		// loop. The synthetic tool result lets Claude move on instead of aborting
-		// the entire alert analysis. Matches the same recovery pattern in k8s.
-		defer func() {
-			if r := recover(); r != nil {
-				slog.Error("agent tool handler panicked", "hostname", hostname, "tool", name, "recover", r)
-				if metrics != nil {
-					metrics.RecordAgentToolCall(name, outcomeExecError, time.Since(start))
-				}
-				result = fmt.Sprintf("Tool %s panicked: %s — continue with a different command", name, shared.SanitizeAlertField(fmt.Sprintf("%v", r)))
-				err = nil
-			}
-		}()
 		out, callErr := handleTool(name, input)
 		outcome := outcomeOK
 		// The handleTool result format always appends the trailer (if any) as
@@ -1164,6 +1154,9 @@ func RunAgenticDiagnostics(
 		slog.Info("agent tool call", "hostname", hostname, "tool", name, "outcome", outcome, "duration_ms", elapsed.Milliseconds())
 		return out, callErr
 	}
+	// Recover from panics in the handler chain so a buggy handler cannot kill
+	// the loop, matching the same recovery pattern in k8s.
+	wrappedHandleTool := shared.RecoverToolPanics(classifyHandleTool, metrics, "hostname", hostname)
 
 	analysis, rounds, exhausted, err := client.RunToolLoop(
 		ctx, severity, model, agentSystemPromptForRounds(maxRounds), alertContext,

@@ -2,22 +2,10 @@ package k8s
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/madic-creates/claude-alert-analyzer/internal/shared"
-)
-
-// failurePhase tracks how far ProcessAlert progressed when an error occurred,
-// so the deferred cleanup decides correctly whether to clear cooldowns.
-type failurePhase int
-
-const (
-	phasePreAPI failurePhase = iota
-	phaseAPI
-	phasePostAPI
 )
 
 // PipelineDeps holds all dependencies for k8s alert processing.
@@ -59,205 +47,77 @@ type PipelineDeps struct {
 	HistoryInjectPrior bool
 }
 
-// ProcessAlert gathers context, analyzes via Claude, and publishes results.
-//
-// Failure-phase cleanup: a separate analysisErr variable is used inside the
-// defer so a post-API publish error (which sets the named return err) cannot
-// flip the phase decision. See spec section 2.1.
-func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayload) {
-	start := time.Now()
-	var (
-		phase       = phasePreAPI
-		analysisErr error
-		permit      *shared.Permit
-	)
+// sharedDeps maps the product deps onto the shared orchestration deps.
+func (d PipelineDeps) sharedDeps() shared.PipelineDeps {
+	return shared.PipelineDeps{
+		Publishers:         d.Publishers,
+		Cooldown:           d.Cooldown,
+		Metrics:            d.Metrics,
+		Policy:             d.Policy,
+		Breaker:            d.Breaker,
+		StormNotify:        d.StormNotify,
+		BreakerNotify:      d.BreakerNotify,
+		History:            d.History,
+		HistoryInjectPrior: d.HistoryInjectPrior,
+	}
+}
 
-	defer func() {
-		deps.Metrics.ObserveProcessingDuration(time.Since(start))
-	}()
+// pipelineHooks adapts the k8s-specific behavior to shared.ProcessAlert.
+type pipelineHooks struct {
+	deps PipelineDeps
+}
 
-	defer func() {
-		// Panic-recovery: capture the panic value into analysisErr so it flows
-		// into permit.Done() AND the phase-switch cooldown cleanup.
-		// Without this ordering, a panic between Acquire() and the assignment
-		// to analysisErr would leave analysisErr=nil and cause permit.Done(nil)
-		// — the breaker would record a SUCCESS for a panicked analysis.
-		if r := recover(); r != nil {
-			if analysisErr == nil {
-				analysisErr = fmt.Errorf("panic recovered: %v", r)
-			}
-			defer panic(r) // re-panic AFTER the cleanup body completes
-		}
-		// Settle the breaker permit FIRST so the breaker observes panics + late
-		// errors. Both Done() and analysisErr are set by this point — see comment
-		// above. permit may be nil if Acquire() failed in the API phase.
-		if permit != nil {
-			permit.Done(analysisErr)
-		}
-		switch phase {
-		case phasePreAPI:
-			deps.Cooldown.Clear(alert.Fingerprint)
-			if alert.GroupKey != "" {
-				deps.Cooldown.ClearGroup(alert.GroupKey)
-			}
-			if analysisErr != nil {
-				deps.Metrics.RecordFailed()
-			}
-		case phaseAPI:
-			// analysisErr is always non-nil here: Acquire() sets it on failure,
-			// and the analysis + empty-check paths set it before returning.
-			if errors.Is(analysisErr, shared.ErrCircuitOpen) {
-				// Verstärker-Mitigation: keep cooldowns to absorb retries.
-				deps.Metrics.RecordFailed()
-				return
-			}
-			deps.Cooldown.Clear(alert.Fingerprint)
-			if alert.GroupKey != "" {
-				deps.Cooldown.ClearGroup(alert.GroupKey)
-			}
-			deps.Metrics.RecordFailed()
-		case phasePostAPI:
-			// Analysis succeeded; ntfy-failure is logged separately.
-			return
-		}
-	}()
+// DisplayName sanitizes the alertname at the point of extraction so that all
+// downstream uses — failure notification bodies, log fields, and the Claude
+// prompt — are free of control characters from a crafted Alertmanager webhook.
+func (pipelineHooks) DisplayName(alert shared.AlertPayload) string {
+	return shared.SanitizeAlertField(alert.Title)
+}
 
-	// Sanitize at the point of extraction so that all downstream uses —
-	// failure notification bodies, log fields, and the Claude prompt — are
-	// free of control characters. The Claude userPrompt already applied
-	// SanitizeAlertField to alertname, but the failure-notification bodies
-	// passed it unsanitized, allowing embedded newlines or other C0 control
-	// characters from a crafted Alertmanager webhook to corrupt notification
-	// content. Sanitizing once here is simpler than at every call site.
+func (pipelineHooks) LogArgs(alert shared.AlertPayload) []any {
+	return []any{
+		"alertname", shared.SanitizeAlertField(alert.Title),
+		"namespace", shared.SanitizeAlertField(alert.Fields["label:namespace"]),
+	}
+}
+
+func (pipelineHooks) NotifyTitle(alert shared.AlertPayload) string {
 	alertname := shared.SanitizeAlertField(alert.Title)
-	namespace := shared.SanitizeAlertField(alert.Fields["label:namespace"])
-	slog.Info("processing alert", "alertname", alertname, "namespace", namespace)
+	if namespace := shared.SanitizeAlertField(alert.Fields["label:namespace"]); namespace != "" {
+		return fmt.Sprintf("Analysis: %s (%s)", alertname, namespace)
+	}
+	return fmt.Sprintf("Analysis: %s", alertname)
+}
 
-	// === Pre-API phase ===
+func (h pipelineHooks) Prepare(ctx context.Context, alert shared.AlertPayload, inject func(shared.AnalysisContext) shared.AnalysisContext) shared.AnalyzeFunc {
+	deps := h.deps
+	alertname := shared.SanitizeAlertField(alert.Title)
+
 	gatherStart := time.Now()
 	actx := deps.GatherContext(ctx, alert)
 	deps.Metrics.ObserveContextGatherDuration(time.Since(gatherStart))
-	var historyView shared.HistoryView
-	actx, historyView = shared.InjectHistory(ctx, deps.History, alert.Fingerprint, deps.HistoryInjectPrior, actx)
-	if historyView.Count > 0 {
-		deps.Metrics.RecordHistoryLookup(historyView.Count > 1)
-	}
-	if historyView.Count > 1 {
-		deps.Metrics.ObserveRecurrence(historyView.Count)
-	}
+	actx = inject(actx)
+
 	userPrompt := fmt.Sprintf("## Alert: %s\n- Status: %s\n- Severity: %s\n- Namespace: %s\n- StartsAt: %s\n\n%s",
 		alertname,
 		shared.SanitizeAlertField(alert.Fields["status"]),
 		shared.SanitizeAlertField(alert.Severity),
-		namespace,
+		shared.SanitizeAlertField(alert.Fields["label:namespace"]),
 		shared.SanitizeAlertField(alert.Fields["startsAt"]),
 		actx.FormatForPrompt())
 
-	// Snapshot storm-mode once so the rounds decision and the publish decision
-	// see a consistent value. IsDegraded() queries the sliding-window counter
-	// which can change between calls as concurrent alerts arrive; if storm mode
-	// turns on after we decide rounds>0 but before we reach the publish step,
-	// an expensive agentic analysis result would be silently collapsed to just a
-	// title in the StormNotify aggregator.
-	stormMode := deps.Policy.IsDegraded()
-
-	// Update breaker-state metric on every alert so Grafana sees the gauge fresh.
-	if deps.Breaker != nil {
-		deps.Metrics.SetBreakerState(deps.Breaker.State())
-	}
-	deps.Metrics.SetStormMode(stormMode)
-
-	// === Acquire breaker permit ===
-	phase = phaseAPI
-	var err error
-	permit, err = deps.Breaker.Acquire()
-	if err != nil {
-		analysisErr = err
-		// Aggregate the alert into the breaker-aggregator instead of per-alert ntfy.
-		if deps.BreakerNotify != nil {
-			deps.BreakerNotify.Add(alertname)
+	return func(ctx context.Context, model string, rounds int) (string, error) {
+		if rounds == 0 {
+			return deps.Analyzer.Analyze(ctx, alert.SeverityLevel, model, StaticAnalysisSystemPrompt, userPrompt)
 		}
-		slog.Warn("breaker open, dropping analysis", "alertname", alertname)
-		// Note: claude_api_errors_total is NOT incremented here — ErrCircuitOpen
-		// is a pre-flight rejection, not a Claude-API failure. The
-		// claude_circuit_breaker_state gauge plus notify_aggregator_drops_total
-		// {aggregator="breaker"} cover this case for operators.
-		return
+		return RunAgenticDiagnostics(ctx, deps.ToolRunner, deps.KubectlRunner, deps.Prom, deps.Metrics, alert.SeverityLevel, alertname, userPrompt, rounds, model)
 	}
-	// Settling the permit happens in the cleanup defer above so the breaker
-	// observes panics that occur between this point and the analysis assignment.
+}
 
-	model := deps.Policy.ModelFor(alert.SeverityLevel)
-	rounds := deps.Policy.MaxRoundsFor(alert.SeverityLevel)
-	if stormMode || permit.IsProbe() {
-		rounds = 0
-	}
-
-	var analysis string
-	if rounds == 0 {
-		analysis, analysisErr = deps.Analyzer.Analyze(ctx, alert.SeverityLevel, model, StaticAnalysisSystemPrompt, userPrompt)
-	} else {
-		analysis, analysisErr = RunAgenticDiagnostics(ctx, deps.ToolRunner, deps.KubectlRunner, deps.Prom, deps.Metrics, alert.SeverityLevel, alertname, userPrompt, rounds, model)
-	}
-	if analysisErr != nil {
-		slog.Error("analysis failed", "alertname", alertname, "error", analysisErr)
-		deps.Metrics.RecordClaudeAPIError()
-		// During a storm, collapse failure notifications through the aggregator
-		// just like successes. Without this, an upstream Claude/OpenRouter outage
-		// during an alert storm would emit one "Analysis FAILED" push per queued
-		// alert — exactly the flood the aggregator exists to prevent (issue #51).
-		if stormMode && deps.StormNotify != nil {
-			deps.StormNotify.Add(fmt.Sprintf("%s (analysis failed)", alertname))
-		} else if notifyErr := shared.PublishAll(ctx, deps.Publishers,
-			fmt.Sprintf("Analysis FAILED: %s", alertname), "5",
-			fmt.Sprintf("**Analysis failed** for %s: %s\n\nManual investigation needed.", alertname, shared.SanitizeAlertField(shared.RedactSecrets(analysisErr.Error())))); notifyErr != nil {
-			slog.Warn("failed to publish failure notification", "alertname", alertname, "error", notifyErr)
-		}
-		return
-	}
-	if analysis == "" {
-		analysisErr = errors.New("empty analysis")
-		slog.Warn("analysis returned empty result, treating as failure", "alertname", alertname)
-		if stormMode && deps.StormNotify != nil {
-			deps.StormNotify.Add(fmt.Sprintf("%s (analysis failed)", alertname))
-		} else if notifyErr := shared.PublishAll(ctx, deps.Publishers,
-			fmt.Sprintf("Analysis FAILED: %s", alertname), "5",
-			fmt.Sprintf("**Analysis produced empty result** for %s.\n\nManual investigation needed.", alertname)); notifyErr != nil {
-			slog.Warn("failed to publish failure notification", "alertname", alertname, "error", notifyErr)
-		}
-		return
-	}
-
-	// === Post-API phase ===
-	phase = phasePostAPI
-
-	summary, body := shared.ParseSummary(analysis)
-
-	title := fmt.Sprintf("Analysis: %s", alertname)
-	if namespace != "" {
-		title = fmt.Sprintf("Analysis: %s (%s)", alertname, namespace)
-	}
-	// Use the normalized SeverityLevel (not the raw alert.Severity label) so
-	// that non-standard Alertmanager severity values such as "page" (→ critical)
-	// and "notice" (→ warning) map to the correct ntfy priority. alert.Severity
-	// holds the raw label from the webhook and may not match the priority-map
-	// keys; SeverityLevel is always one of the four normalized enum values.
-	priority := alert.SeverityLevel.NtfyPriority()
-
-	if stormMode && deps.StormNotify != nil {
-		deps.StormNotify.Add(alertname)
-	} else if pubErr := shared.PublishAll(ctx, deps.Publishers, title, priority, body); pubErr != nil {
-		slog.Error("failed to publish analysis", "alertname", alertname, "error", pubErr)
-		deps.Metrics.RecordNtfyPublishError()
-		// Phase is already phasePostAPI — defer keeps cooldowns. RecordFailed
-		// is the operator-visible signal.
-		deps.Metrics.RecordFailed()
-		return
-	}
-
-	deps.Metrics.RecordProcessed(alert.SeverityLevel)
-	if deps.History != nil && summary != "" {
-		deps.History.RecordAnalysis(ctx, alert.Fingerprint, alert.SeverityLevel, shared.RedactSecrets(summary))
-	}
-	slog.Info("analysis complete", "alertname", alertname)
+// ProcessAlert gathers context, analyzes via Claude, and publishes results.
+// The orchestration (failure phases, breaker permits, cooldown cleanup, storm
+// handling) lives in shared.ProcessAlert; this adapter supplies the
+// k8s-specific hooks.
+func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayload) {
+	shared.ProcessAlert(ctx, deps.sharedDeps(), pipelineHooks{deps: deps}, alert)
 }
