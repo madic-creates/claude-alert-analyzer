@@ -2463,9 +2463,16 @@ func TestIsValidNamespace_ExactLengthBoundary(t *testing.T) {
 // A valid Prometheus server records the queries it receives; if the malicious string
 // appeared in any query the test would see its distinctive token ("evil") in the URL.
 func TestGetMetrics_MaliciousNamespaceDroppedFromQuery(t *testing.T) {
-	var receivedQueries []string
+	// GetMetrics issues its PromQL queries concurrently, so the handler runs
+	// on multiple server goroutines and the slice needs a lock.
+	var (
+		mu              sync.Mutex
+		receivedQueries []string
+	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		receivedQueries = append(receivedQueries, r.URL.RawQuery)
+		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
 	}))
@@ -2480,6 +2487,8 @@ func TestGetMetrics_MaliciousNamespaceDroppedFromQuery(t *testing.T) {
 	})
 	_ = prom.GetMetrics(context.Background(), alert)
 
+	mu.Lock()
+	defer mu.Unlock()
 	for _, q := range receivedQueries {
 		if strings.Contains(q, "evil") {
 			t.Errorf("malicious namespace token appeared in a Prometheus query: %q", q)
