@@ -48,6 +48,15 @@ alert, no multi-round conversation. Cheapest option.
 Validation runs at startup. An out-of-range value kills the process with a
 clear error message — no silent fallback.
 
+Two built-in behaviors (not configurable) help the model spend its round
+budget well: once ~75% of the rounds are consumed, a `[budget notice]` is
+injected into the conversation (e.g. after round 8 of 10: "only 2 remain") so
+the final analysis is a deliberate synthesis instead of a hard cutoff; and
+classifiable tool failures (RBAC forbidden, not found, timeout, unreachable,
+permission denied, command not found) get a one-line `[hint: …]` advisory
+prepended to the tool result so the model does not burn rounds retrying
+commands that will fail identically.
+
 ## Severity mapping
 
 The free-form `severity` label is normalized to one of three buckets that

@@ -97,7 +97,8 @@ Two coupled feature groups in `internal/shared/`:
 
 - `internal/shared/severity.go` — `Severity` enum + `SeverityFromAlertmanager` / `SeverityFromCheckMK` normalizers. Set on `AlertPayload.SeverityLevel` in each handler.
 - `internal/shared/policy.go` — `AnalysisPolicy` decision layer. `ModelFor(sev)` and `MaxRoundsFor(sev)` are the two routing entry points called from each pipeline. `LoadPolicy(BaseConfig)` reads the optional env vars.
-- `internal/shared/claude.go` — Cache breakpoints set at three levels: `systemBlocks()` helper, `withCachedTail()` helper for tools, and an inline assignment on the last `tool_result` of each `RunToolLoop` round.
+- `internal/shared/claude.go` — Cache breakpoints set at three levels: `systemBlocks()` helper, `withCachedTail()` helper for tools, and an inline assignment on the last `tool_result` of each `RunToolLoop` round. `RunToolLoop` also injects a one-time `[budget notice]` text block once ~75% of `maxRounds` is consumed.
+- `internal/shared/toolerror.go` — `ClassifyToolError` maps tool-failure text to a class (timeout, forbidden, not-found, unreachable, permission-denied, command-not-found); both agents prepend the class's one-line `[hint: …]` advisory to failed tool results so the model does not retry commands that fail identically. Callers restrict the applicable classes per failure path (e.g. checkmk's exit-code path only matches stderr-shaped classes).
 - Pipelines (`internal/k8s/pipeline.go`, `internal/checkmk/pipeline.go`) branch on `policy.MaxRoundsFor(...) == 0` to call `Analyzer.Analyze` (static-only) instead of `RunAgenticDiagnostics`.
 
 **Storm robustness** (group-cooldown + storm-mode + circuit-breaker):

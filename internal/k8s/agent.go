@@ -598,10 +598,19 @@ func handleKubectlTool(ctx context.Context, kc KubectlRunner, metrics *shared.Al
 		}
 		recordToolCall(alertname, metrics, "kubectl_exec", outcome, time.Since(start), argv)
 		errStr := shared.SanitizeAlertField(fmt.Sprintf("%v", err))
+		// kubectl reports the real failure (Forbidden, NotFound, …) on stderr
+		// — captured in out — while the Go error is usually just "exit status
+		// 1", so classify both. The advisory is prepended (never appended) so
+		// the "[exited: …]" trailer stays on the last line.
+		advisory := shared.ClassifyToolError(errStr + "\n" + out).Advisory()
+		result := fmt.Sprintf("$ %s\n[exited: %s]", cmdLine, errStr)
 		if out != "" {
-			return fmt.Sprintf("$ %s\n```\n%s\n```\n[exited: %s]", cmdLine, out, errStr), nil
+			result = fmt.Sprintf("$ %s\n```\n%s\n```\n[exited: %s]", cmdLine, out, errStr)
 		}
-		return fmt.Sprintf("$ %s\n[exited: %s]", cmdLine, errStr), nil
+		if advisory != "" {
+			result = advisory + "\n" + result
+		}
+		return result, nil
 	}
 	recordToolCall(alertname, metrics, "kubectl_exec", outcomeOK, time.Since(start), argv)
 	return fmt.Sprintf("$ %s\n```\n%s\n```", cmdLine, out), nil
@@ -639,7 +648,13 @@ func handlePromQLTool(ctx context.Context, prom PromQLQuerier, metrics *shared.A
 	out = shared.RedactSecrets(out)
 	out = shared.Truncate(out, 4096)
 	recordToolCall(alertname, metrics, "promql_query", outcome, time.Since(start), nil)
-	return fmt.Sprintf("# PromQL: %s\n```\n%s\n```", q, out), nil
+	result := fmt.Sprintf("# PromQL: %s\n```\n%s\n```", q, out)
+	if queryErr != nil {
+		if advisory := shared.ClassifyToolError(queryErr.Error()).Advisory(); advisory != "" {
+			result = advisory + "\n" + result
+		}
+	}
+	return result, nil
 }
 
 func recordToolCall(alertname string, metrics *shared.AlertMetrics, tool, outcome string, dur time.Duration, argv []string) {
