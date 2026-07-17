@@ -299,10 +299,14 @@ both with empty namespace/service from collapsing into the same group.
 
 ### Pipeline phase tracking
 
-Both pipelines (`internal/k8s/pipeline.go`, `internal/checkmk/pipeline.go`)
-use a local `failurePhase` enum and a separate `analysisErr` variable —
-**not the named return** — so that cleanup decisions cannot be flipped by
-a later post-API error.
+The pipeline orchestration is shared: `shared.ProcessAlert`
+(`internal/shared/pipeline.go`) owns the phase state machine, breaker-permit
+settlement, and cooldown cleanup for both products; `internal/k8s/pipeline.go`
+and `internal/checkmk/pipeline.go` only supply product hooks (context
+gathering, prompt construction, the static-vs-agentic decision, notification
+naming) via the `shared.PipelineHooks` interface. It uses a `failurePhase`
+enum and a separate `analysisErr` variable — **not the named return** — so
+that cleanup decisions cannot be flipped by a later post-API error.
 
 ```go
 type failurePhase int
@@ -313,11 +317,11 @@ const (
     phasePostAPI
 )
 
-func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayload) {
+func ProcessAlert(ctx context.Context, deps PipelineDeps, hooks PipelineHooks, alert AlertPayload) {
     var (
         phase       = phasePreAPI
         analysisErr error
-        permit      *shared.Permit
+        permit      *Permit
     )
 
     // Cleanup defer reads phase + analysisErr (NOT the named return).
@@ -336,7 +340,7 @@ func ProcessAlert(ctx context.Context, deps PipelineDeps, alert shared.AlertPayl
             // clear cooldowns, AlertsFailed++
         case phaseAPI:
             if analysisErr == nil { return }
-            if errors.Is(analysisErr, shared.ErrCircuitOpen) {
+            if errors.Is(analysisErr, ErrCircuitOpen) {
                 // Verstärker-Mitigation: KEEP cooldowns
                 return
             }

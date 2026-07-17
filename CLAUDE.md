@@ -46,9 +46,9 @@ Webhook → Auth check → Cooldown dedup → Work queue (buffered chan, 5 worke
 
 ### Package Layout
 
-- `internal/shared/` — Common types (`AlertPayload`, `BaseConfig`, `AnalysisContext`), Claude API client (plain `Analyze` + multi-turn `RunToolLoop`, both threading `Severity` through), `Analyzer`/`ToolLoopRunner` interfaces, ntfy publisher, cooldown manager (`CheckAndSetWithGroup` returns a typed `CooldownOutcome`), secret redaction, shared HTTP server + worker pool (`Server` in `server.go`), method-only `AlertMetrics` façade and `PrometheusMetrics` (constructor takes a `Product` enum and applies it as a `ConstLabel`) exposed at `/metrics` on a separate port via `promhttp.HandlerFor`
-- `internal/k8s/` — Alertmanager webhook handler, Prometheus PromQL queries, Kubernetes context gathering (events, pod status, logs with namespace allowlist), `AlertPayloadToAlert` conversion (`convert.go`), `ProcessAlert` orchestration (`pipeline.go`)
-- `internal/checkmk/` — CheckMK webhook handler, CheckMK REST API client, SSH diagnostic runner with alert category detection (CPU/disk/memory/service), agentic tool-loop runner (`RunAgenticDiagnostics` in `agent.go`), `ProcessAlert` orchestration (`pipeline.go`)
+- `internal/shared/` — Common types (`AlertPayload`, `BaseConfig`, `AnalysisContext`), Claude API client (plain `Analyze` + multi-turn `RunToolLoop`, both threading `Severity` through), `Analyzer`/`ToolLoopRunner` interfaces, generic `ProcessAlert` pipeline orchestration behind the `PipelineHooks` interface (`pipeline.go`: failure phases, breaker permits, cooldown cleanup, storm handling), webhook auth/body-decode helpers (`webhook.go`), tool-handler panic recovery (`RecoverToolPanics` in `toolhandler.go`), ntfy publisher, cooldown manager (`CheckAndSetWithGroup` returns a typed `CooldownOutcome`), secret redaction, shared HTTP server + worker pool (`Server` in `server.go`), method-only `AlertMetrics` façade and `PrometheusMetrics` (constructor takes a `Product` enum and applies it as a `ConstLabel`) exposed at `/metrics` on a separate port via `promhttp.HandlerFor`
+- `internal/k8s/` — Alertmanager webhook handler, Prometheus PromQL queries, Kubernetes context gathering (events, pod status, logs with namespace allowlist), `AlertPayloadToAlert` conversion (`convert.go`), `ProcessAlert` adapter supplying the k8s `PipelineHooks` (`pipeline.go`)
+- `internal/checkmk/` — CheckMK webhook handler, CheckMK REST API client, SSH diagnostic runner with alert category detection (CPU/disk/memory/service), agentic tool-loop runner (`RunAgenticDiagnostics` in `agent.go`), `ProcessAlert` adapter supplying the CheckMK `PipelineHooks` (`pipeline.go`)
 - `cmd/k8s-analyzer/` and `cmd/checkmk-analyzer/` — Entrypoints that load config, construct dependencies (Claude client, publishers, cooldown manager, metrics), and hand them to `shared.NewServer(...).Run(handler)` which owns the worker pool, HTTP servers, and graceful shutdown
 
 ### Key Design Patterns
@@ -99,7 +99,7 @@ Two coupled feature groups in `internal/shared/`:
 - `internal/shared/policy.go` — `AnalysisPolicy` decision layer. `ModelFor(sev)` and `MaxRoundsFor(sev)` are the two routing entry points called from each pipeline. `LoadPolicy(BaseConfig)` reads the optional env vars.
 - `internal/shared/claude.go` — Cache breakpoints set at three levels: `systemBlocks()` helper, `withCachedTail()` helper for tools, and an inline assignment on the last `tool_result` of each `RunToolLoop` round. `RunToolLoop` also injects a one-time `[budget notice]` text block once ~75% of `maxRounds` is consumed.
 - `internal/shared/toolerror.go` — `ClassifyToolError` maps tool-failure text to a class (timeout, forbidden, not-found, unreachable, permission-denied, command-not-found); both agents prepend the class's one-line `[hint: …]` advisory to failed tool results so the model does not retry commands that fail identically. Callers restrict the applicable classes per failure path (e.g. checkmk's exit-code path only matches stderr-shaped classes).
-- Pipelines (`internal/k8s/pipeline.go`, `internal/checkmk/pipeline.go`) branch on `policy.MaxRoundsFor(...) == 0` to call `Analyzer.Analyze` (static-only) instead of `RunAgenticDiagnostics`.
+- `shared.ProcessAlert` routes `policy.MaxRoundsFor(...) == 0` to the static-only path; each product's `AnalyzeFunc` closure (returned by its `PipelineHooks.Prepare`) calls `Analyzer.Analyze` instead of `RunAgenticDiagnostics` in that case.
 
 **Storm robustness** (group-cooldown + storm-mode + circuit-breaker):
 
@@ -107,7 +107,7 @@ Two coupled feature groups in `internal/shared/`:
 - `internal/shared/storm.go` — `StormDetector` (5-min sliding window). Triggers `Policy.IsDegraded()` which forces `rounds=0` in the pipeline.
 - `internal/shared/breaker.go` — `CircuitBreaker` with Permit-Token API (`Acquire()` → `*Permit`, `permit.Done(err)`). Probe-watchdog auto-releases stuck probes.
 - `internal/shared/notify_aggregator.go` — single-owner-goroutine aggregator with request/reply Stop; used by both storm and breaker for collapsed notifications.
-- Pipelines track `phase failurePhase` + `analysisErr` (separate from named return) so the deferred cooldown-cleanup is correct for `ErrCircuitOpen` and post-API failures (Verstärker-Bug fix).
+- `shared.ProcessAlert` tracks `phase failurePhase` + `analysisErr` (separate from named return) so the deferred cooldown-cleanup is correct for `ErrCircuitOpen` and post-API failures (Verstärker-Bug fix).
 - All storm-robustness features default disabled. See [`docs/cost-and-storm-protection.md`](docs/cost-and-storm-protection.md) for operator guidance and [`docs/cost-and-storm-protection-internals.md`](docs/cost-and-storm-protection-internals.md) for component architecture.
 
 Design spec: `docs/superpowers/specs/2026-05-01-storm-cost-protection-design.md`.

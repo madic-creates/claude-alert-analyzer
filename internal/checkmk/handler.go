@@ -2,11 +2,7 @@ package checkmk
 
 import (
 	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -41,11 +37,7 @@ func HandleWebhook(
 	history shared.HistoryStore,
 ) http.HandlerFunc {
 	cooldownTTL := time.Duration(cfg.CooldownSeconds) * time.Second
-	// Hash the expected token so the per-request comparison always operates on
-	// equal-length (32-byte) inputs. subtle.ConstantTimeCompare returns 0
-	// immediately when input lengths differ, which would otherwise let a remote
-	// caller probe the secret length by varying the Authorization header length.
-	expectedTokenHash := sha256.Sum256([]byte("Bearer " + cfg.WebhookSecret))
+	expectedTokenHash := shared.WebhookTokenHash(cfg.WebhookSecret)
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		httpStatus := http.StatusOK
@@ -53,31 +45,14 @@ func HandleWebhook(
 			metrics.RecordWebhookOutcome(shared.OutcomeForStatus(httpStatus))
 		}()
 
-		gotHash := sha256.Sum256([]byte(r.Header.Get("Authorization")))
-		if subtle.ConstantTimeCompare(gotHash[:], expectedTokenHash[:]) != 1 {
-			httpStatus = http.StatusUnauthorized
-			http.Error(w, "unauthorized", httpStatus)
-			return
-		}
-
-		r.Body = http.MaxBytesReader(w, r.Body, maxWebhookBodyBytes)
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			var maxErr *http.MaxBytesError
-			if errors.As(err, &maxErr) {
-				httpStatus = http.StatusRequestEntityTooLarge
-				http.Error(w, "request body too large", httpStatus)
-				return
-			}
-			httpStatus = http.StatusBadRequest
-			http.Error(w, "bad request", httpStatus)
+		if status, ok := shared.CheckWebhookAuth(w, r, expectedTokenHash); !ok {
+			httpStatus = status
 			return
 		}
 
 		var notif CheckMKNotification
-		if err := json.Unmarshal(body, &notif); err != nil {
-			httpStatus = http.StatusBadRequest
-			http.Error(w, "invalid JSON", httpStatus)
+		if status, ok := shared.DecodeWebhookBody(w, r, maxWebhookBodyBytes, &notif); !ok {
+			httpStatus = status
 			return
 		}
 
