@@ -29,6 +29,18 @@ const maxAlertsPerBatch = 100
 // some extra room but cap at 256 bytes to prevent unbounded map key growth.
 const maxFingerprintLen = 256
 
+// maxFieldValueBytes caps a single label or annotation value. Long values
+// (typically a verbose description annotation) are truncated with a marker
+// rather than rejected, since a single long annotation is legitimate.
+const maxFieldValueBytes = 4 << 10 // 4 KiB
+
+// maxAlertFieldsBytes caps the aggregate byte size of one alert's labels and
+// annotations (keys + values, values counted after per-value truncation).
+// A label-flood alert would otherwise pass handler validation and only become
+// a problem later: inflating queue memory and downstream processing cost.
+// Real alerts carry a few KiB at most; 16 KiB is generous.
+const maxAlertFieldsBytes = 16 << 10 // 16 KiB
+
 // HandleWebhook returns an HTTP handler that receives Alertmanager webhook
 // payloads. metrics may be nil. storm may be nil (storm-mode disabled).
 func HandleWebhook(
@@ -93,6 +105,35 @@ func HandleWebhook(
 				slog.Warn("skipping alert with invalid fingerprint", "alertname", alert.Labels["alertname"])
 				metrics.RecordDropped(shared.DropReasonInvalidFingerprint)
 				continue
+			}
+
+			// Aggregate size gate before any per-alert work. Values are counted
+			// at their post-truncation size so one long description annotation
+			// does not disqualify an otherwise normal alert; only a flood of
+			// labels/annotations (or oversized keys) trips the cap.
+			fieldsBytes := 0
+			for _, m := range []map[string]string{alert.Labels, alert.Annotations} {
+				for k, v := range m {
+					fieldsBytes += len(k) + min(len(v), maxFieldValueBytes)
+				}
+			}
+			if fieldsBytes > maxAlertFieldsBytes {
+				slog.Warn("skipping oversized alert",
+					"alertname", shared.SanitizeAlertField(shared.Truncate(alert.Labels["alertname"], 256)),
+					"fieldsBytes", fieldsBytes)
+				metrics.RecordDropped(shared.DropReasonOversizedAlert)
+				continue
+			}
+
+			// Cap individual values in place so every downstream use — group
+			// key, cooldown clearing, payload title, Fields — sees the same
+			// bounded value.
+			for _, m := range []map[string]string{alert.Labels, alert.Annotations} {
+				for k, v := range m {
+					if len(v) > maxFieldValueBytes {
+						m[k] = shared.Truncate(v, maxFieldValueBytes)
+					}
+				}
 			}
 
 			if cfg.SkipResolved && alert.Status == "resolved" {

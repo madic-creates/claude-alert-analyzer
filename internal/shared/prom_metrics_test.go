@@ -20,7 +20,7 @@ func TestNewPrometheusMetrics_PrematerializedSeries(t *testing.T) {
 		want int
 	}{
 		{"WebhooksTotal (6 outcomes)", testutil.CollectAndCount(pm.WebhooksTotal), 6},
-		{"AlertsDropped (4 reasons)", testutil.CollectAndCount(pm.AlertsDropped), 4},
+		{"AlertsDropped (5 reasons)", testutil.CollectAndCount(pm.AlertsDropped), 5},
 		{"AlertsProcessed (4 severities)", testutil.CollectAndCount(pm.AlertsProcessed), 4},
 		{"NotifyAggregatorDrops (2 aggregators)", testutil.CollectAndCount(pm.NotifyAggregatorDrops), 2},
 		{"AgentToolCalls (3 tools x 7 outcomes)", testutil.CollectAndCount(pm.AgentToolCalls), 21},

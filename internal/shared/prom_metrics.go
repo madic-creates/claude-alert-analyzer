@@ -259,6 +259,7 @@ func NewPrometheusMetrics(product Product) (*PrometheusMetrics, error) {
 	for _, reason := range []DropReason{
 		DropReasonInvalidFingerprint, DropReasonCooldown,
 		DropReasonGroupCooldown, DropReasonQueueFull,
+		DropReasonOversizedAlert,
 	} {
 		pm.AlertsDropped.WithLabelValues(string(reason))
 	}

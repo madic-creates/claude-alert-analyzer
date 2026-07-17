@@ -11,6 +11,7 @@ func TestDropReason_StringValues(t *testing.T) {
 		{DropReasonCooldown, "cooldown"},
 		{DropReasonGroupCooldown, "group_cooldown"},
 		{DropReasonQueueFull, "queue_full"},
+		{DropReasonOversizedAlert, "oversized_alert"},
 	}
 	for _, c := range cases {
 		if string(c.got) != c.want {

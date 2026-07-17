@@ -18,6 +18,16 @@ import (
 // CheckMK notifications are single-service events; 1 MiB is generous.
 const maxWebhookBodyBytes = 1 << 20 // 1 MiB
 
+// maxFreeTextFieldBytes caps the single-line free-text notification fields
+// (service_output, perf_data) at ingest. They are rendered into the Claude
+// prompt without any other length bound, so an oversized value would inflate
+// API cost for the whole analysis. Truncated with a marker, not rejected.
+const maxFreeTextFieldBytes = 4 << 10 // 4 KiB
+
+// maxLongOutputBytes caps long_plugin_output at ingest. The prompt renderer
+// truncates it further (4 KiB); this larger cap bounds queue memory.
+const maxLongOutputBytes = 16 << 10 // 16 KiB
+
 // HandleWebhook returns an HTTP handler that receives CheckMK webhook payloads,
 // validates auth, applies cooldown, and enqueues alerts for processing.
 // metrics may be nil, in which case no counters are incremented by the handler.
@@ -160,11 +170,11 @@ func HandleWebhook(
 				"host_address":        notif.HostAddress,
 				"service_description": notif.ServiceDescription,
 				"service_state":       notif.ServiceState,
-				"service_output":      notif.ServiceOutput,
+				"service_output":      shared.Truncate(notif.ServiceOutput, maxFreeTextFieldBytes),
 				"host_state":          notif.HostState,
 				"notification_type":   notif.NotificationType,
-				"perf_data":           notif.PerfData,
-				"long_plugin_output":  notif.LongPluginOutput,
+				"perf_data":           shared.Truncate(notif.PerfData, maxFreeTextFieldBytes),
+				"long_plugin_output":  shared.Truncate(notif.LongPluginOutput, maxLongOutputBytes),
 				"timestamp":           notif.Timestamp,
 			},
 		}

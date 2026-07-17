@@ -55,8 +55,9 @@ metric surface is uniformly addressable.
 `internal_error` (5xx).
 
 `reason` is one of `queue_full`, `invalid_fingerprint`, `cooldown`,
-`group_cooldown`. Each admission step emits exactly one reason — there is no
-precedence helper.
+`group_cooldown`, `oversized_alert` (k8s only: aggregate label+annotation
+size over the 16 KiB per-alert cap). Each admission step emits exactly one
+reason — there is no precedence helper.
 
 `severity` is one of `unknown`, `info`, `warning`, `critical` (the four
 values returned by `shared.Severity.String()`).

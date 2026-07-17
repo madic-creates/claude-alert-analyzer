@@ -9,4 +9,5 @@ const (
 	DropReasonCooldown           DropReason = "cooldown"
 	DropReasonGroupCooldown      DropReason = "group_cooldown"
 	DropReasonQueueFull          DropReason = "queue_full"
+	DropReasonOversizedAlert     DropReason = "oversized_alert"
 )

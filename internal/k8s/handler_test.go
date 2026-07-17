@@ -1151,3 +1151,79 @@ func TestGroupKeyFromLabels(t *testing.T) {
 		})
 	}
 }
+
+// TestHandleWebhook_OversizedAlertDropped verifies that an alert whose
+// aggregate label+annotation byte size (after per-value truncation) exceeds
+// maxAlertFieldsBytes is skipped with an oversized_alert drop metric, while
+// the remaining alerts in the same batch are still queued. Guards the
+// cost/abuse vector from issue #34: a label-flood alert must not reach the
+// work queue or the Claude prompt.
+func TestHandleWebhook_OversizedAlertDropped(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	metrics := shared.NewAlertMetrics(shared.NewPrometheusMetricsForTest(shared.ProductK8s))
+	var captured []shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		captured = append(captured, ap)
+		return true
+	}, metrics, nil, shared.NewNopHistoryStore())
+
+	// Five 4 KiB annotation values are each within the per-value cap, but sum
+	// to ~20 KiB aggregate — over the 16 KiB per-alert cap.
+	oversizedAnnotations := make(map[string]string)
+	for i := 0; i < 5; i++ {
+		oversizedAnnotations[fmt.Sprintf("junk%d", i)] = strings.Repeat("x", maxFieldValueBytes)
+	}
+	alerts := []Alert{
+		{Fingerprint: "fp-oversized", Status: "firing", Labels: map[string]string{"alertname": "Oversized"}, Annotations: oversizedAnnotations, StartsAt: time.Now()},
+		{Fingerprint: "fp-normal", Status: "firing", Labels: map[string]string{"alertname": "Normal"}, Annotations: map[string]string{}, StartsAt: time.Now()},
+	}
+	rr := postWebhook(t, handler, "test-secret", makeWebhook(alerts))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if len(captured) != 1 || captured[0].Fingerprint != "fp-normal" {
+		t.Errorf("expected only fp-normal queued, got %d payloads", len(captured))
+	}
+	if got := int64(testutil.ToFloat64(metrics.Prom.AlertsDropped.WithLabelValues("oversized_alert"))); got != 1 {
+		t.Errorf("expected oversized_alert drops=1, got %d", got)
+	}
+}
+
+// TestHandleWebhook_TruncatesLongFieldValues verifies that a single long
+// annotation value (e.g. a verbose description) is truncated with a marker
+// rather than causing the whole alert to be rejected — long single
+// annotations are legitimate, only their unbounded size is not.
+func TestHandleWebhook_TruncatesLongFieldValues(t *testing.T) {
+	cfg := makeConfig()
+	cd := shared.NewCooldownManager()
+	var captured shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		captured = ap
+		return true
+	}, nil, nil, shared.NewNopHistoryStore())
+
+	alert := Alert{
+		Fingerprint: "fp-long-desc",
+		Status:      "firing",
+		Labels:      map[string]string{"alertname": "LongDesc"},
+		Annotations: map[string]string{"description": strings.Repeat("d", 2*maxFieldValueBytes)},
+		StartsAt:    time.Now(),
+	}
+	rr := postWebhook(t, handler, "test-secret", makeWebhook([]Alert{alert}))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if captured.Fingerprint != "fp-long-desc" {
+		t.Fatal("expected alert with one long annotation to be queued, not dropped")
+	}
+	desc := captured.Fields["annotation:description"]
+	if len(desc) > maxFieldValueBytes {
+		t.Errorf("expected annotation:description truncated to <= %d bytes, got %d", maxFieldValueBytes, len(desc))
+	}
+	if !strings.HasSuffix(desc, "[truncated]") {
+		t.Errorf("expected truncation marker suffix, got tail %q", desc[max(0, len(desc)-32):])
+	}
+}

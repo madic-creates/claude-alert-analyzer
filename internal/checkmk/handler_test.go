@@ -1465,3 +1465,45 @@ func TestHandler_PopulatesSeverityLevel_UnknownStateDefaultsToWarning(t *testing
 		t.Errorf("expected SeverityLevel %v for unrecognized state, got %v", shared.SeverityWarning, received.SeverityLevel)
 	}
 }
+
+// TestCheckmkHandleWebhook_TruncatesFreeTextFields verifies that the
+// unbounded free-text notification fields are truncated at ingest with a
+// marker, so a single oversized CheckMK notification cannot inflate the
+// Claude prompt or the in-memory work queue (issue #34).
+func TestCheckmkHandleWebhook_TruncatesFreeTextFields(t *testing.T) {
+	cfg := makeCheckmkConfig()
+	cd := shared.NewCooldownManager()
+	var captured shared.AlertPayload
+	handler := HandleWebhook(cfg, cd, func(ap shared.AlertPayload) bool {
+		captured = ap
+		return true
+	}, nil, nil, shared.NewNopHistoryStore())
+
+	notif := makeNotification("host1", "CPU", "CRITICAL", "PROBLEM")
+	notif.ServiceOutput = strings.Repeat("o", 2*maxFreeTextFieldBytes)
+	notif.PerfData = strings.Repeat("p", 2*maxFreeTextFieldBytes)
+	notif.LongPluginOutput = strings.Repeat("l", 2*maxLongOutputBytes)
+
+	rr := postCheckmkWebhook(t, handler, "test-secret", notif)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+
+	cases := []struct {
+		field string
+		limit int
+	}{
+		{"service_output", maxFreeTextFieldBytes},
+		{"perf_data", maxFreeTextFieldBytes},
+		{"long_plugin_output", maxLongOutputBytes},
+	}
+	for _, c := range cases {
+		got := captured.Fields[c.field]
+		if len(got) > c.limit {
+			t.Errorf("expected %s truncated to <= %d bytes, got %d", c.field, c.limit, len(got))
+		}
+		if !strings.HasSuffix(got, "[truncated]") {
+			t.Errorf("expected truncation marker suffix on %s", c.field)
+		}
+	}
+}
