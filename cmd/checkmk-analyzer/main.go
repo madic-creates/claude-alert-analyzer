@@ -167,7 +167,8 @@ func main() {
 	}()
 	slog.Info("alert history", "enabled", histCfg.Enabled, "dbPath", histCfg.DBPath,
 		"ttl", histCfg.TTL, "maxEntries", histCfg.MaxEntries, "injectPrior", histCfg.InjectPrior)
-	transport := shared.NewLimitedTransport(http.DefaultTransport, prom.ClaudeAPIDuration)
+	transport := shared.NewLimitedTransport(http.DefaultTransport, prom.ClaudeAPIDuration).
+		WithRetryCounter(prom.ClaudeAPIRetries)
 	claudeClient := shared.NewClaudeClient(cfg.BaseConfig(), transport).WithPrometheusMetrics(metrics)
 	apiClient := checkmk.NewAPIClient(cfg)
 	cooldownMgr := shared.NewCooldownManager()

@@ -2,6 +2,7 @@ package shared
 
 import (
 	"io"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -31,6 +32,7 @@ const MaxBodyDrainBytes = 64 * 1024 // 64 KiB
 type LimitedTransport struct {
 	inner             http.RoundTripper
 	durationHistogram prometheus.Observer // optional; nil = no observation
+	retryCounter      prometheus.Counter  // optional; nil = no retry counting
 }
 
 // NewLimitedTransport returns a LimitedTransport around inner. inner=nil falls
@@ -45,8 +47,25 @@ func NewLimitedTransport(inner http.RoundTripper, hist prometheus.Observer) *Lim
 	}
 }
 
+// WithRetryCounter attaches a counter incremented once per retried request
+// attempt. Retries are detected via the X-Stainless-Retry-Count header the
+// anthropic-sdk-go sets on every attempt ("0" on the first try). The SDK
+// omits the header when the caller overrides default headers; in that case
+// retries simply go uncounted — the transport never blocks a request over it.
+func (lt *LimitedTransport) WithRetryCounter(c prometheus.Counter) *LimitedTransport {
+	lt.retryCounter = c
+	return lt
+}
+
 func (lt *LimitedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	start := time.Now()
+	if c := req.Header.Get("X-Stainless-Retry-Count"); c != "" && c != "0" {
+		if lt.retryCounter != nil {
+			lt.retryCounter.Inc()
+		}
+		slog.Debug("Claude API request retried", "attempt", c,
+			"method", req.Method, "host", req.URL.Host)
+	}
 	resp, err := lt.inner.RoundTrip(req)
 	if err != nil {
 		lt.observe(start)

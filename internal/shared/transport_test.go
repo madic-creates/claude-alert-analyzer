@@ -182,6 +182,92 @@ func TestLimitedTransport_HistogramObservedOnSuccess(t *testing.T) {
 	}
 }
 
+// TestLimitedTransport_RetryCounting verifies that the transport increments
+// the retry counter for every SDK retry attempt, detected via the
+// X-Stainless-Retry-Count header the anthropic-sdk-go sets on each attempt
+// ("0" on the first try, "1", "2", ... on retries).
+func TestLimitedTransport_RetryCounting(t *testing.T) {
+	ctr := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "test_retries_total",
+		Help: "test",
+	})
+	inner := &mockRoundTripper{resp: newOKResponse([]byte(`{}`))}
+	lt := NewLimitedTransport(inner, nil).WithRetryCounter(ctr)
+
+	doReq := func(retryHeader string) {
+		t.Helper()
+		inner.resp = newOKResponse([]byte(`{}`))
+		req, _ := http.NewRequest(http.MethodPost, "http://example.com", nil)
+		if retryHeader != "" {
+			req.Header.Set("X-Stainless-Retry-Count", retryHeader)
+		}
+		resp, err := lt.RoundTrip(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		_, _ = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+	}
+
+	// First attempt (header "0") and header-less requests must not count.
+	doReq("0")
+	doReq("")
+	var m dto.Metric
+	_ = ctr.Write(&m)
+	if got := m.Counter.GetValue(); got != 0 {
+		t.Errorf("counter after non-retry requests = %v, want 0", got)
+	}
+
+	// Each retried attempt counts once, regardless of attempt number.
+	doReq("1")
+	doReq("2")
+	m = dto.Metric{}
+	_ = ctr.Write(&m)
+	if got := m.Counter.GetValue(); got != 2 {
+		t.Errorf("counter after two retried attempts = %v, want 2", got)
+	}
+}
+
+// TestLimitedTransport_RetryCountingOnTransportError verifies a retried
+// attempt is counted even when the attempt itself fails at the transport
+// level — the retry happened, so it must be visible.
+func TestLimitedTransport_RetryCountingOnTransportError(t *testing.T) {
+	ctr := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "test_retries_err_total",
+		Help: "test",
+	})
+	inner := &mockRoundTripper{err: errors.New("connection refused")}
+	lt := NewLimitedTransport(inner, nil).WithRetryCounter(ctr)
+
+	req, _ := http.NewRequest(http.MethodPost, "http://example.com", nil)
+	req.Header.Set("X-Stainless-Retry-Count", "1")
+	if _, err := lt.RoundTrip(req); err == nil {
+		t.Fatal("expected transport error")
+	}
+
+	var m dto.Metric
+	_ = ctr.Write(&m)
+	if got := m.Counter.GetValue(); got != 1 {
+		t.Errorf("counter after failed retried attempt = %v, want 1", got)
+	}
+}
+
+// TestLimitedTransport_NoRetryCounterIsSafe verifies retried requests pass
+// through unchanged when no counter is attached (tests and callers that do
+// not opt in).
+func TestLimitedTransport_NoRetryCounterIsSafe(t *testing.T) {
+	inner := &mockRoundTripper{resp: newOKResponse([]byte(`{}`))}
+	lt := NewLimitedTransport(inner, nil)
+
+	req, _ := http.NewRequest(http.MethodPost, "http://example.com", nil)
+	req.Header.Set("X-Stainless-Retry-Count", "3")
+	resp, err := lt.RoundTrip(req) // must not panic
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_ = resp.Body.Close()
+}
+
 func TestLimitedTransport_HistogramObservedOnNonOK(t *testing.T) {
 	hist := prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name: "test_nonok_seconds",

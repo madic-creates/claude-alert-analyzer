@@ -68,11 +68,23 @@ values returned by `shared.Severity.String()`).
 |---|---|---|---|
 | `alert_analyzer_claude_api_duration_seconds` | histogram | — | Claude API call latency |
 | `alert_analyzer_claude_api_errors_total` | counter | — | Claude API errors |
+| `alert_analyzer_claude_api_retries_total` | counter | — | Request attempts that were SDK-level retries |
 | `alert_analyzer_claude_tokens_total` | counter | `kind`, `severity`, `model` | Cumulative Claude API tokens |
 
 `kind` is one of `input`, `output`, `cache_creation`, `cache_read`. The four
 kinds replace the four separate `claude_*_tokens_total` counters from earlier
 releases.
+
+The SDK (`anthropic-sdk-go`) transparently retries failed requests up to
+twice with exponential backoff, honoring `Retry-After` headers.
+`alert_analyzer_claude_api_retries_total` counts every attempt that is a
+retry, detected in the HTTP transport via the `X-Stainless-Retry-Count`
+header the SDK sets on each attempt. A rising rate means the API is
+intermittently failing or rate-limiting even while calls ultimately
+succeed — `claude_api_errors_total` only increments after all retries are
+exhausted. Note that `claude_api_duration_seconds` observes per attempt,
+so retried calls appear as multiple observations. Each retried attempt is
+also logged at debug level with its attempt number.
 
 > **PromQL caveat.** `sum(rate(alert_analyzer_claude_tokens_total[5m]))`
 > *without* a `by (kind)` grouping is semantically meaningless because it adds

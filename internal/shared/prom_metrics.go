@@ -28,6 +28,7 @@ type PrometheusMetrics struct {
 	// Claude API
 	ClaudeAPIDuration prometheus.Histogram
 	ClaudeAPIErrors   prometheus.Counter
+	ClaudeAPIRetries  prometheus.Counter
 	ClaudeTokens      *prometheus.CounterVec // labels: kind, severity, model
 
 	// Agent tool loop
@@ -141,6 +142,12 @@ func NewPrometheusMetrics(product Product) (*PrometheusMetrics, error) {
 		ConstLabels: constLabels,
 	})
 
+	pm.ClaudeAPIRetries = prometheus.NewCounter(prometheus.CounterOpts{
+		Name:        "alert_analyzer_claude_api_retries_total",
+		Help:        "Claude API request attempts that were SDK-level retries (detected via X-Stainless-Retry-Count).",
+		ConstLabels: constLabels,
+	})
+
 	pm.ClaudeTokens = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name:        "alert_analyzer_claude_tokens_total",
 		Help:        "Cumulative Claude API tokens, by kind/severity/model. Use sum by(kind) for cost analysis.",
@@ -232,7 +239,7 @@ func NewPrometheusMetrics(product Product) (*PrometheusMetrics, error) {
 	reg.MustRegister(
 		pm.WebhooksTotal, pm.AlertsEnqueued, pm.AlertsDropped, pm.AlertsResolved,
 		pm.AlertsProcessed, pm.AlertsFailed, pm.ProcessingDuration, pm.ContextGatherDuration, pm.QueueWaitDuration, pm.QueueDepth,
-		pm.ClaudeAPIDuration, pm.ClaudeAPIErrors, pm.ClaudeTokens,
+		pm.ClaudeAPIDuration, pm.ClaudeAPIErrors, pm.ClaudeAPIRetries, pm.ClaudeTokens,
 		pm.AgentToolCalls, pm.AgentToolDuration, pm.AgentRoundsPerRun, pm.AgentRoundsExhausted,
 		pm.StormModeActive, pm.ClaudeCircuitBreakerState, pm.NotifyAggregatorDrops,
 		pm.NtfyPublishErrors,

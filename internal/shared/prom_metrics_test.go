@@ -92,6 +92,23 @@ func TestNewPrometheusMetrics_PrematerializedSeries(t *testing.T) {
 	}
 }
 
+// TestNewPrometheusMetrics_ClaudeAPIRetries verifies the retry counter is
+// constructed, registered under the expected name, and starts at zero.
+func TestNewPrometheusMetrics_ClaudeAPIRetries(t *testing.T) {
+	pm := NewPrometheusMetricsForTest(ProductK8s)
+
+	if pm.ClaudeAPIRetries == nil {
+		t.Fatal("ClaudeAPIRetries not constructed")
+	}
+	if v := testutil.ToFloat64(pm.ClaudeAPIRetries); v != 0 {
+		t.Errorf("ClaudeAPIRetries initial value = %v, want 0", v)
+	}
+	if n, err := testutil.GatherAndCount(pm.Registry(),
+		"alert_analyzer_claude_api_retries_total"); err != nil || n != 1 {
+		t.Errorf("registry series for alert_analyzer_claude_api_retries_total = %d (err=%v), want 1", n, err)
+	}
+}
+
 // TestMaterializeClaudeTokensForModels verifies that the dynamic-model
 // materialization API populates kind × severity × model series at zero so
 // dashboard queries return 0 instead of "no data" before the first Claude
