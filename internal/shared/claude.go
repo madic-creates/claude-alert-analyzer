@@ -166,6 +166,17 @@ func (c *ClaudeClient) RunToolLoop(ctx context.Context, severity Severity,
 
 	messages := []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(userPrompt))}
 
+	// warnAfterRound is the consumed-round count after which a budget notice
+	// is injected (~75% of the budget, rounded up) so the model can prioritize
+	// its remaining rounds instead of being cut off by the forced summary
+	// (issue #35). 0 disables the notice: for budgets where the warning round
+	// would coincide with the final round, the forced-summary prompt already
+	// covers the cutoff.
+	warnAfterRound := (maxRounds*3 + 3) / 4
+	if warnAfterRound >= maxRounds {
+		warnAfterRound = 0
+	}
+
 	var totalInput, totalOutput, totalCacheCreation, totalCacheRead int64
 	defer func() {
 		c.metrics.RecordClaudeUsage(severity, model,
@@ -230,6 +241,19 @@ func (c *ClaudeClient) RunToolLoop(ctx context.Context, severity Severity,
 			return analysis, round + 1, false, nil
 		}
 		messages = appendToolResultsAndCacheTail(messages, toolResults)
+
+		// Inject the budget notice exactly once, as a text block on the user
+		// message that carries this round's tool results (preserving role
+		// alternation). It stays in the conversation history for all
+		// subsequent rounds.
+		if round+1 == warnAfterRound {
+			remaining := maxRounds - warnAfterRound
+			slog.Info("tool loop budget notice injected", "usedRounds", warnAfterRound,
+				"maxRounds", maxRounds, "remaining", remaining)
+			appendTextToLastUserMessage(messages, fmt.Sprintf(
+				"[budget notice] You have used %d of %d tool rounds — only %d remain. Prioritize the most important remaining check and prepare to consolidate your findings into the final analysis.",
+				warnAfterRound, maxRounds, remaining))
+		}
 	}
 
 	// Max rounds reached — append summary text to the last (user) message

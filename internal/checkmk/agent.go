@@ -1071,16 +1071,34 @@ func RunAgenticDiagnostics(
 		if r.err != nil {
 			slog.Warn("agentic SSH command failed", "hostname", hostname, "command", logCmd, "error", r.err)
 			errStr := shared.SanitizeAlertField(fmt.Sprintf("%v", r.err))
+			result := fmt.Sprintf("$ %s\n[exited: %s]", logCmd, errStr)
 			if sanitized != "" {
-				return fmt.Sprintf("$ %s\n```\n%s\n```\n[exited: %s]", logCmd, sanitized, errStr), nil
+				result = fmt.Sprintf("$ %s\n```\n%s\n```\n[exited: %s]", logCmd, sanitized, errStr)
 			}
-			return fmt.Sprintf("$ %s\n[exited: %s]", logCmd, errStr), nil
+			// Transport failures only match transport-shaped classes so the
+			// hint reflects the SSH channel, not words in partial output. The
+			// advisory is prepended (never appended) — wrappedHandleTool
+			// classifies the metric outcome from the LAST line.
+			switch cls := shared.ClassifyToolError(errStr); cls {
+			case shared.ToolErrorTimeout, shared.ToolErrorUnreachable:
+				result = cls.Advisory() + "\n" + result
+			}
+			return result, nil
 		}
 		if r.exitCode != 0 {
+			result := fmt.Sprintf("$ %s\n[exit code: %d]", logCmd, r.exitCode)
 			if sanitized != "" {
-				return fmt.Sprintf("$ %s\n```\n%s\n```\n[exit code: %d]", logCmd, sanitized, r.exitCode), nil
+				result = fmt.Sprintf("$ %s\n```\n%s\n```\n[exit code: %d]", logCmd, sanitized, r.exitCode)
 			}
-			return fmt.Sprintf("$ %s\n[exit code: %d]", logCmd, r.exitCode), nil
+			// A non-zero exit means the command ran; only stderr-shaped
+			// classes apply. Timeout/unreachable/forbidden words inside
+			// command output (e.g. grep over app logs) must not produce a
+			// misleading transport hint.
+			switch cls := shared.ClassifyToolError(sanitized); cls {
+			case shared.ToolErrorPermissionDenied, shared.ToolErrorCommandNotFound, shared.ToolErrorNotFound:
+				result = cls.Advisory() + "\n" + result
+			}
+			return result, nil
 		}
 		return fmt.Sprintf("$ %s\n```\n%s\n```", logCmd, sanitized), nil
 	}
