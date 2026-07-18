@@ -62,6 +62,29 @@ jobs:
           go-version-file: go.mod
       - uses: golangci/golangci-lint-action@v9
 
+  tidy:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-tidy
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      # Guard against go.sum bloat: `go get`-driven bumps accumulate stale
+      # module hashes (and can leave the graph incomplete) without ever
+      # pruning. Running tidy in CI and failing on any diff keeps go.mod/go.sum
+      # canonical — contributors must commit the tidied result.
+      - name: Verify go.mod/go.sum are tidy
+        run: |
+          set -euo pipefail
+          go mod tidy
+          if ! git diff --exit-code -- go.mod go.sum; then
+            echo "::error::go.mod/go.sum are not tidy. Run 'go mod tidy' and commit the result."
+            exit 1
+          fi
+
   build:
     runs-on: ubuntu-latest
     concurrency:
@@ -88,7 +111,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [test, lint, build]
+    needs: [test, lint, tidy, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
