@@ -47,6 +47,19 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      # setup-go caches modules + go-build under one key shared by every job.
+      # The race build's instrumented objects differ from lint/build, so give
+      # test a dedicated, rolling go-build cache: the sha suffix forces a fresh
+      # save each run, restore-keys pull the newest prior race build so only
+      # changed packages recompile (the client-go/k8s tree dominates otherwise).
+      - name: Cache go-build (race)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-test-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-build-test-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-build-test-${{ runner.os }}-
       - run: go vet ./...
       - run: go test -race -count=1 ./...
 
@@ -60,6 +73,17 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      # golangci-lint manages its own analysis cache but leans on the go-build
+      # cache for type-checking/compilation. Keep it separate from the race
+      # build so the two don't evict each other; rolling key as in test.
+      - name: Cache go-build (lint)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-lint-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-build-lint-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-build-lint-${{ runner.os }}-
       - uses: golangci/golangci-lint-action@v9
 
   tidy:
@@ -95,6 +119,16 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      # Non-race build cache for `make binaries`; own key so it doesn't collide
+      # with the test/lint go-build variants.
+      - name: Cache go-build (binaries)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-build-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-build-build-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-build-build-${{ runner.os }}-
       - name: Compile both binaries
         run: |
           set -euo pipefail
