@@ -18,6 +18,14 @@
   semanticCommits: 'enabled',
   semanticCommitType: 'chore',
   semanticCommitScope: 'deps',
+  // Run `go mod tidy` as part of each Go update branch so the pushed go.sum is
+  // already canonical. Without this, Renovate only touches the bumped module's
+  // hashes and leaves stale entries behind — which the CI `tidy` job (and thus
+  // the release gate) would then reject. Opt-in because tidy can touch lines
+  // unrelated to the bump; here that trade-off is exactly what we want.
+  postUpdateOptions: [
+    'gomodTidy',
+  ],
   prConcurrentLimit: 0,
   prHourlyLimit: 0,
   platform: 'github',
