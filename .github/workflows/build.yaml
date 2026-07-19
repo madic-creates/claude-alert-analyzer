@@ -53,7 +53,7 @@ jobs:
       # save each run, restore-keys pull the newest prior race build so only
       # changed packages recompile (the client-go/k8s tree dominates otherwise).
       - name: Cache go-build (race)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/go-build
           key: go-build-test-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
@@ -77,7 +77,7 @@ jobs:
       # cache for type-checking/compilation. Keep it separate from the race
       # build so the two don't evict each other; rolling key as in test.
       - name: Cache go-build (lint)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/go-build
           key: go-build-lint-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
@@ -122,7 +122,7 @@ jobs:
       # Non-race build cache for `make binaries`; own key so it doesn't collide
       # with the test/lint go-build variants.
       - name: Cache go-build (binaries)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/go-build
           key: go-build-build-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
