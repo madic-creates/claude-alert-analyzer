@@ -44,7 +44,7 @@ jobs:
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       # setup-go caches modules + go-build under one key shared by every job.
@@ -70,7 +70,7 @@ jobs:
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       # golangci-lint manages its own analysis cache but leans on the go-build
@@ -93,7 +93,7 @@ jobs:
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       # Guard against go.sum bloat: `go get`-driven bumps accumulate stale
@@ -116,7 +116,7 @@ jobs:
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       # Non-race build cache for `make binaries`; own key so it doesn't collide
