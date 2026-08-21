@@ -46,7 +46,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
       - name: Download renovate cache
-        uses: dawidd6/action-download-artifact@v21
+        uses: dawidd6/action-download-artifact@v23
         if: github.event.inputs.repoCache != 'disabled'
         continue-on-error: true
         with:
