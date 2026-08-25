@@ -3,7 +3,7 @@ module github.com/madic-creates/claude-alert-analyzer
 go 1.26.1
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.63.1
+	github.com/anthropics/anthropic-sdk-go v1.66.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/client_model v0.6.2
 	golang.org/x/crypto v0.55.0
