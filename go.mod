@@ -6,7 +6,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.69.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/client_model v0.6.3
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	k8s.io/api v0.37.0
 	k8s.io/apimachinery v0.37.0
 	k8s.io/client-go v0.37.0
