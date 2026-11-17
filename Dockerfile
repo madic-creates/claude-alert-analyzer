@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.28
+# syntax=docker/dockerfile:1.29
 
 # Tiny stage that only fetches kubectl. No Go toolchain — Go binaries are
 # expected to already be built and present in the build context as
